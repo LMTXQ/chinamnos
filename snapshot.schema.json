@@ -1,0 +1,149 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "snapshot-v4",
+  "title": "资费快照 v4",
+  "description": "v4: 扁平化单条资费结构，每条item为一个独立资费，39标准字段+extra拓展+extra_other兜底",
+  "type": "object",
+  "required": ["version", "crawl_time", "data_crawl_time", "section", "carrier", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 4,
+      "description": "格式版本号"
+    },
+    "crawl_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "本次采集脚本启动时间（ISO8601），全局时间，无论部分省份是否失败都更新"
+    },
+    "data_crawl_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "该省数据实际采集成功的时间（ISO8601），失败时保留上次成功时间"
+    },
+    "section": {
+      "type": "string",
+      "enum": ["bj", "gd", "js", "sh", "tj", "cq", "ln", "hub", "sc", "snx", "he", "sx", "hn", "jl", "hlj", "nmg", "zj", "ah", "sd", "fj", "jx", "hun", "gx", "gz", "yn", "han", "xz", "gs", "qh", "nx", "xj"],
+      "description": "省份代码（与API一致的缩写）"
+    },
+    "carrier": {
+      "type": "string",
+      "enum": ["cmcc", "cucc", "ctcc", "cbn"],
+      "description": "运营商代码"
+    },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/TariffItem" },
+      "description": "扁平化资费列表，每条为一个独立资费"
+    }
+  },
+  "definitions": {
+    "TariffItem": {
+      "type": "object",
+      "required": ["id", "name", "fields", "province_code", "province_name", "tariff_attr", "type1", "type2"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z]+_.+$",
+          "description": "资费全局唯一标识，格式: {运营商code}_{方案编号}"
+        },
+        "name": {
+          "type": "string",
+          "description": "资费名称"
+        },
+        "series": {
+          "type": "string",
+          "description": "所属系列名称（原系列名降级为普通字段，扁平化后每个子资费单独成条）"
+        },
+        "module": {
+          "type": "string",
+          "description": "所属模组名（如'语音模组'、'流量模组'），仅模块化套餐存在"
+        },
+        "fields": {
+          "$ref": "#/definitions/TariffFields",
+          "description": "39个标准化字段"
+        },
+        "extra": {
+          "type": "object",
+          "description": "运营商特有拓展字段，不参与变更检测",
+          "additionalProperties": true
+        },
+        "extra_other": {
+          "type": "object",
+          "description": "兜底层，所有未映射的原始字段，不参与变更检测",
+          "additionalProperties": true
+        },
+        "province_code": {
+          "type": "string",
+          "enum": ["bj", "gd", "js", "sh", "tj", "cq", "ln", "hub", "sc", "snx", "he", "sx", "hn", "jl", "hlj", "nmg", "zj", "ah", "sd", "fj", "jx", "hun", "gx", "gz", "yn", "han", "xz", "gs", "qh", "nx", "xj", "quanguo", "sz"],
+          "description": "省份代码（缩写），如hun、ah、bj"
+        },
+        "province_name": {
+          "type": "string",
+          "description": "省份名称，如湖南省"
+        },
+        "tariff_attr": {
+          "type": "string",
+          "description": "资费范围代码（动态，不限制枚举值，由运营商分类映射决定）"
+        },
+        "type1": {
+          "type": "string",
+          "description": "归属类型代码（动态，不限制枚举值，由运营商分类映射决定）"
+        },
+        "type2": {
+          "type": "string",
+          "description": "资费类型代码（动态，不限制枚举值，由运营商分类映射决定）"
+        }
+      }
+    },
+    "TariffFields": {
+      "type": "object",
+      "required": ["资费标准", "方案编号"],
+      "description": "39个标准化展示字段，所有运营商统一",
+      "additionalProperties": false,
+      "properties": {
+        "方案编号": { "type": "string", "default": "" },
+        "产品名称": { "type": "string", "default": "" },
+        "资费类型": { "type": "string", "default": "" },
+        "归属": { "type": "string", "default": "" },
+        "产品编码": { "type": "string", "default": "" },
+        "资费标准": { "type": "string", "default": "" },
+        "产品价格": { "type": "string", "default": "" },
+        "价格单位": { "type": "string", "default": "" },
+        "上线日期": { "type": "string", "default": "" },
+        "下线日期": { "type": "string", "default": "" },
+        "有效期限": { "type": "string", "default": "" },
+        "在网要求": { "type": "string", "default": "" },
+        "适用范围": { "type": "string", "default": "" },
+        "适用地区": { "type": "string", "default": "" },
+        "销售渠道": { "type": "string", "default": "" },
+        "退订方式": { "type": "string", "default": "" },
+        "违约责任": { "type": "string", "default": "" },
+        "互斥规则": { "type": "string", "default": "" },
+        "到期规则": { "type": "string", "default": "" },
+        "入网要求": { "type": "string", "default": "" },
+        "国内通话": { "type": "string", "default": "" },
+        "国内通用流量": { "type": "string", "default": "" },
+        "定向流量": { "type": "string", "default": "" },
+        "区域流量": { "type": "string", "default": "" },
+        "宽带": { "type": "string", "default": "" },
+        "移动高清": { "type": "string", "default": "" },
+        "短信": { "type": "string", "default": "" },
+        "亲情网": { "type": "string", "default": "" },
+        "权益": { "type": "string", "default": "" },
+        "超出资费说明": { "type": "string", "default": "" },
+        "额外费用": { "type": "string", "default": "" },
+        "其他费用": { "type": "string", "default": "" },
+        "资费说明": { "type": "string", "default": "" },
+        "其他服务内容": { "type": "string", "default": "" },
+        "办理说明": { "type": "string", "default": "" },
+        "其他说明": { "type": "string", "default": "" },
+        "状态": { "type": "string", "default": "" },
+        "更新时间": { "type": "string", "default": "" },
+        "创建时间": { "type": "string", "default": "" }
+      }
+    }
+  }
+}

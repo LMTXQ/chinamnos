@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "changelog-v4",
+  "title": "变更日志 v4",
+  "description": "v4: 以单条资费为最小记录粒度，扁平化后不再区分系列级/子资费级",
+  "type": "object",
+  "required": ["version", "province", "province_code", "carrier", "retention_days", "logs"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 4,
+      "description": "格式版本号"
+    },
+    "province": { "type": "string", "description": "省份显示名" },
+    "province_code": { "type": "string", "enum": ["bj", "gd", "js", "sh", "tj", "cq", "ln", "hub", "sc", "snx", "he", "sx", "hn", "jl", "hlj", "nmg", "zj", "ah", "sd", "fj", "jx", "hun", "gx", "gz", "yn", "han", "xz", "gs", "qh", "nx", "xj", "quanguo", "sz"], "description": "省份代码（缩写），如hun、ah、bj" },
+    "carrier": {
+      "type": "string",
+      "enum": ["cmcc", "cucc", "ctcc", "cbn"],
+      "description": "运营商代码"
+    },
+    "retention_days": { "type": "integer", "description": "日志保留天数" },
+    "logs": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ChangeLogEntry" }
+    }
+  },
+  "definitions": {
+    "ChangeLogEntry": {
+      "type": "object",
+      "required": ["ts", "type", "id", "name", "attr", "t1", "t2"],
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "变更时间 ISO8601"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["added", "removed", "changed"],
+          "description": "变更类型"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z]+_.+$",
+          "description": "资费全局ID，格式: {运营商code}_{方案编号}"
+        },
+        "name": {
+          "type": "string",
+          "description": "资费名称"
+        },
+        "series": {
+          "type": "string",
+          "description": "所属系列名称（可选）"
+        },
+        "attr": {
+          "type": "string",
+          "description": "tariff_attr 代码（动态，不限制枚举值）"
+        },
+        "t1": {
+          "type": "string",
+          "description": "type1 代码（动态，不限制枚举值）"
+        },
+        "t2": {
+          "type": "string",
+          "description": "type2 代码（动态，不限制枚举值）"
+        },
+        "diff": {
+          "$ref": "#/definitions/FieldDiff",
+          "description": "字段变更差异（仅39标准字段）"
+        },
+        "snapshot": {
+          "type": "object",
+          "description": "removed时：该资费的完整39字段",
+          "required": ["资费标准", "方案编号"],
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "added" } },
+            "required": ["type"]
+          },
+          "then": {
+            "not": { "anyOf": [{ "required": ["snapshot"] }, { "required": ["diff"] }] }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "removed" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["snapshot"],
+            "not": { "required": ["diff"] }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "changed" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["diff"],
+            "not": { "required": ["snapshot"] }
+          }
+        }
+      ]
+    },
+    "FieldDiff": {
+      "type": "object",
+      "description": "字段级差异：key=字段名, value=[旧值, 新值]；含39标准字段及所属系列、资费范围2个元数据字段",
+      "propertyNames": {
+        "enum": [
+          "方案编号", "产品名称", "资费类型", "归属", "产品编码",
+          "资费标准", "产品价格", "价格单位", "上线日期", "下线日期", "有效期限", "在网要求",
+          "适用范围", "适用地区", "销售渠道", "退订方式", "违约责任", "互斥规则", "到期规则", "入网要求",
+          "国内通话", "国内通用流量", "定向流量", "区域流量", "宽带", "移动高清", "短信", "亲情网", "权益",
+          "超出资费说明", "额外费用", "其他费用", "资费说明",
+          "其他服务内容", "办理说明", "其他说明", "状态", "更新时间", "创建时间",
+          "所属系列", "资费范围"
+        ]
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": ["string", "number"] },
+        "minItems": 2,
+        "maxItems": 2
+      }
+    }
+  }
+}

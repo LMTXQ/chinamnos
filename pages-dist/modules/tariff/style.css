@@ -1,0 +1,1578 @@
+/* ═══════════════════════════════════════════════════════════════
+   Tariff 页面样式（依赖 shell/theme.css 设计系统）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────── 顶栏 ─────────────── */
+#tariffRoot {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  padding: 0 22px;
+  gap: 16px;
+  background: color-mix(in oklab, var(--surface) 72%, transparent);
+  backdrop-filter: blur(18px) saturate(1.6);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 85%, transparent);
+  box-shadow: 0 1px 16px oklch(20% 0.05 262 / 0.06);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  font-weight: 900;
+  color: #fff;
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+  box-shadow: 0 4px 14px color-mix(in oklab, var(--acc) 38%, transparent);
+  transition: background 0.4s var(--ease);
+  flex: none;
+}
+
+.brand-text {
+  font-size: 16.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  background: linear-gradient(120deg, var(--txt) 30%, var(--acc));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-mid {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+}
+
+.carrier-switch .seg-btn {
+  font-size: 13px;
+  padding: 5px 15px;
+}
+.carrier-switch .seg-btn.active {
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+  color: #fff;
+  box-shadow: 0 3px 10px color-mix(in oklab, var(--acc) 35%, transparent);
+}
+
+.topbar-prov {
+  width: auto;
+  min-width: 118px;
+  padding: 6px 30px 6px 12px;
+  font-size: 13.5px;
+  font-weight: 500;
+  background-color: color-mix(in oklab, var(--surface) 82%, transparent);
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hamburger {
+  display: none;
+}
+
+/* ─────────────── 布局 ─────────────── */
+.layout {
+  display: flex;
+  flex: 1;
+  min-height: calc(100vh - var(--topbar-h));
+}
+
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: oklch(10% 0.03 262 / 0.45);
+  backdrop-filter: blur(4px);
+  z-index: 98;
+}
+.sidebar-overlay.show {
+  display: block;
+  animation: fade-in 0.25s ease;
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex: none;
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  height: calc(100vh - var(--topbar-h));
+  overflow-y: auto;
+  z-index: 99;
+  padding: 16px 12px;
+  background: color-mix(in oklab, var(--surface) 62%, transparent);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border-right: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+  transition: transform 0.35s var(--ease), background 0.35s var(--ease);
+}
+
+.sidebar-head {
+  display: none;
+  padding: 4px 12px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sub);
+  letter-spacing: 2px;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--sidebar-w);
+  padding: 26px 28px 10px;
+  max-width: 1460px;
+}
+
+.page-title {
+  font-size: clamp(20px, 2.2vw, 25px);
+  font-weight: 750;
+  letter-spacing: 0.2px;
+  background: linear-gradient(120deg, var(--txt) 55%, var(--acc));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.page-sub {
+  font-size: 13.5px;
+  color: var(--sub);
+  margin-bottom: 20px;
+}
+
+/* ─────────────── 统计卡片（Bento 不对称网格） ─────────────── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.stat-card {
+  grid-column: span 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  border-radius: var(--r-lg);
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid color-mix(in oklab, var(--line) 78%, transparent);
+  box-shadow: var(--shadow-1);
+  position: relative;
+  overflow: hidden;
+}
+/* .tilt 提供 3D 倾斜 + spotlight 边框光 + transform 过渡，
+   取代原 hover translateY（视觉上 tilt 更高级） */
+.stat-card.tilt:hover {
+  border-color: color-mix(in oklab, var(--acc) 32%, transparent);
+}
+.stat-card:not(.tilt) {
+  transition: transform 0.25s var(--spring), box-shadow 0.3s var(--ease),
+    border-color 0.3s var(--ease);
+}
+.stat-card:not(.tilt):hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in oklab, var(--acc) 30%, transparent);
+  box-shadow: var(--shadow-2);
+}
+.stat-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--acc), var(--acc-2), transparent 80%);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.stat-card:hover::after {
+  opacity: 1;
+}
+
+/* Hero 主卡：首卡 span 6，大数字 + 角部光斑装饰 */
+.stat-grid .stat-card:first-child {
+  grid-column: span 6;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 20px 26px;
+  background:
+    radial-gradient(340px 220px at 88% 18%, color-mix(in oklab, var(--acc) 15%, transparent), transparent 70%),
+    radial-gradient(220px 160px at 100% 100%, color-mix(in oklab, var(--purple) 10%, transparent), transparent 72%),
+    var(--glass);
+}
+.stat-grid .stat-card:first-child .stat-value {
+  font-size: clamp(30px, 3.2vw, 42px);
+  line-height: 1.15;
+}
+.stat-grid .stat-card:first-child .stat-label {
+  font-size: 13px;
+  letter-spacing: 0.4px;
+}
+.stat-grid .stat-card:first-child .stat-icon {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  translate: 0 -50%;
+  width: 66px;
+  height: 66px;
+  font-size: 32px;
+  border-radius: 19px;
+}
+
+/* span 2 小卡紧凑化 */
+.stat-card:not(:first-child) {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  padding: 15px 16px;
+}
+.stat-card:not(:first-child) .stat-value {
+  font-size: 23px;
+}
+.stat-card:not(:first-child) .stat-icon {
+  position: absolute;
+  right: 12px;
+  top: 14px;
+  width: 36px;
+  height: 36px;
+  font-size: 17px;
+  border-radius: 11px;
+}
+
+.stat-info {
+  flex: 1;
+  min-width: 0;
+}
+.stat-label {
+  font-size: 12.5px;
+  color: var(--sub);
+  margin-bottom: 3px;
+}
+.stat-value {
+  font-size: 28px;
+  font-weight: 750;
+  letter-spacing: 0.3px;
+  font-variant-numeric: tabular-nums;
+}
+.stat-value.accent,
+.stat-value.blue {
+  color: var(--acc);
+}
+.stat-value.green {
+  color: var(--green);
+}
+.stat-value.red {
+  color: var(--red);
+}
+
+.stat-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 15px;
+  display: grid;
+  place-items: center;
+  font-size: 25px;
+  flex: none;
+  transition: transform 0.3s var(--spring);
+}
+.stat-card:hover .stat-icon {
+  transform: scale(1.1) rotate(-4deg);
+}
+.stat-icon.total { background: color-mix(in oklab, var(--acc) 14%, transparent); color: var(--acc); }
+.stat-icon.sum { background: color-mix(in oklab, var(--green) 15%, transparent); color: var(--green); }
+.stat-icon.added { background: color-mix(in oklab, var(--green) 22%, transparent); color: var(--green); }
+.stat-icon.removed { background: color-mix(in oklab, var(--red) 14%, transparent); color: var(--red); }
+.stat-icon svg {
+  width: 56%;
+  height: 56%;
+}
+
+/* ─────────────── 省份热力图 ─────────────── */
+.heatmap {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 7px;
+}
+.heatmap-tile {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  border: 1px solid color-mix(in oklab, var(--line) 85%, transparent);
+  border-radius: var(--r-md);
+  padding: 9px 4px 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.2s var(--spring), box-shadow 0.25s var(--ease),
+    border-color 0.25s var(--ease);
+  /* 波浪入场：--i 为行序号（JS 注入），每次渲染如涟漪扫过 */
+  animation: tile-in 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 18ms);
+}
+@keyframes tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.9);
+  }
+}
+.heatmap-tile:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in oklab, var(--acc) 45%, transparent);
+  box-shadow: 0 6px 18px color-mix(in oklab, var(--acc) 20%, transparent);
+}
+.heatmap-tile .ht-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  display: block;
+}
+.heatmap-tile .ht-count {
+  font-size: 11.5px;
+  color: var(--sub);
+  display: block;
+  margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+}
+.heatmap-tile .ht-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  width: 0;
+  transition: width 0.9s var(--ease);
+}
+.heatmap-tile .status-dot-inline {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  margin: 0;
+}
+
+.heatmap-tile.inactive {
+  background: transparent;
+  border: 1px dashed var(--line);
+  cursor: default;
+  opacity: 0.55;
+}
+.heatmap-tile.inactive:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--line);
+}
+
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  justify-content: flex-end;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--sub);
+}
+.legend-bar {
+  width: 90px;
+  height: 7px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--surface-2), var(--acc-2), var(--acc-deep));
+}
+
+.prov-tip-ico {
+  font-size: 15px;
+  display: inline-flex;
+}
+.prov-tip-ico svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 页面标题内联图标 */
+.title-ic {
+  width: 26px;
+  height: 26px;
+  vertical-align: -4px;
+  margin-right: 8px;
+  color: var(--acc);
+}
+
+/* ─────────────── 分类分布条形图 ─────────────── */
+.dist-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 26px;
+}
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.dist-group-title {
+  font-weight: 650;
+  font-size: 13px;
+  color: var(--sub);
+  margin-bottom: 7px;
+}
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) 1fr 58px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.bar-row > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar-track {
+  background: color-mix(in oklab, var(--line) 55%, transparent);
+  border-radius: var(--r-full);
+  height: 20px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: var(--r-full);
+  background: linear-gradient(90deg, var(--acc-2), var(--acc));
+  /* 轻微过冲的弹性生长曲线 */
+  transition: width 0.9s cubic-bezier(0.22, 1.3, 0.36, 1);
+}
+.bar-fill.alt {
+  background: linear-gradient(90deg, var(--green), color-mix(in oklab, var(--green) 60%, var(--acc-2)));
+}
+.bar-fill.alt2 {
+  background: linear-gradient(90deg, var(--purple), color-mix(in oklab, var(--purple) 55%, var(--acc)));
+}
+.bar-num {
+  text-align: right;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─────────────── 工具栏（排序 / 筛选 / 搜索） ─────────────── */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 13px 16px;
+  border-radius: var(--r-lg);
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid color-mix(in oklab, var(--line) 78%, transparent);
+  box-shadow: var(--shadow-1);
+}
+.toolbar.htl {
+  margin-bottom: 10px;
+}
+
+.sort-bar {
+  flex: 1 1 100%;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.sort-tit {
+  font-size: 12.5px;
+  color: var(--sub);
+  font-weight: 700;
+  padding: 0 3px;
+  white-space: nowrap;
+}
+.sort-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 13px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  white-space: nowrap;
+}
+.sort-btn:hover {
+  color: var(--txt);
+  border-color: color-mix(in oklab, var(--acc) 40%, transparent);
+  transform: translateY(-1px);
+}
+.sort-btn:active {
+  transform: scale(0.95);
+}
+.sort-btn.active {
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 3px 10px color-mix(in oklab, var(--acc) 32%, transparent);
+}
+
+.filter-bar {
+  flex: 1 1 100%;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 7px 9px;
+  border-radius: var(--r-md);
+  border: 1px dashed color-mix(in oklab, var(--green) 42%, transparent);
+  background: color-mix(in oklab, var(--green) 6%, transparent);
+}
+.filter-tit {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--green);
+  white-space: nowrap;
+  margin-right: 2px;
+}
+.filter-label {
+  font-size: 12px;
+  color: var(--sub);
+  white-space: nowrap;
+}
+.filter-sep {
+  font-size: 12px;
+  color: var(--sub);
+}
+.filter-input {
+  width: 82px;
+  padding: 4.5px 8px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+}
+.filter-input.date-input {
+  width: 128px;
+}
+.filter-btn {
+  padding: 4.5px 13px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  white-space: nowrap;
+}
+.filter-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+.filter-btn.toggle-btn.active {
+  background: var(--green);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 2px 10px color-mix(in oklab, var(--green) 35%, transparent);
+}
+.filter-btn.clear-btn {
+  border-style: dashed;
+}
+.filter-btn.clear-btn:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* ─────────────── 资费列表 ─────────────── */
+.list {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid color-mix(in oklab, var(--line) 78%, transparent);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.item {
+  padding: 14px 20px;
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
+  transition: background 0.2s var(--ease);
+  animation: rise 0.4s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+.item:last-child {
+  border-bottom: none;
+}
+.item:hover {
+  background: color-mix(in oklab, var(--acc) 5%, transparent);
+}
+.item-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.item-name {
+  font-weight: 650;
+  font-size: 15px;
+  flex: 1 1 auto;
+  color: var(--txt);
+}
+.item-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 13px;
+  color: var(--sub);
+  margin-top: 7px;
+}
+.item-facts b {
+  color: var(--txt);
+  font-weight: 600;
+}
+
+.tag {
+  flex: none;
+  font-size: 11.5px;
+  padding: 2.5px 10px;
+  border-radius: var(--r-full);
+  background: color-mix(in oklab, var(--acc) 11%, transparent);
+  color: var(--acc);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tag.attr-2 {
+  background: color-mix(in oklab, var(--red) 10%, transparent);
+  color: var(--red);
+}
+.tag.attr-3 {
+  background: color-mix(in oklab, var(--purple) 11%, transparent);
+  color: var(--purple);
+}
+.tag.type-2 {
+  background: color-mix(in oklab, var(--green) 11%, transparent);
+  color: var(--green);
+}
+.tag.type-3 {
+  background: color-mix(in oklab, var(--amber) 14%, transparent);
+  color: var(--amber);
+}
+.tag.type-4 {
+  background: color-mix(in oklab, var(--sub) 12%, transparent);
+  color: var(--sub);
+}
+.tag.chg-added {
+  background: var(--green);
+  color: #fff;
+}
+.tag.chg-removed {
+  background: var(--red);
+  color: #fff;
+}
+.tag.chg-changed {
+  background: var(--acc);
+  color: #fff;
+}
+.tag.tag-price {
+  background: color-mix(in oklab, var(--amber) 16%, transparent);
+  color: color-mix(in oklab, var(--amber) 80%, var(--txt));
+}
+
+/* 展开详情：grid-rows 平滑展开动画 */
+.detail {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.32s var(--ease);
+}
+.detail > .detail-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.detail.open {
+  grid-template-rows: 1fr;
+}
+.detail-inner-pad {
+  margin-top: 11px;
+  border-top: 1px dashed var(--line);
+  padding-top: 11px;
+}
+.detail table,
+.sub-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.detail th,
+.sub-table th {
+  background: color-mix(in oklab, var(--acc) 6%, transparent);
+  text-align: left;
+  padding: 6px 10px;
+  width: 108px;
+  color: var(--sub);
+  font-weight: 600;
+  white-space: nowrap;
+  vertical-align: top;
+  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
+}
+.detail td,
+.sub-table td {
+  padding: 6px 10px;
+  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
+  vertical-align: top;
+  word-break: break-all;
+}
+
+.notes-block {
+  margin-top: 11px;
+  border-top: 1px dashed var(--line);
+  padding-top: 9px;
+}
+.notes-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--acc);
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: var(--r-full);
+  background: color-mix(in oklab, var(--acc) 9%, transparent);
+  border: 1px solid color-mix(in oklab, var(--acc) 16%, transparent);
+  transition: background 0.2s;
+}
+.notes-toggle:hover {
+  background: color-mix(in oklab, var(--acc) 15%, transparent);
+}
+.notes-toggle .sub-arrow {
+  transition: transform 0.25s var(--ease);
+}
+.notes-block.open .notes-toggle .sub-arrow {
+  transform: rotate(180deg);
+}
+.notes-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s var(--ease);
+}
+.notes-body > div {
+  overflow: hidden;
+  min-height: 0;
+}
+.notes-block.open .notes-body {
+  grid-template-rows: 1fr;
+}
+.notes-body-pad {
+  margin-top: 9px;
+  padding: 11px 13px;
+  background: color-mix(in oklab, var(--acc) 4%, transparent);
+  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
+  border-radius: var(--r-md);
+}
+.note-item {
+  font-size: 13px;
+  line-height: 1.65;
+  margin-bottom: 9px;
+}
+.note-item:last-child {
+  margin-bottom: 0;
+}
+.note-label {
+  font-weight: 700;
+  color: var(--sub);
+  margin-bottom: 2px;
+}
+
+.sub-arrow {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid currentColor;
+  opacity: 0.8;
+}
+
+/* ─────────────── 变更日志时间线 ─────────────── */
+.tl {
+  position: relative;
+  padding-left: 22px;
+  margin-left: 6px;
+  border-left: 2px solid color-mix(in oklab, var(--acc) 35%, transparent);
+}
+/* 发光渐变主线：随滚动方向渐隐 */
+.tl::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in oklab, var(--acc) 80%, transparent) 8%,
+    color-mix(in oklab, var(--acc) 30%, transparent) 92%,
+    transparent
+  );
+  box-shadow: 0 0 12px color-mix(in oklab, var(--acc) 30%, transparent);
+  pointer-events: none;
+}
+.tl-item {
+  position: relative;
+  padding: 10px 0 14px;
+  cursor: pointer;
+}
+.tl-item::before {
+  content: "";
+  position: absolute;
+  left: -27.5px;
+  top: 18px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--acc);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--acc) 18%, transparent);
+  transition: box-shadow 0.25s;
+}
+.tl-item:hover::before {
+  box-shadow: 0 0 0 7px color-mix(in oklab, var(--acc) 22%, transparent);
+}
+.tl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* 类型微条：新增绿 / 下架红 / 变更琥珀 */
+.tl-type-bar {
+  flex: none;
+  width: 4px;
+  height: 15px;
+  border-radius: 3px;
+  background: var(--sub);
+}
+.tl-type-bar.add { background: var(--green); box-shadow: 0 0 8px color-mix(in oklab, var(--green) 45%, transparent); }
+.tl-type-bar.del { background: var(--red); box-shadow: 0 0 8px color-mix(in oklab, var(--red) 45%, transparent); }
+.tl-type-bar.mod { background: var(--amber); box-shadow: 0 0 8px color-mix(in oklab, var(--amber) 45%, transparent); }
+
+/* 时间轴节点按类型着色 */
+.tl-item.tl-added::before { background: var(--green); }
+.tl-item.tl-removed::before { background: var(--red); }
+.tl-item.tl-changed::before { background: var(--amber); }
+.tl-item.tl-added:hover::before { box-shadow: 0 0 0 7px color-mix(in oklab, var(--green) 22%, transparent); }
+.tl-item.tl-removed:hover::before { box-shadow: 0 0 0 7px color-mix(in oklab, var(--red) 22%, transparent); }
+.tl-item.tl-changed:hover::before { box-shadow: 0 0 0 7px color-mix(in oklab, var(--amber) 22%, transparent); }
+
+/* 展开内容左缘彩色微条 */
+.tl-item.tl-added .tl-body-pad { border-left: 3px solid var(--green); }
+.tl-item.tl-removed .tl-body-pad { border-left: 3px solid var(--red); }
+.tl-item.tl-changed .tl-body-pad { border-left: 3px solid var(--amber); }
+.tl-time {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--acc);
+  font-variant-numeric: tabular-nums;
+}
+.tl-arrow {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 7px solid var(--sub);
+  transition: transform 0.25s var(--ease);
+  opacity: 0.75;
+}
+.tl-item.open .tl-arrow {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+.tl-chips {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0;
+  flex-wrap: wrap;
+}
+.tl-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.32s var(--ease);
+}
+.tl-body > div {
+  overflow: hidden;
+  min-height: 0;
+}
+.tl-item.open .tl-body {
+  grid-template-rows: 1fr;
+}
+.tl-body-pad {
+  font-size: 13px;
+  color: var(--sub);
+  margin-top: 7px;
+  padding: 12px 15px;
+  background: color-mix(in oklab, var(--acc) 4%, transparent);
+  border: 1px solid color-mix(in oklab, var(--line) 75%, transparent);
+  border-radius: var(--r-md);
+}
+.tl-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--txt);
+  margin: 4px 0;
+}
+.tl-path {
+  font-size: 12px;
+  color: var(--sub);
+}
+.tl-id {
+  font-size: 11px;
+  color: var(--sub);
+  margin-top: 2px;
+  font-family: var(--mono);
+}
+.tl-detail-title {
+  margin-top: 9px;
+  font-weight: 650;
+  font-size: 12px;
+}
+
+.diff-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.diff-field {
+  font-weight: 700;
+  color: var(--acc);
+  min-width: 80px;
+}
+.diff-old {
+  color: var(--red);
+  text-decoration: line-through;
+  opacity: 0.75;
+}
+.diff-arrow {
+  color: var(--sub);
+  font-size: 11px;
+}
+.diff-new {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.load-more-btn {
+  padding: 7px 22px;
+  border-radius: var(--r-full);
+  border: 1px solid color-mix(in oklab, var(--acc) 40%, transparent);
+  background: color-mix(in oklab, var(--acc) 8%, transparent);
+  color: var(--acc);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s var(--ease);
+}
+.load-more-btn:hover {
+  background: color-mix(in oklab, var(--acc) 15%, transparent);
+  transform: translateY(-1px);
+}
+
+/* ─────────────── 采集监控 ─────────────── */
+.monitor-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.m-stat {
+  background: var(--glass);
+  border: 1px solid color-mix(in oklab, var(--line) 78%, transparent);
+  border-radius: var(--r-lg);
+  padding: 16px;
+  text-align: center;
+  box-shadow: var(--shadow-1);
+  animation: rise 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+.m-stat .m-val {
+  font-size: 26px;
+  font-weight: 750;
+  color: var(--acc);
+  font-variant-numeric: tabular-nums;
+}
+.m-stat .m-lab {
+  font-size: 12px;
+  color: var(--sub);
+  margin-top: 2px;
+}
+.m-stat.alert .m-val {
+  color: var(--red);
+}
+
+.diagnostics-summary {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.d-stat {
+  background: var(--glass);
+  border: 1px solid color-mix(in oklab, var(--line) 78%, transparent);
+  border-radius: var(--r-md);
+  padding: 13px;
+  text-align: center;
+  box-shadow: var(--shadow-1);
+  animation: rise 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+.d-stat .d-val {
+  font-size: 21px;
+  font-weight: 750;
+  color: var(--acc);
+  font-variant-numeric: tabular-nums;
+}
+.d-stat .d-lab {
+  font-size: 12px;
+  color: var(--sub);
+  margin-top: 1px;
+}
+.d-stat.alert .d-val {
+  color: var(--red);
+}
+
+/* ─────────────── 关于 ─────────────── */
+.about-text {
+  font-size: 14px;
+}
+.about-text p {
+  margin-bottom: 8px;
+}
+.about-text ul {
+  margin-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 8px;
+}
+.about-text h3 {
+  font-size: 15px;
+  color: var(--acc);
+}
+
+/* ─────────────── 检测结果 ─────────────── */
+.res-row {
+  margin: 4px 0;
+}
+.res-row.sub {
+  color: var(--sub);
+  font-size: 12.5px;
+  margin-top: 9px;
+}
+.res-row.ok {
+  font-weight: 700;
+  color: var(--green);
+}
+
+.foot {
+  text-align: center;
+  color: var(--sub);
+  font-size: 12px;
+  padding: 20px 0 26px;
+  margin-left: var(--sidebar-w);
+}
+
+/* ─────────────── 滚动驱动入场（Scroll-Driven Animations） ───────────────
+   animation-timeline: view()：元素滚入视口时播放入场动画（2024+ 原生特性）。
+   不支持的浏览器整块忽略，元素保持可见；reduced-motion 下不启用。 */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    #tariffRoot .panel {
+      animation: rise linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 55%;
+    }
+    #tariffRoot .tl-item {
+      animation: rise linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 40%;
+    }
+    #tariffRoot .list .item {
+      animation: rise linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 30%;
+    }
+    #tariffRoot .m-stat,
+    #tariffRoot .d-stat {
+      animation: rise linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 50%;
+    }
+  }
+}
+
+/* ─────────────── 响应式 ─────────────── */
+@media (max-width: 1180px) {
+  .stat-grid .stat-card:first-child {
+    grid-column: span 12;
+  }
+  .stat-card:not(:first-child) {
+    grid-column: span 4;
+  }
+  .topbar-status {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .hamburger {
+    display: inline-flex;
+  }
+  .sidebar {
+    transform: translateX(-104%);
+    top: 0;
+    height: 100vh;
+    z-index: 120;
+    padding-top: 0;
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  .sidebar-head {
+    display: flex;
+  }
+  .content,
+  .foot {
+    margin-left: 0;
+  }
+  .content {
+    padding: 16px 14px 6px;
+  }
+}
+@media (max-width: 640px) {
+  .topbar {
+    height: auto;
+    min-height: var(--topbar-h);
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .topbar-mid {
+    order: 10;
+    flex-basis: 100%;
+    justify-content: space-between;
+  }
+  .carrier-switch .seg-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+  .topbar-prov {
+    min-width: 92px;
+    font-size: 12.5px;
+  }
+  .brand-text {
+    font-size: 14px;
+    max-width: 150px;
+  }
+  .stat-grid {
+    gap: 10px;
+  }
+  .stat-grid .stat-card:first-child {
+    grid-column: span 12;
+  }
+  .stat-card:not(:first-child) {
+    grid-column: span 6;
+  }
+  .stat-value {
+    font-size: 22px;
+  }
+  .stat-icon {
+    width: 42px;
+    height: 42px;
+    font-size: 20px;
+  }
+  .toolbar {
+    padding: 9px 10px;
+    gap: 6px;
+  }
+  .filter-input {
+    width: 62px;
+  }
+  .filter-input.date-input {
+    width: 112px;
+  }
+  .dist-grid {
+    grid-template-columns: 1fr;
+  }
+  .heatmap {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .monitor-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+  .diagnostics-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .tag {
+    font-size: 10.5px;
+    padding: 2px 7px;
+  }
+  .panel {
+    padding: 15px;
+  }
+}
+
+/* ─────────────── 总览：各省排行 + 价格分布 ─────────────── */
+.ov-duo {
+  display: grid;
+  grid-template-columns: 11fr 9fr;
+  gap: 20px;
+  align-items: stretch;
+}
+.ov-duo .panel {
+  margin-bottom: 20px;
+  min-width: 0;
+}
+@media (max-width: 1080px) {
+  .ov-duo {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rank-row {
+  display: grid;
+  grid-template-columns: 24px 56px 1fr 58px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--surface-2) 55%, transparent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color 0.25s var(--ease), background 0.25s var(--ease),
+    transform 0.25s var(--ease);
+}
+.rank-row:hover {
+  border-color: color-mix(in oklab, var(--acc) 35%, transparent);
+  background: color-mix(in oklab, var(--acc) 6%, transparent);
+  transform: translateX(3px);
+}
+.rank-row.cur {
+  border-color: color-mix(in oklab, var(--acc) 45%, transparent);
+  background: color-mix(in oklab, var(--acc) 10%, transparent);
+}
+.rank-no {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 800;
+  background: var(--surface-2);
+  color: var(--sub);
+}
+.rank-no.n1 {
+  background: linear-gradient(135deg, oklch(80% 0.15 85), oklch(66% 0.19 45));
+  color: #fff;
+}
+.rank-no.n2 {
+  background: linear-gradient(135deg, oklch(78% 0.015 260), oklch(58% 0.02 260));
+  color: #fff;
+}
+.rank-no.n3 {
+  background: linear-gradient(135deg, oklch(70% 0.1 60), oklch(52% 0.11 45));
+  color: #fff;
+}
+.rank-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rank-track {
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--line) 60%, transparent);
+  overflow: hidden;
+}
+.rank-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--acc-2), var(--acc-deep));
+  transition: width 0.9s var(--spring);
+}
+.rank-row.cur .rank-fill {
+  background: linear-gradient(90deg, var(--acc), var(--acc-deep));
+  box-shadow: 0 0 10px color-mix(in oklab, var(--acc) 45%, transparent);
+}
+.rank-num {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sub);
+  text-align: right;
+  font-weight: 600;
+}
+
+.price-hist {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  height: 185px;
+  padding-top: 8px;
+}
+.ph-col {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  cursor: default;
+}
+.ph-num {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sub);
+  font-variant-numeric: tabular-nums;
+}
+.ph-bar {
+  width: 100%;
+  max-width: 46px;
+  height: 0;
+  min-height: 3px;
+  border-radius: 8px 8px 3px 3px;
+  background: linear-gradient(180deg, var(--acc-2), var(--acc-deep));
+  box-shadow: 0 4px 14px color-mix(in oklab, var(--acc) 25%, transparent);
+  transition: height 0.9s var(--spring);
+}
+.ph-col:first-child .ph-bar {
+  background: linear-gradient(180deg, var(--green), color-mix(in oklab, var(--green) 72%, black));
+  box-shadow: 0 4px 14px color-mix(in oklab, var(--green) 30%, transparent);
+}
+.ph-col:last-child .ph-bar {
+  background: linear-gradient(180deg, var(--purple), var(--acc-deep));
+  box-shadow: 0 4px 14px color-mix(in oklab, var(--purple) 25%, transparent);
+}
+.ph-label {
+  font-size: 11px;
+  color: var(--sub);
+  white-space: nowrap;
+}
+.ph-col:hover .ph-bar {
+  filter: brightness(1.15);
+}
+@media (max-width: 640px) {
+  .price-hist {
+    gap: 5px;
+  }
+  .ph-label {
+    font-size: 9.5px;
+  }
+  .rank-row {
+    grid-template-columns: 22px 48px 1fr 52px;
+    gap: 7px;
+  }
+}
+
+/* ─────────────── 收藏星标 / 搜索快捷键 / 工具栏按钮图标 ─────────────── */
+.fav-btn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sub);
+  cursor: pointer;
+  opacity: 0.65;
+  transition: color 0.2s var(--ease), opacity 0.2s var(--ease),
+    transform 0.2s var(--spring), background 0.2s var(--ease);
+}
+.fav-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.fav-btn:hover {
+  opacity: 1;
+  color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 14%, transparent);
+  transform: scale(1.12);
+}
+.fav-btn.on {
+  opacity: 1;
+  color: var(--amber);
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--amber) 55%, transparent));
+}
+
+.search-wrap {
+  position: relative;
+  flex: 1 1 220px;
+  min-width: 160px;
+  display: flex;
+}
+.search-wrap .search-box {
+  width: 100%;
+  padding-right: 34px;
+}
+.search-kbd {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  translate: 0 -50%;
+  padding: 1px 7px;
+  font: 600 11px/1.5 var(--mono);
+  color: var(--sub);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  pointer-events: none;
+  user-select: none;
+}
+
+.filter-btn svg,
+.btn svg {
+  width: 12px;
+  height: 12px;
+  vertical-align: -1.5px;
+}
+.btn svg {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2.5px;
+  margin-right: 2px;
+}
+
+/* ─────────────── 字段表语义配色 ─────────────── */
+.fields-table tr[class^="sem-"] th {
+  position: relative;
+  padding-left: 15px;
+}
+.fields-table tr[class^="sem-"] th::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  translate: 0 -50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sub);
+}
+.fields-table tr.sem-data th::before { background: var(--green); box-shadow: 0 0 6px color-mix(in oklab, var(--green) 50%, transparent); }
+.fields-table tr.sem-data td { color: var(--green); font-weight: 600; }
+.fields-table tr.sem-call th::before { background: var(--acc); box-shadow: 0 0 6px color-mix(in oklab, var(--acc) 50%, transparent); }
+.fields-table tr.sem-call td { color: var(--acc); font-weight: 600; }
+.fields-table tr.sem-broadband th::before { background: var(--purple); box-shadow: 0 0 6px color-mix(in oklab, var(--purple) 50%, transparent); }
+.fields-table tr.sem-broadband td { color: var(--purple); font-weight: 600; }
+.fields-table tr.sem-online th::before { background: var(--green); box-shadow: 0 0 6px color-mix(in oklab, var(--green) 50%, transparent); }
+.fields-table tr.sem-online td { color: var(--green); }
+.fields-table tr.sem-offline th::before { background: var(--red); box-shadow: 0 0 6px color-mix(in oklab, var(--red) 50%, transparent); }
+.fields-table tr.sem-offline td { color: var(--red); }
+
+/* ─────────────── 卡片扫光 + 渐变数字 ─────────────── */
+.stat-card,
+.ov-duo .panel {
+  position: relative;
+  overflow: hidden;
+}
+.stat-card::after,
+.ov-duo .panel::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, 0.16) 50%, transparent 58%);
+  transform: translateX(-130%);
+  transition: transform 1s var(--ease);
+  pointer-events: none;
+  z-index: 1;
+}
+.stat-card:hover::after,
+.ov-duo .panel:hover::after {
+  transform: translateX(130%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .stat-card::after,
+  .ov-duo .panel::after {
+    display: none;
+  }
+}
+
+/* 首卡大数字渐变 */
+.stat-grid .stat-card:first-child .stat-value.accent,
+.stat-grid .stat-card:first-child .stat-value.accent > * {
+  background: linear-gradient(120deg, var(--acc) 5%, var(--acc-2) 55%, var(--acc-deep) 95%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.stat-grid .stat-card:first-child .stat-value.accent span {
+  background: none;
+  -webkit-text-fill-color: var(--sub);
+}

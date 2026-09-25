@@ -1,0 +1,230 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "stats-v7",
+  "title": "全局统计 v7",
+  "description": "v7: 省份条目新增 consecutive_degrade_count 字段；crawl_status 新增 error、degrade_auto_recovered；波动 hard_reject/surge_duplicate 时拦截数据，soft_warn 正常覆盖",
+  "type": "object",
+  "required": ["version", "crawl_time", "next_crawl_time", "status", "last_crawl_duration_ms", "cache", "carriers"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 7,
+      "description": "格式版本号"
+    },
+    "crawl_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "本次采集脚本启动时间（ISO8601），无论部分省份是否失败都更新"
+    },
+    "next_crawl_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "下次预计采集时间（ISO8601），按调度配置计算"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "partial_failure", "total_failure"],
+      "description": "采集状态：success=全部成功，partial_failure=部分省份失败，total_failure=全部失败"
+    },
+    "last_crawl_duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "上次采集总耗时（毫秒）"
+    },
+    "cache": {
+      "type": "object",
+      "description": "浏览器缓存配置",
+      "required": ["ttl_minutes"],
+      "additionalProperties": false,
+      "properties": {
+        "ttl_minutes": {
+          "type": "number",
+          "minimum": 0,
+          "description": "浏览器缓存时长（分钟），0=不缓存"
+        }
+      }
+    },
+    "default_carrier": {
+      "type": "string",
+      "description": "默认运营商代码"
+    },
+    "carriers": {
+      "type": "object",
+      "description": "各运营商数据，key 为运营商代码（cmcc/cucc/ctcc/cbn）",
+      "additionalProperties": {
+        "$ref": "#/definitions/CarrierStats"
+      }
+    }
+  },
+  "definitions": {
+    "CarrierStats": {
+      "type": "object",
+      "required": ["default_province", "last_crawl", "today", "provinces"],
+      "additionalProperties": false,
+      "properties": {
+        "default_province": {
+          "type": "string",
+          "enum": ["bj", "gd", "js", "sh", "tj", "cq", "ln", "hub", "sc", "snx", "he", "sx", "hn", "jl", "hlj", "nmg", "zj", "ah", "sd", "fj", "jx", "hun", "gx", "gz", "yn", "han", "xz", "gs", "qh", "nx", "xj", "quanguo", "sz"],
+          "description": "默认展示省份code"
+        },
+        "last_crawl": {
+          "$ref": "#/definitions/ChangeCountsByAttr",
+          "description": "本次采集周期的变更计数（按 attr 代码分组，仅汇总 crawl_status=success 的省份）"
+        },
+        "today": {
+          "$ref": "#/definitions/ChangeCountsByAttr",
+          "description": "今日0:00起累计变更计数（按 attr 代码分组，从changelog实时计算）"
+        },
+        "category_maps": {
+          "type": "object",
+          "description": "该运营商的分类代码→中文名称映射表，供前端显示使用",
+          "additionalProperties": false,
+          "properties": {
+            "attr": { "type": "object", "additionalProperties": { "type": "string" } },
+            "t1": { "type": "object", "additionalProperties": { "type": "string" } },
+            "t2": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        "provinces": {
+          "type": "array",
+          "description": "各省详情列表",
+          "items": {
+            "$ref": "#/definitions/ProvinceEntry"
+          }
+        }
+      }
+    },
+    "ChangeCountsByAttr": {
+      "type": "object",
+      "description": "按 attr 代码分组的变更计数",
+      "additionalProperties": { "$ref": "#/definitions/ChangeCounts" }
+    },
+    "ChangeCounts": {
+      "type": "object",
+      "description": "变更计数（资费级）",
+      "required": ["added", "removed", "changed"],
+      "additionalProperties": false,
+      "properties": {
+        "added": { "type": "integer", "minimum": 0, "description": "新增资费数" },
+        "removed": { "type": "integer", "minimum": 0, "description": "下架资费数" },
+        "changed": { "type": "integer", "minimum": 0, "description": "修改资费数" }
+      }
+    },
+    "VolatilityInfo": {
+      "type": "object",
+      "description": "数据量波动信息",
+      "required": ["level", "ratio", "threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["soft_warn", "hard_reject"],
+          "description": "波动级别：soft_warn=轻度警告（正常覆盖），hard_reject=硬性拒绝（拦截不覆盖）"
+        },
+        "ratio": {
+          "type": "number",
+          "minimum": 0,
+          "description": "波动比例，如 0.35 表示波动 35%"
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "description": "触发该级别的阈值"
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["increase", "decrease"],
+          "description": "波动方向（soft_warn 和 hard_reject 时均存在）"
+        }
+      }
+    },
+    "TariffCount": {
+      "type": "object",
+      "description": "资费数量指标",
+      "required": ["tariffs"],
+      "additionalProperties": false,
+      "properties": {
+        "tariffs": { "type": "integer", "minimum": 0, "description": "资费总数" }
+      }
+    },
+    "BreakdownByAttr": {
+      "type": "object",
+      "description": "按 attr 代码拆分的资费数",
+      "additionalProperties": { "$ref": "#/definitions/TariffCount" }
+    },
+    "ProvinceEntry": {
+      "type": "object",
+      "required": ["code", "name", "total", "breakdown", "data_crawl_time", "crawl_status", "last_crawl", "today", "dist"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": ["bj", "gd", "js", "sh", "tj", "cq", "ln", "hub", "sc", "snx", "he", "sx", "hn", "jl", "hlj", "nmg", "zj", "ah", "sd", "fj", "jx", "hun", "gx", "gz", "yn", "han", "xz", "gs", "qh", "nx", "xj", "quanguo", "sz"],
+          "description": "省份代码（缩写）"
+        },
+        "name": {
+          "type": "string",
+          "description": "省份显示名"
+        },
+        "total": {
+          "$ref": "#/definitions/TariffCount",
+          "description": "该省资费总数"
+        },
+        "breakdown": {
+          "$ref": "#/definitions/BreakdownByAttr",
+          "description": "按 attr 代码拆分的资费数"
+        },
+        "data_crawl_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "该省数据实际采集成功的时间（ISO8601），失败时保留上次成功时间"
+        },
+        "crawl_status": {
+          "type": "string",
+          "enum": ["success", "failed", "error", "sudden_change", "surge_duplicate", "no_snapshot", "degrade_auto_recovered"],
+          "description": "该省采集状态"
+        },
+        "volatility": {
+          "oneOf": [
+            { "$ref": "#/definitions/VolatilityInfo" },
+            { "type": "null" }
+          ],
+          "description": "数据量波动信息，无波动时为 null。hard_reject 时拦截不覆盖（骤降或骤增+高重复率），soft_warn 时仅通知正常覆盖"
+        },
+        "last_crawl": {
+          "$ref": "#/definitions/ChangeCountsByAttr",
+          "description": "本次采集周期该省变更（按 attr 代码分组）"
+        },
+        "today": {
+          "$ref": "#/definitions/ChangeCountsByAttr",
+          "description": "今日0:00起该省累计变更（按 attr 代码分组，从changelog实时计算）"
+        },
+        "dist": {
+          "$ref": "#/definitions/DistByAttr",
+          "description": "分类分布（层级：attr → t1 → t2 → 资费数，key 均为代码）"
+        },
+        "consecutive_degrade_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "连续被降级拦截的轮次，达到阈值后自动恢复覆盖"
+        }
+      }
+    },
+    "DistByAttr": {
+      "type": "object",
+      "description": "按 attr 代码拆分的分类分布",
+      "additionalProperties": { "$ref": "#/definitions/DistByType1" }
+    },
+    "DistByType1": {
+      "type": "object",
+      "description": "按 t1 代码拆分的分类分布",
+      "additionalProperties": { "$ref": "#/definitions/DistByType2" }
+    },
+    "DistByType2": {
+      "type": "object",
+      "description": "按 t2 代码拆分的资费数",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    }
+  }
+}
