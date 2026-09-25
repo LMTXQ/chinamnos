@@ -153,6 +153,7 @@ function getDefaultCarrierState(carrierKey) {
     delayMin: p.delayMin,
     delayMax: p.delayMax,
     jitterRatio: 0.2,
+    provinceWorkersCarrier: 0,
     volThreshold: 0.3,
     volThresholdHard: 0.7,
     degradeAutoRecoverThreshold: 0,
@@ -179,6 +180,7 @@ const CARRIER_CRAWL_FIELDS = [
   ['delayMin', 'delayMin', 'int'],
   ['delayMax', 'delayMax', 'int'],
   ['jitterRatio', 'jitterRatio', 'float'],
+  ['provinceWorkersCarrier', 'carrierProvinceWorkers', 'int'],
 ];
 
 /* ─────────────── 省份表（与原版一致） ─────────────── */
@@ -659,6 +661,7 @@ function buildConfig() {
         delay_min: s.delayMin,
         delay_max: s.delayMax,
         jitter_ratio: s.jitterRatio,
+        ...(s.provinceWorkersCarrier > 0 ? { province_workers: s.provinceWorkersCarrier } : {}),
       },
       volatility: {
         threshold: s.volThreshold,
@@ -964,6 +967,7 @@ function applyConfig(config) {
       delayMin: crawl.delay_min || p.delayMin,
       delayMax: crawl.delay_max || p.delayMax,
       jitterRatio: crawl.jitter_ratio != null ? crawl.jitter_ratio : 0.2,
+      provinceWorkersCarrier: crawl.province_workers != null ? crawl.province_workers : 0,
       volThreshold: vol.threshold != null ? vol.threshold : 0.3,
       volThresholdHard: vol.threshold_sudden != null ? vol.threshold_sudden : 0.7,
       degradeAutoRecoverThreshold: vol.degrade_auto_recover_threshold != null ? vol.degrade_auto_recover_threshold : 0,
@@ -1549,7 +1553,7 @@ Shell.registerPage({
           <label class="ck-row"><input type="checkbox" class="switch" id="concurrentCarriers"><span>开启运营商并发采集</span></label>
         </div>
         <div class="fg"><label>最大并发线程数 <span class="hint">(1-16, 通常=启用的运营商数量)</span><span class="help" data-tip="并发采集时的最大线程数。建议设为启用的运营商数量（如启用4家则设4）。过大不会进一步提速，反而增加资源占用。">?</span></label><input type="number" id="maxWorkers" value="4" min="1" max="16"></div>
-        <div class="fg"><label>省份并发度 <span class="hint">(1=串行, 建议3-5)</span><span class="help" data-tip="同一运营商内不同省份的并发采集线程数。1=串行（默认，与原有行为一致）；3-5=并发（同运营商多省份同时采集，显著缩短总耗时）。移动/联通/广电/电信直连均为纯HTTP请求，可安全并发；电信Playwright回退省份始终串行（共享单个浏览器实例）。并发度不宜过大，避免触发目标站反爬限流。">?</span></label><input type="number" id="provinceWorkers" value="1" min="1" max="16"></div>
+        <div class="fg"><label>省份并发度 <span class="hint">(1=串行, 建议3-5, 全局默认)</span><span class="help" data-tip="全局默认的省份并发线程数，所有未单独覆盖的运营商使用此值。1=串行；3-5=并发。可在各运营商页签的「省份并发度覆盖」里按风控松紧单独设置（如移动4、联通2）。电信Playwright回退省份始终串行。">?</span></label><input type="number" id="provinceWorkers" value="1" min="1" max="16"></div>
       </div>
     </div>
 
@@ -1714,6 +1718,8 @@ Shell.registerPage({
         <div class="fg"><label>省间最大延迟(秒)<span class="help" data-tip="两个省份采集之间的最大等待时间。与最小延迟配合，产生随机延迟，避免多实例同时请求同一服务端。">?</span></label><input type="number" id="delayMax" value="120" min="5" max="600"></div>
       </div>
       <div class="fg"><label>省间抖动比例 <span class="hint">(0-1, 延迟随机偏移)</span><span class="help" data-tip="在省间延迟上叠加随机偏移，与重试抖动类似。0=无偏移，0.2=±20%偏移。多实例并行采集时防止同时请求。">?</span></label><input type="number" id="jitterRatio" value="0.2" min="0" max="1" step="0.1"></div>
+      <div class="cfg-hr"></div>
+      <div class="fg"><label>省份并发度覆盖 <span class="hint">(0=跟随全局)</span><span class="help" data-tip="仅对当前运营商生效的省份并发线程数。0=跟随全局「省份并发度」设置；大于0则覆盖全局值。各运营商风控松紧不同：风控松的（如移动）可设 4-5，风控紧的设 1-2 或保持 0 用全局保守值。电信 Playwright 回退省份始终串行，不受此影响。">?</span></label><input type="number" id="carrierProvinceWorkers" value="0" min="0" max="16"></div>
     </div>
 
     <div class="panel rise" id="carrierVolCard">
