@@ -4746,7 +4746,14 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
     province_diags = []
     carrier_start = time.time()
 
-    province_workers = config.get('schedule', {}).get('province_workers', 1)
+    # 省份并发数：运营商级覆盖 carriers.<key>.crawl.province_workers 优先，
+    # 未配置（或为 0/负数）时回落全局 schedule.province_workers。
+    # 各运营商风控松紧不同，可按需差异化：如 cmcc=5、cucc=2。
+    global_pw = config.get('schedule', {}).get('province_workers', 1)
+    carrier_pw = carrier_cfg.get('crawl', {}).get('province_workers')
+    province_workers = int(carrier_pw) if carrier_pw and int(carrier_pw) > 0 else int(global_pw)
+    if carrier_pw and int(carrier_pw) > 0 and int(carrier_pw) != int(global_pw):
+        logger.info(f'{carrier_display(carrier_key)}: 省份并发覆盖 province_workers={province_workers} (全局={global_pw})')
     ctcc_direct_mode = carrier_cfg.get('crawl', {}).get('direct_mode', 'prefer_direct') if carrier_key == 'ctcc' else ''
 
     use_concurrent = (
