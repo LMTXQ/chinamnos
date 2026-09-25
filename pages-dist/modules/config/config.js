@@ -1002,6 +1002,28 @@ function importConfig() {
   }
 }
 
+async function importFromClipboard() {
+  let text = '';
+  try {
+    text = (await navigator.clipboard.readText() || '').trim();
+  } catch (e) {
+    showToast('无法读取剪贴板（需 HTTPS 或 localhost 环境）', true);
+    return;
+  }
+  if (!text) {
+    showToast('剪贴板为空', true);
+    return;
+  }
+  try {
+    const config = JSON.parse(text);
+    applyConfig(config);
+    document.getElementById('importJson').value = text;
+    showToast('已从剪贴板导入');
+  } catch (e) {
+    showToast('剪贴板内容不是有效 JSON：' + e.message, true);
+  }
+}
+
 function resetToDefault() {
   CARRIER_KEYS.forEach(k => {
     carrierStates[k] = getDefaultCarrierState(k);
@@ -1349,6 +1371,7 @@ function onRootClick(e) {
     if (act === "toggle-visibility") { toggleVisibility(actEl.dataset.target); return; }
     if (act === "add-catmap") { addCatMapRow(actEl.dataset.sub); return; }
     if (act === "import-config") { importConfig(); return; }
+    if (act === "import-clipboard") { importFromClipboard(); return; }
     if (act === "reset-default") { resetToDefault(); return; }
     if (act === "generate") { generateAndShow(); return; }
     if (act === "generate-copy") { generateAndCopy(); return; }
@@ -1495,6 +1518,7 @@ Shell.registerPage({
       <textarea id="importJson" rows="4" placeholder="粘贴已有 JSON 配置，点击「导入」覆盖表单值"></textarea>
       <div class="btn-row">
         <button class="btn ghost" data-act="import-config"><i data-icon="check"></i>导入配置</button>
+        <button class="btn ghost" data-act="import-clipboard"><i data-icon="copy"></i>从剪贴板导入</button>
         <button class="btn ghost" data-act="reset-default"><i data-icon="refresh"></i>恢复默认值</button>
       </div>
     </div>
