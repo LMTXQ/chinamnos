@@ -25,6 +25,10 @@ import { loadNotices, maybePromosOnSwitch } from "../../shell/notice.js";
 const $ = (id) => document.getElementById(id);
 const cache = {};
 
+/* 前端版本号：与 frontend-config.js 中 tariff 的 ?v= 同步 bump；
+   文件内自包含，关于页展示用——显示值即文件真实版本，判断缓存是否更新零歧义 */
+const TARIFF_VER = "20261015d";
+
 const AREA_CODE_MAP = {
 "0100":"北京","0200":"广州","0210":"上海","0220":"天津",
 "0230":"重庆","0240":"沈阳","0241":"铁岭","0242":"抚顺",
@@ -4172,6 +4176,8 @@ Shell.registerPage({
           <div id="aboutLinks"></div>
         </div>
       </div>
+
+      <p class="hint" style="text-align:right;opacity:.55;font-size:12px;margin:14px 0 0">前端版本 v${TARIFF_VER}</p>
     </section>
   </main>
 </div>
