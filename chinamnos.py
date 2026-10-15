@@ -4161,29 +4161,48 @@ class CloudflareStorage(StorageBackend):
             buckets.append(cur)
 
         for bucket in buckets:
-            jwt = _get_upload_jwt()
-            payload = [
-                {
-                    'key': h,
-                    'value': base64.b64encode(content).decode('ascii'),
-                    'metadata': {'contentType': mimetypes.guess_type(rel_path)[0] or 'application/octet-stream'},
-                    'base64': True,
-                }
-                for h, rel_path, content in bucket
-            ]
-            up_resp = self.session.post(
-                f'{self.api_base}/pages/assets/upload',
-                json=payload,
-                headers={'Authorization': f'Bearer {jwt}'},
-                timeout=300,
-            )
-            up_resp.raise_for_status()
-            up_data = up_resp.json()
-            if not up_data.get('success'):
-                raise RuntimeError(f'Cloudflare: 资产上传失败: {json.dumps(up_data.get("errors", []), ensure_ascii=False)}')
-            failed = (up_data.get('result') or {}).get('unsuccessful_keys') or []
-            if failed:
-                raise RuntimeError(f'Cloudflare: 部分资产上传失败: {failed}')
+            # 桶级重试（指数退避 5/15/45s ±20% 抖动，共 4 次尝试）：全量采集轮待上传资产可达
+            # 100+，upload 批次处理时间长，青龙直连 api.cloudflare.com 的链路间歇抖动会撞
+            # 524（CF 后端 >100s 超时）——524 属超时型错误，退避后重试成功率高；每次重试
+            # 重新取 JWT，防旧 token 在长等待后失效。
+            up_ok = False
+            last_up_err = None
+            for attempt in range(4):
+                try:
+                    jwt = _get_upload_jwt()
+                    payload = [
+                        {
+                            'key': h,
+                            'value': base64.b64encode(content).decode('ascii'),
+                            'metadata': {'contentType': mimetypes.guess_type(rel_path)[0] or 'application/octet-stream'},
+                            'base64': True,
+                        }
+                        for h, rel_path, content in bucket
+                    ]
+                    up_resp = self.session.post(
+                        f'{self.api_base}/pages/assets/upload',
+                        json=payload,
+                        headers={'Authorization': f'Bearer {jwt}'},
+                        timeout=300,
+                    )
+                    up_resp.raise_for_status()
+                    up_data = up_resp.json()
+                    if not up_data.get('success'):
+                        raise RuntimeError(f'Cloudflare: 资产上传失败: {json.dumps(up_data.get("errors", []), ensure_ascii=False)}')
+                    failed = (up_data.get('result') or {}).get('unsuccessful_keys') or []
+                    if failed:
+                        raise RuntimeError(f'Cloudflare: 部分资产上传失败: {failed}')
+                    up_ok = True
+                    break
+                except Exception as e:
+                    up_ok = False
+                    last_up_err = e
+                    if attempt < 3:
+                        wait = [5, 15, 45][attempt] * (0.8 + 0.4 * random.random())
+                        logger.warning(f'Cloudflare: 资产上传第 {attempt + 1} 次失败({len(bucket)} 个资产): {str(e)[:120]}，{wait:.0f}s 后重试')
+                        time.sleep(wait)
+            if not up_ok:
+                raise last_up_err
 
         # 登记哈希缓存供下次部署命中（失败不影响部署）
         try:
@@ -4785,31 +4804,45 @@ _PUBLIC_CONFIG_SOURCES = [
 
 
 def refresh_public_config(storage):
-    """拉取公共配置快照写入待部署 buffer；单项失败跳过（前端该项回落 Worker 接口），整体失败不阻塞部署"""
+    """拉取公共配置快照写入待部署 buffer；单项失败跳过（前端该项回落 Worker 接口），整体失败不阻塞部署。
+    单项 4 次尝试 + 指数退避 2/4/8s（±20% 抖动）：meta 是聚合接口全家最重（实测 2.6s vs 其他 <1.5s），
+    青龙出口到 CF 边缘的链路在部署时段间歇抖动，单次 15s 窗口连续两轮超时——加宽窗口并给足重试。"""
     s = requests.Session()
     cfg = {'generated_at': now_iso()}
     ok_cnt = 0
     for key, path, mode in _PUBLIC_CONFIG_SOURCES:
-        try:
-            r = s.get(PUBLIC_CONFIG_API_BASE + path, timeout=15)
-            r.raise_for_status()
-            j = r.json()
-            if j.get('code') != 0:   # Worker 统一信封 {code, message, data}
-                raise RuntimeError(f'envelope code={j.get("code")}')
-            data = j.get('data') or {}
-            if mode == 'timeline':
-                cfg.setdefault('about', {})['timeline'] = data.get('timeline') or []
-            elif mode == 'thanks':
-                cfg.setdefault('about', {})['thanks'] = data.get('groups') or {}
-            elif mode == 'links':
-                cfg.setdefault('about', {})['links'] = data.get('links') or []
-            elif mode == 'nav':
-                cfg['nav_links'] = {'toolbox': data}   # 保留 {items:[...]} 形状，前端与接口响应同构消费
-            else:
-                cfg[key] = data
-            ok_cnt += 1
-        except Exception as e:
-            logger.warning(f'[public-config] {path} 搬运失败(前端该项将回落接口): {str(e)[:100]}')
+        j = None
+        last_err = None
+        for attempt in range(4):
+            try:
+                r = s.get(PUBLIC_CONFIG_API_BASE + path, timeout=30)
+                r.raise_for_status()
+                j = r.json()
+                if j.get('code') != 0:   # Worker 统一信封 {code, message, data}
+                    raise RuntimeError(f'envelope code={j.get("code")}')
+                break
+            except Exception as e:
+                j = None
+                last_err = e
+                if attempt < 3:
+                    wait = min(2 ** (attempt + 1), 8) * (0.8 + 0.4 * random.random())
+                    logger.warning(f'[public-config] {path} 第 {attempt + 1} 次失败: {str(e)[:80]}，{wait:.1f}s 后重试')
+                    time.sleep(wait)
+        if j is None:
+            logger.warning(f'[public-config] {path} 搬运失败(4 次尝试仍失败，前端该项将回落接口): {str(last_err)[:100]}')
+            continue
+        data = j.get('data') or {}
+        if mode == 'timeline':
+            cfg.setdefault('about', {})['timeline'] = data.get('timeline') or []
+        elif mode == 'thanks':
+            cfg.setdefault('about', {})['thanks'] = data.get('groups') or {}
+        elif mode == 'links':
+            cfg.setdefault('about', {})['links'] = data.get('links') or []
+        elif mode == 'nav':
+            cfg['nav_links'] = {'toolbox': data}   # 保留 {items:[...]} 形状，前端与接口响应同构消费
+        else:
+            cfg[key] = data
+        ok_cnt += 1
     if ok_cnt == 0:
         logger.warning('[public-config] 全部接口失败，本轮不生成快照')
         return
