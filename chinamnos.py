@@ -6429,17 +6429,39 @@ def _ann_cucc(ann_cfg):
     lim = ann_cfg["limits"]
     sources, merged = {}, {}   # dedupe键 → {"item":…, "codes": set()}
     for code, prov in ANN_CUCC_CODES.items():
-        try:
-            raw = _ann_http_post(ANN_CUCC_LIST_URL,
-                                 {"pageNo": "1", "pageSize": str(lim["per_source_fetch"]),
-                                  "province": code, "condition": "0", "title": ""},
-                                 headers=ANN_CUCC_HDRS, timeout=lim["timeout_s"],
-                                 retries=lim["retries"])
-            rows = json.loads(raw).get("result") or []
-        except Exception as e:
-            sources[code] = {"ok": False, "err": str(e)[:80]}
-            logger.warning("[announce][cucc] %s(%s) 列表失败: %s" % (prov, code, str(e)[:80]))
-            continue
+        # 翻页取全量（参考项目同款）：源站返回顺序≠时间序，且 totalCount 可能大于
+        # 单页上限（实测 117 条时 pageSize=100 第 2 页还有 17 条）——只拉第 1 页会漏掉
+        # 落在后面的新公告。pageSize 固定 100 减少页数，翻到 totalCount 为止（≤5 页兜底）。
+        rows, total = [], None
+        for pg in range(1, 6):
+            try:
+                raw = _ann_http_post(ANN_CUCC_LIST_URL,
+                                     {"pageNo": str(pg), "pageSize": "100",
+                                      "province": code, "condition": "0", "title": ""},
+                                     headers=ANN_CUCC_HDRS, timeout=lim["timeout_s"],
+                                     retries=lim["retries"])
+                j = json.loads(raw)
+            except Exception as e:
+                if pg == 1:
+                    sources[code] = {"ok": False, "err": str(e)[:80]}
+                    logger.warning("[announce][cucc] %s(%s) 列表失败: %s" % (prov, code, str(e)[:80]))
+                else:
+                    # 后续页失败不报废：已抓到的页继续参与合并（部分数据优于全无）
+                    logger.warning("[announce][cucc] %s(%s) 第 %d 页失败(用已抓 %d 条): %s"
+                                   % (prov, code, pg, len(rows), str(e)[:80]))
+                break
+            one = j.get("result") or []
+            if total is None:
+                try:
+                    total = int(j.get("totalCount")) if j.get("totalCount") is not None else None
+                except (TypeError, ValueError):
+                    total = None
+            rows += one
+            if not one or (total is not None and len(rows) >= total):
+                break
+            time.sleep(lim["sleep_s"])
+        if not rows and total is None:
+            continue   # 第 1 页即失败：sources 已标记 ok=False，跳过该省
         sources[code] = {"ok": True, "count": len(rows)}
         for row in rows:
             rid = str(row.get("id") or "")
@@ -6915,6 +6937,29 @@ def fetch_announcements(config, storage):
         cutoff = (datetime.date.today() - datetime.timedelta(days=lim["retention_days"])).isoformat()
         kept = [it for it in items if (it.get("date") or "") >= cutoff]
         kept.sort(key=lambda x: (x.get("date") or ""), reverse=True)
+        # 字段级正文继承（参考项目 merge_keep 同语义）：本轮详情失败的条目（content 空）
+        # 沿用上轮成功内容，绝不回退成空。上轮数据来源由 storage.read_json 决定：
+        # local_cache 开启读本地副本（零网络开销），未开启读线上；只补
+        # content/summary/attachments 三个详情衍生字段，其余字段如实反映本轮。
+        old_by_id = {}
+        try:
+            _old = storage.read_json("%s/announce.json" % carrier)
+            if isinstance(_old, dict) and isinstance(_old.get("items"), list):
+                old_by_id = {str(o.get("id") or ""): o for o in _old["items"] if o.get("id")}
+        except Exception as e:
+            logger.warning("[announce] %s 读取上轮公告失败(本轮跳过继承): %s" % (carrier, str(e)[:60]))
+        inherited = 0
+        for it in kept:
+            if (it.get("content") or "").strip():
+                continue
+            o = old_by_id.get(str(it.get("id") or ""))
+            if o and (o.get("content") or "").strip():
+                it["content"] = o["content"]
+                it["summary"] = o.get("summary") or it.get("summary", "")
+                it["attachments"] = o.get("attachments") or it.get("attachments", [])
+                inherited += 1
+        if inherited:
+            logger.info("[announce] %s 继承上轮正文 %d 条（本轮详情接口部分失败）" % (carrier, inherited))
         payload = {
             "v": 1,
             "carrier": carrier,
