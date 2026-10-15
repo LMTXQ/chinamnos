@@ -1779,6 +1779,10 @@
 .ov-duo .panel {
   margin-bottom: 20px;
   min-width: 0;
+  /* flex 纵向：让 .price-hist 可用 flex:1 填满被 grid stretch 拉高的卡片，
+     消除「Top 榜行数多把并排卡拉高、直方图固定高度导致下方大片空白」 */
+  display: flex;
+  flex-direction: column;
 }
 @media (max-width: 1080px) {
   .ov-duo {
@@ -1875,7 +1879,10 @@
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  height: 185px;
+  /* 高度自适应：默认与 Top 榜等高（grid stretch + panel flex），min-height 保底；
+     柱子随容器伸展，不再留固定高度以下的空白 */
+  flex: 1;
+  min-height: 185px;
   padding-top: 8px;
 }
 .ph-col {

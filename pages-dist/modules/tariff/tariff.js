@@ -27,7 +27,7 @@ const cache = {};
 
 /* 前端版本号：与 frontend-config.js 中 tariff 的 ?v= 同步 bump；
    文件内自包含，关于页展示用——显示值即文件真实版本，判断缓存是否更新零歧义 */
-const TARIFF_VER = "20261015f";
+const TARIFF_VER = "20261015g";
 
 const AREA_CODE_MAP = {
 "0100":"北京","0200":"广州","0210":"上海","0220":"天津",
@@ -1751,14 +1751,14 @@ function renderDistBars() {
   animateBars($("distBars"));
 }
 
-/* ─────────────── 各省排行 Top12 + 价格区间分布 ─────────────── */
+/* ─────────────── 各省排行 Top6 + 价格区间分布 ─────────────── */
 function renderRankList(s) {
   const el = $("rankList");
   if (!el) return;
   const rows = (s.provinces || [])
     .map(p => ({ code: p.code, name: p.name, n: (p.total && p.total.tariffs) || 0 }))
     .sort((a, b) => b.n - a.n)
-    .slice(0, 12);
+    .slice(0, 6);
   if (!rows.length) { el.innerHTML = '<div class="empty">暂无数据</div>'; return; }
   const max = Math.max(1, rows[0].n);
   const cur = getProvCode();
@@ -1945,7 +1945,9 @@ function updateType2Options(selId, items) {
 }
 
 function getListState(key) {
-  if (!listState[key]) listState[key] = {items: null, page: 1, q: "", attr: "", type2: "", sort: null, order: null, zeroOnly: false, favOnly: false, priceMin: null, priceMax: null, dateFrom: null, dateTo: null, offFrom: null, offTo: null, changeMap: null};
+  /* 默认「最新上架」降序：原始顺序是采集落库序（按分类抓取顺序拼接），无时间/价格语义，
+     不排序会让用户无从判断条目次序；清除筛选/重新加载也回到该默认值 */
+  if (!listState[key]) listState[key] = {items: null, page: 1, q: "", attr: "", type2: "", sort: "time", order: -1, zeroOnly: false, favOnly: false, priceMin: null, priceMax: null, dateFrom: null, dateTo: null, offFrom: null, offTo: null, changeMap: null};
   return listState[key];
 }
 
@@ -1960,6 +1962,7 @@ function renderList(type1Code) {
       st.items = (snap.items || []).filter(it => it.tariff_attr === type1Code);
       updateAttrOptions(t1Id(type1Code, "attr"), st.items);
       updateType2Options(t1Id(type1Code, "type2"), st.items);
+      syncSortUI($(t1Id(type1Code, "sortBar")), st); // 首屏同步默认排序高亮（默认「最新上架」降序）
       loadChangelog(code).then(cl => {
         st.changeMap = {};
         (cl.logs || []).forEach(log => { if (log.id) st.changeMap[log.id] = log.type; });
@@ -2125,7 +2128,7 @@ function bindListSection(type1Code) {
       const s = getListState(type1Code + "_" + getProvCode());
       s.q = ""; s.attr = ""; s.type2 = "";
       s.zeroOnly = false; s.favOnly = false; s.priceMin = null; s.priceMax = null; s.dateFrom = null; s.dateTo = null; s.offFrom = null; s.offTo = null;
-      s.sort = null; s.order = null;
+      s.sort = "time"; s.order = -1; // 清除筛选也回到默认「最新上架」降序（与 getListState 初始值一致）
       zeroBtn.classList.remove("active");
       if (favBtnEl) favBtnEl.classList.remove("active");
       searchEl.value = "";
@@ -4081,7 +4084,7 @@ Shell.registerPage({
       </div>
       <div class="ov-duo">
         <div class="panel">
-          <h2 class="panel-title">${icon("trophy", "title-ic")} 各省资费排行 Top12 <span class="panel-sub">点击跳转省份</span></h2>
+          <h2 class="panel-title">${icon("trophy", "title-ic")} 各省资费排行 Top6 <span class="panel-sub">点击跳转省份</span></h2>
           <div class="rank-list" id="rankList"><div class="loading">加载中…</div></div>
         </div>
         <div class="panel">
