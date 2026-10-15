@@ -27,7 +27,7 @@ const cache = {};
 
 /* 前端版本号：与 frontend-config.js 中 tariff 的 ?v= 同步 bump；
    文件内自包含，关于页展示用——显示值即文件真实版本，判断缓存是否更新零歧义 */
-const TARIFF_VER = "20261015d";
+const TARIFF_VER = "20261015e";
 
 const AREA_CODE_MAP = {
 "0100":"北京","0200":"广州","0210":"上海","0220":"天津",
@@ -2739,6 +2739,23 @@ const clSecOverride = new Map();   // ts|type → bool（类型子卡片展开�
 let clForceCollapse = false;       // 「全部收起」后新批次也默认收起
 let clObserver = null;             // 上滑自动加载哨兵 observer
 
+/* 变更详情弹窗字段模式：false=全部字段+变化标注（默认） / true=仅看变化字段；
+   localStorage 跨会话记忆，弹窗内切换按钮实时生效 */
+let clDiffOnly = false;
+try { clDiffOnly = localStorage.getItem("chinamnos_cl_diff_mode") === "1"; } catch {}
+
+/** 打开变更详情弹窗（胶囊点击 / 弹窗内切换模式共用；模式切换零重拉） */
+function openClModal(log) {
+  clModalLog = log;
+  const diffN = log.type === "changed" && log.diff ? Object.keys(log.diff).length : 0;
+  openModal(log.name || "变更详情",
+    '<div class="res-row sub">变更时间：' + esc(fmtTime(log.ts)) + "</div>" +
+    clDetailHTML(log, clView ? clView.itemMap : {}),
+    `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="name" title="复制资费名称">${icon("copy")}名称</button>` +
+    `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="summary" title="复制资费概要">${icon("list")}概要</button>` +
+    (diffN ? `<button type="button" class="btn ghost sm" data-act="clModalDiff" title="在「全部字段」与「仅看变化」两种显示模式间切换">${clDiffOnly ? icon("list") + "全部字段" : icon("filter") + "仅看变化"}</button>` : ""));
+}
+
 /** 批次时间标签：相对日（今天/昨天）+ 时分；更早为 月-日 时分 */
 function clBatchLabel(ts) {
   const d = new Date(ts);
@@ -2804,6 +2821,7 @@ function clDetailHTML(log, itemMap) {
   html += `<div class="tl-id">ID: ${esc(log.id)}</div>`;
 
   const snapItem = itemMap[log.id];
+  const diffN = log.diff ? Object.keys(log.diff).length : 0;
   if (log.type === "added" && snapItem && snapItem.fields) {
     html += '<div class="tl-detail-title" style="color:var(--green)">新增业务详情：</div>';
     const flds = snapItem.fields;
@@ -2812,10 +2830,11 @@ function clDetailHTML(log, itemMap) {
       html += '<table class="sub-table">' + fldKeys.map(k => `<tr><th>${esc(k)}</th><td>${esc(k === "适用地区" ? areaCn(flds[k]) : flds[k])}</td></tr>`).join("") + "</table>";
     }
   } else if (log.type === "changed" && snapItem && snapItem.fields) {
-    html += '<div class="tl-detail-title" style="color:var(--acc)">字段详情：</div>';
+    html += `<div class="tl-detail-title" style="color:var(--acc)">字段详情${diffN ? `（变更 ${diffN} 项）` : ""}${clDiffOnly ? " · 仅看变化" : ""}：</div>`;
     const flds = snapItem.fields;
     const diffFields = log.diff ? Object.keys(log.diff) : [];
-    const fldKeys = Object.keys(flds).filter(k => flds[k]);
+    let fldKeys = Object.keys(flds).filter(k => flds[k]);
+    if (clDiffOnly) fldKeys = fldKeys.filter(k => diffFields.includes(k));
     if (fldKeys.length) {
       html += '<table class="sub-table">' + fldKeys.map(k => {
         const isDiff = diffFields.includes(k);
@@ -2883,6 +2902,17 @@ function setupClAutoLoad(totalGroups) {
   clObserver.observe(sentinel);
 }
 
+/** 归属/资费类型下拉选项：按当前运营商 category_maps 动态生成（切运营商后旧选中值自动重置） */
+function fillClFilters() {
+  const sel1 = $("cT1"), sel2 = $("cT2");
+  if (!sel1 || !sel2) return;
+  const keep1 = sel1.value, keep2 = sel2.value;
+  sel1.innerHTML = '<option value="">全部归属</option>' + Object.keys(TYPE1_MAP).map(k => `<option value="${esc(k)}">${esc(TYPE1_MAP[k] || k)}</option>`).join("");
+  sel2.innerHTML = '<option value="">全部类型</option>' + Object.keys(TYPE2_MAP).map(k => `<option value="${esc(k)}">${esc(TYPE2_MAP[k] || k)}</option>`).join("");
+  if (keep1 && TYPE1_MAP[keep1]) sel1.value = keep1;
+  if (keep2 && TYPE2_MAP[keep2]) sel2.value = keep2;
+}
+
 function renderChangelog() {
   const code = getProvCode();
   const typeFilter = $("cType") ? $("cType").value : "";
@@ -2917,8 +2947,14 @@ function renderChangelog() {
       return;
     }
 
-    // 类型筛选（内存过滤）：不符合的条目不参与分组 → 所在批次无符合项时整组自然隐藏
-    const filtered = typeFilter ? logs.filter(l => l.type === typeFilter) : logs;
+    // 筛选（内存过滤）：变更类型 + 归属 + 资费类型 三条件 AND；不符合的条目不参与分组 → 所在批次无符合项时整组自然隐藏
+    fillClFilters();
+    const t1Filter = $("cT1") ? $("cT1").value : "";
+    const t2Filter = $("cT2") ? $("cT2").value : "";
+    const filtered = logs.filter(l =>
+      (!typeFilter || l.type === typeFilter) &&
+      (!t1Filter || String(l.t1 || "") === t1Filter) &&
+      (!t2Filter || String(l.t2 || "") === t2Filter));
     if (!filtered.length) {
       box.innerHTML = `<div class="empty">当前筛选下没有匹配的变更记录（共 ${logs.length} 条记录被过滤）</div>`;
       clView = null;
@@ -2936,7 +2972,7 @@ function renderChangelog() {
       g.items.push(idx);
     });
 
-    const clKey = code + "_" + typeFilter;
+    const clKey = code + "_" + typeFilter + "_" + t1Filter + "_" + t2Filter;
     if (!clPageState[clKey]) clPageState[clKey] = 6;
     clView = { logs: filtered, itemMap, groups, clKey };
     clDraw();
@@ -3248,7 +3284,7 @@ function initProvListeners() {
     chTabRefresh(true); // 省份变化 → 跳蚤市集 tab 重新探测（显隐与内容随省份联动，与 goProvince 同款）
     actTabRefreshAndRender(); // 情报酒馆列表随省份联动
   });
-  if ($("cType")) $("cType").addEventListener("change", () => renderChangelog());
+  ["cType", "cT1", "cT2"].forEach(id => { const el = $(id); if (el) el.addEventListener("change", () => renderChangelog()); });
 }
 
 /* ─────────────── 检测资费变化 ─────────────── */
@@ -3361,6 +3397,12 @@ function onRootClick(e) {
     if (a === "retryChangelog") { renderChangelog(); return; }
     if (a === "retryMonitor") { renderMonitor(); return; }
     if (a === "clModalCopy") { clModalCopyClick(actEl); return; }
+    if (a === "clModalDiff") {
+      clDiffOnly = !clDiffOnly;
+      try { localStorage.setItem("chinamnos_cl_diff_mode", clDiffOnly ? "1" : "0"); } catch {}
+      if (clModalLog) openClModal(clModalLog); // 已存当前日志，重开弹窗即生效，零重拉
+      return;
+    }
     if (a === "actQrDownload") { actQrDownload(actEl.dataset.id, actEl.dataset.title); return; }
   }
 
@@ -3380,14 +3422,7 @@ function onRootClick(e) {
   const clChip = e.target.closest(".tl-chip-btn");
   if (clChip && $("tariffRoot") && $("tariffRoot").contains(clChip)) {
     const log = clView && clView.logs ? clView.logs[Number(clChip.dataset.clidx)] : null;
-    if (log) {
-      clModalLog = log;
-      openModal(log.name || "变更详情",
-        '<div class="res-row sub">变更时间：' + esc(fmtTime(log.ts)) + "</div>" +
-        clDetailHTML(log, clView.itemMap),
-        `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="name" title="复制资费名称">${icon("copy")}名称</button>` +
-        `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="summary" title="复制资费概要">${icon("list")}概要</button>`);
-    }
+    if (log) openClModal(log);
     return;
   }
 
@@ -4063,6 +4098,8 @@ Shell.registerPage({
       <p class="page-sub">资费套餐增删改时间线</p>
       <div class="toolbar htl">
         <select id="cType" class="sel" style="width:auto"><option value="">全部变更</option><option value="added">新增</option><option value="removed">下架</option><option value="changed">变更</option></select>
+        <select id="cT1" class="sel" style="width:auto"><option value="">全部归属</option></select>
+        <select id="cT2" class="sel" style="width:auto"><option value="">全部类型</option></select>
         <button type="button" class="btn ghost" id="clToggleAll" title="全部收起/展开">${icon("chevronsDown")}<span>全部收起</span></button>
       </div>
       <div id="changelogBox"><div class="loading">选择省份后加载变更记录…</div></div>
