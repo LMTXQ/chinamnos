@@ -6,11 +6,92 @@
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f2f5f9" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#131a24" media="(prefers-color-scheme: dark)">
-<meta name="description" content="ChinaMNOs 资费监控 — 移动 / 联通 / 电信 / 广电全网及各省公开资费实时面板">
-<title>ChinaMNOs 资费监控</title>
+<meta name="description" content="ChinaMNOs 讯览台 — 移动 / 联通 / 电信 / 广电全网及各省公开资费、活动、社群收录实时面板;">
+<title>ChinaMNOs 讯览台</title>
 <script>try{if(localStorage.getItem("chinamnos_v2_theme")==="dark")document.documentElement.setAttribute("data-theme","dark")}catch(e){}</script>
-<link rel="stylesheet" href="shell/theme.css">
-<script src="frontend-config.js"></script>
+<!-- 线路清单占位：采集端部署各线时替换为完整 __ROUTES__（本地开发保持 null，守卫不动作） -->
+<script>window.__ROUTES__=null;</script>
+<script>
+/* 线路容灾守卫（内联随 HTML 到达，零额外请求）：
+   ▸ 8s 内应用未就绪（shell.js 完成首路由渲染置 __APP_READY）→ 按 __ROUTES__ 跳下一个未试线路
+     （location.replace 保留 path/search/hash，不留历史防后退循环）
+   ▸ 防循环/备线标记走父域临时 cookie：sessionStorage 按 origin 隔离，跨线跳转链上互不可见
+   ▸ 全部线路试完仍失败 → 原地提示，不死循环；__ROUTES__ 为 null（本地开发/未注入）→ 守卫整体不动作
+   ▸ 运行中数据超时由 shell.js fetchTimeout 汇报到 __CMNOS_ROUTE__.onDataTimeout（连续 3 次才跳线） */
+(function () {
+  try {
+    var R = window.__ROUTES__;
+    if (!R || !R.primary) return;
+    var LIST = [R.primary].concat(R.fallbacks || []);
+    var HERE = location.origin;
+    var TICK = 250, TIMEOUT = 8000, CD = ".ftac.dpdns.org";
+    function ck(k) {
+      var m = document.cookie.match(new RegExp("(?:^|;\\s*)" + k + "=([^;]*)"));
+      return m ? decodeURIComponent(m[1]) : "";
+    }
+    function setck(k, v, age) {
+      document.cookie = k + "=" + encodeURIComponent(v) + "; Domain=" + CD +
+        "; Path=/; Secure; SameSite=Lax; Max-Age=" + age;
+    }
+    function tried() { return (ck("__chinamnos_tried") || "").split(",").filter(Boolean); }
+    function mark(o) {
+      var t = tried();
+      if (t.indexOf(o) < 0) { t.push(o); setck("__chinamnos_tried", t.join(","), 60); }
+    }
+    mark(HERE);
+    function bar(msg) {
+      var d = document.createElement("div");
+      d.setAttribute("style", "position:fixed;left:0;right:0;top:0;z-index:99999;padding:10px 16px;" +
+        "background:#b45309;color:#fff;font:13px/1.6 system-ui,-apple-system,sans-serif;text-align:center");
+      d.textContent = msg;
+      document.documentElement.appendChild(d);   // 挂 html 根：SPA 整页重写 body 不受影响
+      return d;
+    }
+    var start = Date.now(), jumped = false;
+    function next() {
+      var t = tried();
+      for (var i = 0; i < LIST.length; i++) if (t.indexOf(LIST[i]) < 0) return LIST[i];
+      return null;
+    }
+    function go(nxt) {
+      jumped = true;
+      setck("__chinamnos_fb", "1", 300);
+      location.replace(nxt + location.pathname + location.search + location.hash);
+    }
+    function readyHint() {
+      if (tried().length < 2 && ck("__chinamnos_fb") !== "1") return;   // 主线正常加载不提示
+      var el = bar("当前为备用线路 · 主线路恢复后重新打开本站即可回到主线");
+      setTimeout(function () { el.remove(); }, 5000);
+    }
+    function guard() {
+      if (jumped) return;
+      if (window.__APP_READY) { readyHint(); return; }
+      if (Date.now() - start < TIMEOUT) { setTimeout(guard, TICK); return; }
+      var nxt = next();
+      if (!nxt) { bar("服务暂时不可用，请稍后刷新重试"); return; }   // 全部试完：原地提示
+      go(nxt);
+    }
+    setTimeout(guard, TICK);
+    var ticks = [], lastJumpAt = 0;
+    window.__CMNOS_ROUTE__ = {
+      onDataTimeout: function () {
+        if (jumped) return;
+        var now = Date.now();
+        ticks = ticks.filter(function (t) { return now - t < 600000; });
+        ticks.push(now);
+        if (ticks.length >= 3 && now - lastJumpAt > 600000) {
+          var nxt = next();
+          if (nxt) { lastJumpAt = now; ticks = []; go(nxt); }
+        }
+      },
+    };
+  } catch (e) { /* 守卫自身异常绝不影响主流程 */ }
+})();
+</script>
+<link rel="stylesheet" href="shell/theme.css?v=20261004a">
+<script src="frontend-config.js?v=20261004a"></script>
+<!-- shell.js 严禁带 ?v=：入口 URL 与模块相对 import（../../shell/shell.js）必须解析到同一模块记录，
+     否则出现双实例（各持独立 pages 注册表），直载子路由会 fatal「未找到任何可用页面模块」 -->
 <script type="module" src="shell/shell.js"></script>
 </head>
 <body>

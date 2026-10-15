@@ -29,6 +29,7 @@
 "use strict";
 
 import "./ui.js";
+import { maybeSiteNotice, maybePromos, maybePromosOnModuleEnter } from "./notice.js";
 
 /* ─────────────── 共享工具 ─────────────── */
 export const esc = (s) =>
@@ -39,12 +40,38 @@ export const esc = (s) =>
 
 export const FETCH_TIMEOUT = 20000;
 
+/* ── 模块样式表加载（防 FOUC）──
+   首次进入页面时若先渲染 DOM 再等 <link> 加载，会有一瞬间「所有控件挤在一起」的
+   无样式闪动。各模块 onEnter 改为 await ensureStylesheet(...) 后再渲染。
+   同一 href 只注入一次并复用加载 Promise；加载失败不阻塞页面（降级无样式）。 */
+const _stylePromises = new Map();
+export function ensureStylesheet(href) {
+  let p = _stylePromises.get(href);
+  if (!p) {
+    p = new Promise((resolve) => {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = href;
+      link.onload = () => resolve();
+      link.onerror = () => resolve();
+      document.head.appendChild(link);
+    });
+    _stylePromises.set(href, p);
+  }
+  return p;
+}
+
 export function fetchTimeout(url, init) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
   return fetch(url, Object.assign({}, init || {}, { signal: ctrl.signal }))
     .catch((e) => {
-      if (e && e.name === "AbortError") throw new Error("加载超时");
+      if (e && e.name === "AbortError") {
+        /* 数据超时汇报给线路容灾守卫（index.html 内联脚本）：仅相对路径 data 请求会走到这里，
+           API 请求走 shell/api.js 原生 fetch 不经此路径，天然满足「API 失败不跳线」 */
+        try { window.__CMNOS_ROUTE__ && window.__CMNOS_ROUTE__.onDataTimeout(); } catch {}
+        throw new Error("加载超时");
+      }
       throw e;
     })
     .finally(() => clearTimeout(t));
@@ -120,13 +147,37 @@ function hideBoot() {
   }
 }
 
+/** 极光背景色斑（视觉层见 theme.css .aurora-blob）：
+    幂等注入 4 个固定色斑，动画只走 transform，合成器零重绘。
+    挂在 <html> 而非 <body>：页面模块 onEnter 会整页重写 body.innerHTML，
+    挂在 html 下可免于被清空；fixed 定位与 z-index 行为不受影响 */
+function initAurora() {
+  if (document.querySelector(".aurora-blob")) return;
+  const frag = document.createDocumentFragment();
+  for (const c of ["b1", "b2", "b3", "b4"]) {
+    const d = document.createElement("div");
+    d.className = "aurora-blob " + c;
+    d.setAttribute("aria-hidden", "true");
+    frag.appendChild(d);
+  }
+  document.documentElement.appendChild(frag);
+}
+
 /** 页面切换（包裹 View Transition，降级为直接切换） */
 async function activate(page) {
   const run = () => {
+    /* 记录来源页：供管理后台等页面的「返回」按钮回到进入前的功能区 */
+    Shell.prevPage = active;
     if (active && active.onExit) active.onExit(document.body);
     active = page;
     window.scrollTo(0, 0);
     page.onEnter(document.body);
+    /* 全站公告：页面就绪后检查（异步不阻塞渲染；内部有每日/勾选判定与串行队列） */
+    maybeSiteNotice();
+    /* 推广弹窗：串行队列中排在公告之后（先公告后推广），按范围过滤逐条弹。
+       全站条目（scope.modules 空）在页面切换时判定；模块条目仅在其目标模块进入时判定 */
+    maybePromos();
+    maybePromosOnModuleEnter(page.id);
   };
   const canVT =
     document.startViewTransition &&
@@ -141,6 +192,8 @@ async function activate(page) {
     run();
   }
   hideBoot();
+  /* 首个路由渲染完成 = 应用就绪：容灾守卫据此停止跳线计时（index.html 内联脚本轮询此标志） */
+  window.__APP_READY = true;
 }
 
 function routeOf(hash) {
@@ -174,6 +227,7 @@ async function route() {
     return;
   }
   theme.init();
+  initAurora();
 
   const modules = rawConfig.modules || [];
   try {

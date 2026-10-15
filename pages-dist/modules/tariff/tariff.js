@@ -12,8 +12,15 @@
    ═══════════════════════════════════════════════════════════════ */
 "use strict";
 
-import { Shell, esc, fetchTimeout, theme } from "../../shell/shell.js";
-import { icon, mountIcons, Tabs, initFX } from "../../shell/ui.js";
+import { Shell, esc, fetchTimeout, theme, ensureStylesheet } from "../../shell/shell.js";
+import { icon, mountIcons, Tabs, initFX, toast } from "../../shell/ui.js";
+import { mountAppsMenu } from "../../shell/apps-menu.js";
+import { Auth, mountAuth } from "../../shell/auth.js";
+import { api } from "../../shell/api.js";
+import { adaptPost, viewFromCardhubRaw, renderListCard, renderDetailBody, relTime } from "../../shell/post-view.js";
+import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
+import { getPubConfig } from "../../shell/pubcfg.js";
+import { loadNotices, maybePromosOnSwitch } from "../../shell/notice.js";
 
 const $ = (id) => document.getElementById(id);
 const cache = {};
@@ -130,6 +137,23 @@ const CARRIER_STORAGE_KEY = "default_carrier";
 let currentCarrier = "cmcc";
 let ACTIVE_CARRIERS = [];
 
+/* 运营商资费公示页面 URL（用户提供的官方公示页） */
+const CARRIER_OFFICIAL = {
+  cmcc: "https://h.app.coc.10086.cn/cmcc-app/pc-pages/tariffZonePers.html",
+  cucc: "https://img.client.10010.com/zifeizhuanquwt/index.html#/",
+  ctcc: "https://www.189.cn/tariffZone/",
+  cbn:  "https://m.10099.com.cn/expensesNotice/#/home"
+};
+function getOfficialUrl(carrier) {
+  return CARRIER_OFFICIAL[carrier] || "#";
+}
+function updateOfficialLink() {
+  const a = $("officialLink");
+  if (!a) return;
+  a.href = getOfficialUrl(currentCarrier);
+  a.title = `${CARRIER_BRAND[currentCarrier].name} 资费公示`;
+}
+
 function applyBrandVars(brand) {
   const r = document.documentElement.style;
   r.setProperty("--acc", brand.color);
@@ -171,6 +195,8 @@ function switchCarrier(carrier) {
     btn.classList.toggle("active", btn.dataset.carrier === carrier);
   });
 
+  updateOfficialLink();
+
   // 不再清空 cache：snapshot/changelog 的 key 已带运营商前缀，不会串数据
   // listState 的 key 不带运营商前缀（type1Code 跨运营商可能重复），需清空
   STATS = null;
@@ -182,7 +208,6 @@ function switchCarrier(carrier) {
   TYPE2_MAP = {};
 
   setStat("stNational", "-");
-  setStat("stTotal", "-");
   setStat("stTodayAdd", "-");
   setStat("stTodayRm", "-");
   $("updateTime").textContent = "-";
@@ -196,7 +221,7 @@ function switchCarrier(carrier) {
   $("dynamicViews").innerHTML = "";
   dynamicType1Keys = [];
   const provEl = $("gProv");
-  if (provEl) provEl.innerHTML = "";
+  if (provEl && provEl.setOptions) provEl.setOptions([]);
   $("changelogBox").innerHTML = '<div class="loading">选择省份后加载变更记录…</div>';
   $("monitorSummary").innerHTML = "";
   $("monitorBody").innerHTML = "";
@@ -204,9 +229,11 @@ function switchCarrier(carrier) {
   $("diagnosticsSummary").innerHTML = "";
   $("diagnosticsBody").innerHTML = "";
 
+  annPrefetch(); // 预拉新运营商公告：未读红点 + 进 tab 零等待
   cacheTTL = DEFAULT_TTL;
 
   goTab("overview");
+  maybePromosOnSwitch(); // 切换运营商：重新判定推广弹窗（命中新范围且未读才弹；勾选「今日不再」不弹；站长可在管理后台关闭）
 }
 
 let ATTR_MAP = {};
@@ -378,6 +405,7 @@ function loadStats() {
       last_crawl: carrier.last_crawl,
       today: carrier.today,
       provinces: carrier.provinces || [],
+      total_unique: carrier.total_unique,
       category_maps: cm,
       all_carriers: raw.carriers ? Object.keys(raw.carriers) : [],
     };
@@ -413,15 +441,21 @@ function provName(code) { return PROV_BY_CODE[code] || code; }
 
 function fillProvSelects() {
   const provs = STATS && STATS.provinces ? STATS.provinces : [];
-  const opts = provs.map(p => `<option value="${esc(p.code)}">${esc(p.name)}</option>`).join("");
   const defCode = STATS && STATS.default_province ? STATS.default_province : "hun";
   let mem = "";
   try { mem = localStorage.getItem(PROV_KEY()) || ""; } catch {}
 
   const el = $("gProv");
   if (el) {
-    el.innerHTML = opts;
-    el.value = provs.some(p => p.code === mem) ? mem : (provs.some(p => p.code === defCode) ? defCode : (provs.length > 0 ? provs[0].code : ""));
+    buildProvPicker(el);
+    el.setOptions(
+      provs,
+      provs.some(p => p.code === mem) ? mem : (provs.some(p => p.code === defCode) ? defCode : (provs.length > 0 ? provs[0].code : ""))
+    );
+    // 省份就绪后补渲染：覆盖直链 #changelog 时 renderChangelog 早于 STATS 就绪的时序
+    if (navTabs && navTabs.active === "changelog" && getProvCode()) renderChangelog();
+    annRenderIfActive(); // 公告 tab 的本省过滤依赖省名，省份就绪后补渲染
+    chatRenderIfActive(); // 唠嗑聚落同理
   }
 }
 
@@ -449,6 +483,74 @@ function onTabChange(v) {
   else if (v.startsWith("t1_")) renderList(v.slice(3));
   else if (v === "changelog") renderChangelog();
   else if (v === "monitor") renderMonitor();
+  else if (v === "cardhub") { chTabRefresh().then(() => { if (chState.available) chRenderBody(); }); }
+  else if (v === "acts") { actTabRefresh(true).then(actRenderBody); }
+  else if (v === "announce") { annTabRefresh().then(annRenderBody); }
+  else if (v === "chat") { chatTabRefresh().then(chatRenderBody); }
+  else if (v === "notices") { renderNoticesView(); }
+}
+
+/* ── 公告推广页签：只读展示当前生效的公告与推广全文（弹窗内容回看） ──
+   数据与弹窗同源同缓存（shell/notice.js loadNotices），生命周期内渲染一次；
+   推广区支持筛选 chips（当前范围/全部，样式同情报酒馆 act-filter-chip） */
+let _noticesViewRendered = false;
+let _ntcPromoFilter = "scope"; // scope=当前范围（默认） | all=全部
+
+/* 与弹窗 judgePromos 相同的范围匹配逻辑（含站点默认回退） */
+function ntcScopeFilter(list) {
+  let curCarrier = "", curProv = "";
+  try {
+    curCarrier = (localStorage.getItem("default_carrier") || "").toLowerCase();
+    if (curCarrier) curProv = (localStorage.getItem(curCarrier + "_v2_prov") || "").toLowerCase();
+  } catch { /* */ }
+  if (!curCarrier) curCarrier = "cmcc";
+  if (!curProv) curProv = "hun";
+  return list.filter((p) => {
+    const sc = p.scope || {};
+    const carriers = Array.isArray(sc.carriers) ? sc.carriers : [];
+    const provinces = Array.isArray(sc.provinces) ? sc.provinces : [];
+    if (carriers.length && !carriers.includes(curCarrier)) return false;
+    if (provinces.length && !provinces.includes(curProv)) return false;
+    return true;
+  });
+}
+
+function renderPromoList(pBody, list) {
+  const shown = _ntcPromoFilter === "scope" ? ntcScopeFilter(list) : list;
+  pBody.innerHTML = shown.length
+    ? shown.map((p) => `
+        <div style="border:1px solid rgba(128,128,128,.25);border-radius:8px;padding:12px;margin-top:10px">
+          <h4 style="margin:0 0 8px">${esc(p.title || "推广")}</h4>
+          <div class="act-md">${mdToSafeHtml(p.content || "")}</div>
+        </div>`).join("")
+    : `<div class="empty" style="padding:16px;text-align:center">${_ntcPromoFilter === "scope" ? "当前范围内暂无推广（可切到「全部」查看）" : "暂无推广"}</div>`;
+}
+
+async function renderNoticesView() {
+  if (_noticesViewRendered) return;
+  _noticesViewRendered = true;
+  const nBody = $("ntcNoticeBody"), pBody = $("ntcPromosBody");
+  if (!nBody || !pBody) return;
+  const data = await loadNotices();
+  const n = data && data.site_notice;
+  nBody.innerHTML = (n && n.enabled && n.content)
+    ? `<h4 style="margin:0 0 8px">${esc(n.title || "站点公告")}</h4><div class="act-md">${mdToSafeHtml(n.content)}</div>`
+    : `<div class="empty" style="padding:16px;text-align:center">当前没有公告</div>`;
+  /* 推广列表：防御性过滤停用条目（与弹窗一致） */
+  const list = ((data && Array.isArray(data.promos)) ? data.promos : []).filter((p) => p && p.enabled !== false);
+  const chipBar = $("ntcPromoChips");
+  if (chipBar) {
+    chipBar.innerHTML = `<button type="button" class="act-filter-chip${_ntcPromoFilter === "scope" ? " active" : ""}" data-ntcf="scope">当前范围</button>`
+      + `<button type="button" class="act-filter-chip${_ntcPromoFilter === "all" ? " active" : ""}" data-ntcf="all">全部</button>`;
+    chipBar.querySelectorAll("[data-ntcf]").forEach((b) => {
+      b.addEventListener("click", () => {
+        _ntcPromoFilter = b.dataset.ntcf;
+        chipBar.querySelectorAll("[data-ntcf]").forEach((x) => x.classList.toggle("active", x.dataset.ntcf === _ntcPromoFilter));
+        renderPromoList(pBody, list);
+      });
+    });
+  }
+  renderPromoList(pBody, list);
 }
 
 function goProvince(code) {
@@ -459,6 +561,952 @@ function goProvince(code) {
   dynamicType1Keys.forEach(t1 => { listState[t1 + "_" + code] = null; });
   const target = dynamicType1Keys.includes("2") ? "t1_2" : (dynamicType1Keys[0] ? "t1_" + dynamicType1Keys[0] : "overview");
   goTab(target);
+  chTabRefresh(true); // 省份变化 → 跳蚤市集 tab 重新探测（显隐与内容随省份联动）
+  actTabRefreshAndRender(); // 情报酒馆列表随省份联动
+  annRenderIfActive(); // 公告列表随省份联动（本省过滤）
+  chatRenderIfActive(); // 唠嗑聚落列表随省份联动
+  maybePromosOnSwitch(); // 切换省份：重新判定推广弹窗（命中新范围且未读才弹）
+}
+
+/* ─────────────── 跳蚤市集 tab（复用 shell/post-view.js 渲染；动态探测显隐） ───────────────
+   ▸ 数据：现有公开列表接口（服务端筛选 carrier/province，全部板块混排，置顶优先）
+   ▸ 显隐：站长关闭跳蚤市集（/api/meta module_cardhub_enabled）或该运营商+省份无帖 → tab 隐藏
+   ▸ 编码映射：资费 cmcc/cucc/ctcc/cbn ↔ 号卡 cmcc/unicom/telecom/cbn；省份用中文名（号卡库存中文名）
+   ▸ 互动边界：详情为只读导流快照——复制/登录可用，在线沟通/收藏等引导去跳蚤市集 */
+const CH_CARRIER_MAP = { cmcc: "cmcc", cucc: "unicom", ctcc: "telecom", cbn: "cbn" };
+const chState = {
+  enabled: null,        // null=未探测 meta；false=跳蚤市集被站长关闭
+  available: false,     // 当前运营商+省份有无可展示帖
+  probedSig: "",        // 已探测的 carrier|province 签名（防重复请求）
+  schema: null,         // /api/cardhub/schema 的 {boards,carriers}（renderListCard/detail 依赖）
+  items: [],            // 列表数据（adaptPost 后）
+  detail: null,         // 当前打开的详情（adaptPost 后），null=列表态
+};
+
+function chProvName() {
+  const code = getProvCode();
+  const p = ((STATS && STATS.provinces) || []).find(x => x.code === code);
+  const full = (p && (p.name || p.province)) || "";
+  /* 号卡库存省份简称（广东），资费 stats 存全称（广东省/广西壮族自治区…）——归一化后查询 */
+  return full.replace(/(维吾尔|壮族|回族)?(自治区|省|市|特别行政区)$/g, "");
+}
+
+function chEnsureCss() {
+  if (!document.querySelector('link[data-module="cardhub"]')) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = Shell.config.base + "modules/cardhub/style.css";
+    link.setAttribute("data-module", "cardhub");
+    document.head.appendChild(link);
+  }
+}
+
+async function chEnsureSchema() {
+  if (chState.schema) return chState.schema;
+  /* schema 快照优先（data/public-config.json，下一轮采集更新）；缺失回落 Worker 接口 */
+  const pc = await getPubConfig();
+  let d = pc && pc.schema;
+  if (!d) {
+    const r = await api.getSchema();
+    if (!r.ok) return null;
+    d = r.data;
+  }
+  // tradeMethods/tradeMerchants：renderTradeBox 翻译交易方式中文名与推荐栏依赖
+  chState.schema = {
+    boards: d.boards || [], carriers: d.carriers || [],
+    tradeMethods: d.tradeMethods || [], tradeMerchants: d.tradeMerchants || [],
+  };
+  return chState.schema;
+}
+
+/* 探测：meta 开关 → 拉一页列表 → 有帖才有 tab。返回 available */
+async function chProbe(force) {
+  const carrierKey = CH_CARRIER_MAP[currentCarrier] || "";
+  const provName = chProvName();
+  const sig = carrierKey + "|" + provName;
+  if (!force && chState.probedSig === sig) return chState.available;
+  chState.available = false;
+  chState.items = [];
+  chState.detail = null;
+  if (!carrierKey || !provName) return false; // 注意：失败早退不缓存 sig，条件补齐后会真正探测
+  if (chState.enabled === null) {
+    try {
+      const m = api.fetchMeta ? await Promise.resolve(api.fetchMeta()) : null;
+      chState.enabled = !(m && m.cardhub === false); // /api/meta → {modules:{cardhub:true}}
+    } catch { chState.enabled = true; } // 探测失败保持可用（后端另有 503 兜底，与 apps-menu 策略一致）
+  }
+  if (!chState.enabled) return false;
+  const schema = await chEnsureSchema();
+  if (!schema) return false;
+  const r = await api.getPosts({ carrier: carrierKey, province: provName, pageSize: 20 });
+  if (!r.ok) return false;
+  chState.items = (r.data.items || []).map(adaptPost);
+  chState.available = chState.items.length > 0;
+  chState.probedSig = sig; // 仅成功决策后缓存签名
+  return chState.available;
+}
+
+/* 运营商/省份变化或首次进入：重新探测 → 同步 nav 显隐 → 若正停在本 tab 则重渲染（无帖则弹回总览） */
+async function chTabRefresh(force) {
+  await chProbe(force);
+  if (force) delete TAB_SHOWN["cardhub"]; // 数据可能已变：强制下次进入 tab 重渲染（防状态与 DOM 分叉残留旧详情）
+  chSyncNav();
+  const active = (($("view-cardhub") || {}).classList || { contains() { return false; } }).contains("active");
+  if (!chState.available) {
+    if (active) goTab("overview");
+    return;
+  }
+  chEnsureCss();
+  if (active) chRenderBody();
+}
+
+function chSyncNav() {
+  const btn = document.querySelector('#mainNav [data-view="cardhub"]');
+  if (btn) btn.hidden = !chState.available;
+}
+
+function chRenderBody() {
+  const el = $("chTabBody");
+  if (!el) return;
+  if (!chState.available && !chState.items.length) {
+    el.innerHTML = `<div class="empty" style="padding:40px;text-align:center">当前运营商/省份暂无号卡信息<button class="btn ghost ch-mt" data-act="chGoOverview"><i data-icon="back"></i>返回总览</button></div>`;
+    mountIcons(el);
+    return;
+  }
+  if (chState.detail) {
+    const raw = chState.detail;
+    const me = Auth.getUser();
+    const isSelf = !!(me && raw.author && raw.author.id === me.id);
+    /* self 按服务端返回判定（管理员看自己的帖会拿到 self 作用域数据，须按本人视角渲染，
+       否则 users 可见性帖会矛盾显示「登录后可见」锁定块） */
+    const view = viewFromCardhubRaw(chState.schema, raw, true, isSelf);
+    const author = raw.author
+      ? { ...raw.author, avatarUrl: raw.author.avatar_v ? api.avatarUrl(raw.author.id, raw.author.avatar_v) : "" }
+      : null;
+    el.innerHTML = `
+      <button class="btn ghost ch-back" data-act="chBack"><i data-icon="back"></i>返回号卡列表</button>
+      ${renderDetailBody(chState.schema, view, { author, readonly: false, self: isSelf, isLoggedIn: !!me, proofs: [], proofPublic: raw.proofPublic === 1 })}`;
+  } else {
+    el.innerHTML = `
+      <h1 class="page-title">跳蚤市集</h1>
+      <p class="page-sub">${esc(chProvName())} · ${esc((CARRIER_BRAND[currentCarrier] || {}).name || "")} · 来自跳蚤市集的在售信息（先审后发 · 与站长无关的用户撮合）</p>
+      <div class="ch-list">${chState.items.map((p, i) => renderListCard(chState.schema, p, { showBoard: true, index: i })).join("")}</div>
+      <div class="ch-more"><a class="btn ghost" href="#/cardhub">去跳蚤市集查看全部<i data-icon="arrowRight"></i></a></div>`;
+  }
+  mountIcons(el);
+}
+
+/* tab 内点击路由：列表→详情、复制、登录走 Auth，站内互动一律导流回跳蚤市集 */
+function chOnBodyClick(e) {
+  const actEl = e.target.closest("[data-act]");
+  if (!actEl) return;
+  const a = actEl.dataset.act;
+  if (a === "openDetail") {
+    chOpenDetail(actEl.dataset.id);
+  } else if (a === "chBack") {
+    chState.detail = null;
+    chRenderBody();
+  } else if (a === "chGoOverview") {
+    goTab("overview");
+  } else if (a === "copyVal") {
+    const v = actEl.dataset.val || "";
+    if (navigator.clipboard) navigator.clipboard.writeText(v).then(() => toast("已复制：" + v)).catch(() => toast("复制失败，请手动选择文本复制"));
+  } else if (a === "soonLogin") {
+    Auth.openLogin();
+  } else if (a === "soonChat" || a === "soonRelay" || a === "favToggle" || a === "staffClose" || a === "pinAdd" || a === "pinRemove" || a === "pinBump") {
+    toast("请前往跳蚤市集操作");
+  }
+}
+
+async function chOpenDetail(id) {
+  const el = $("chTabBody");
+  if (el) el.innerHTML = `<div class="empty" style="padding:40px;text-align:center">加载中…</div>`;
+  const r = await api.getPost(id);
+  if (!r.ok) { toast(r.error || "帖子加载失败"); chRenderBody(); return; }
+  chState.detail = adaptPost(r.data);
+  chRenderBody();
+  window.scrollTo(0, 0);
+}
+
+/* ─────────────── 情报酒馆 tab（双模式：官方活动推广 / 个人攻略发布） ───────────────
+   ▸ 数据：GET /api/activities?carrier&province（官方=本运营商；攻略支持「全运营商通用」carrier=''）
+   ▸ 提交：双模式面板（登录用户），待审≤5 + 3/时限流；官方沿用手填二维码，攻略用 Markdown 编辑器
+   ▸ 匿名：可选匿名（公众侧显示「匿名」；管理组审核无限制）；非匿名昵称点击 → 个人资料卡
+   ▸ 管理中心「审核」Tab 与「情报酒馆」Tab 处理；官方活动到期 Cron 自动下展 */
+const ACT_MODE_LABELS = { official: "官方活动", guide: "个人攻略" };
+const ACT_MD_MAX = 10000;  // 攻略正文上限（与后端 MD_MAX 对齐）
+const ACT_DRAFT_KEYS = { official: "act_official", guide: "act_guide" };
+const actState = {
+  items: [], mine: [], favItems: [], favLoaded: false, panelOpen: false, mode: "official", filter: "", editor: null,
+  form: { title: "", url: "", scope: "prov", descr: "", ends: "", qr: null, allCarriers: false, content: "", anon: false },
+};
+
+/* 草稿暂存（localStorage 按模式隔离；二维码 dataURL 体积大不入草稿） */
+function actDraftLoad(mode) {
+  try {
+    const d = JSON.parse(localStorage.getItem("chinamnos_act_draft_" + mode) || "null");
+    return d && typeof d === "object" ? d : null;
+  } catch { return null; }
+}
+function actDraftSave() {
+  const f = actState.form;
+  try {
+    localStorage.setItem("chinamnos_act_draft_" + actState.mode, JSON.stringify({
+      title: f.title, url: f.url, scope: f.scope, descr: f.descr, ends: f.ends,
+      allCarriers: f.allCarriers, anon: f.anon,
+      content: actState.editor ? actState.editor.getValue() : f.content,
+    }));
+  } catch { /* 隐私模式等忽略 */ }
+}
+function actDraftClear(mode) {
+  try { localStorage.removeItem("chinamnos_act_draft_" + mode); } catch { /* */ }
+}
+
+let actProvPending = false; // 直链 #acts 时 STATS 未就绪的补加载守卫（同 annProvPending 模式）
+async function actTabRefresh() {
+  const carrierKey = CH_CARRIER_MAP[currentCarrier] || "";
+  let provName = chProvName();
+  /* 直链 #acts 且 STATS 未就绪：主动拉取 stats 并填充省份后重取省名（否则列表只会命中全国条目） */
+  if (!provName && !STATS && !actProvPending) {
+    actProvPending = true;
+    try {
+      STATS = await loadStats();
+      fillProvSelects();
+    } catch { /* 失败保留原行为，下次进 tab 重试 */ } finally { actProvPending = false; }
+    provName = chProvName();
+  }
+  if (!carrierKey) { actState.items = []; actState.mine = []; actState.favItems = []; return; }
+  const [r, fr] = await Promise.all([
+    api.activitiesList(carrierKey, provName),
+    Auth.isLoggedIn() ? api.activityMyFavorites() : Promise.resolve(null), // 收藏列表并行拉取
+  ]);
+  if (r.ok) { actState.items = r.data.items || []; actState.mine = r.data.mine_pending || []; }
+  actState.favItems = (fr && fr.ok) ? (fr.data.items || []) : [];
+  actState.favLoaded = Auth.isLoggedIn();
+}
+
+function actTabRefreshAndRender() {
+  return actTabRefresh().then(() => {
+    const el = $("view-acts");
+    if (el && el.classList.contains("active")) actRenderBody();
+  });
+}
+
+function actRemaining(endsAt) {
+  if (!endsAt) return `<span class="act-chip">长期有效</span>`;
+  const days = Math.ceil((endsAt * 1000 - Date.now()) / 86400000);
+  if (days <= 0) return `<span class="act-chip warn">今日截止</span>`;
+  if (days <= 3) return `<span class="act-chip warn">仅剩 ${days} 天</span>`;
+  return `<span class="act-chip">剩 ${days} 天</span>`;
+}
+
+function actCardHTML(a) {
+  const guide = a.mode === "guide";
+  const links = Array.isArray(a.links) ? a.links : [];
+  const role = Auth.getUser()?.role;
+  const isAdmin = role === "admin" || role === "owner";
+  const authorHTML = a.anon
+    ? `<span class="act-anon-chip" title="提交者选择匿名展示">匿名</span>`
+    : (a.submitted_by
+      ? `<button type="button" class="act-author" data-act="actAuthor" data-uid="${esc(a.submitted_by)}" title="查看提交者资料卡">${esc(a.submitter_nickname || "用户")}</button>`
+      : `<span>${esc(a.submitter_nickname || "用户")}</span>`);
+  const scopeBadge = a.carrier
+    ? `<span class="act-badge ${a.province ? "act-prov" : "act-nat"}">${a.province ? esc(a.province) : "全国"}</span>`
+    : `<span class="act-badge act-all">通用</span><span class="act-badge ${a.province ? "act-prov" : "act-nat"}">${a.province ? esc(a.province) : "全国"}</span>`;
+  const mainAct = guide
+    ? `<button type="button" class="btn primary sm" data-act="actDetail" data-id="${esc(a.id)}"><i data-icon="list"></i>查看攻略</button>`
+    : `<a class="btn primary sm act-go" href="${esc(a.url || "#")}" target="_blank" rel="noopener noreferrer">参与活动<i data-icon="external"></i></a>`;
+  const linkChips = links.slice(0, 3).map((l) =>
+    `<a class="act-link-chip" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow" title="${esc(l.label)}"><i data-icon="external"></i>${esc(l.label)}</a>`).join("");
+  const moreChip = links.length > 3
+    ? `<button type="button" class="act-link-chip more" data-act="actDetail" data-id="${esc(a.id)}" title="查看全部链接">+${links.length - 3}</button>` : "";
+  const summary = guide ? (a.excerpt || a.descr || "") : (a.descr || "");
+  return `
+  <div class="act-card${guide ? " act-guide" : ""}">
+    <div class="act-main">
+      <div class="act-title-line">
+        ${a.pinned ? `<span class="act-pin-badge" title="管理组置顶">置顶</span>` : ""}
+        <span class="act-mode-badge ${guide ? "guide" : "official"}">${guide ? "攻略" : "官方"}</span>
+        ${scopeBadge}
+        <b class="act-title">${esc(a.title)}</b>
+        ${actRemaining(a.ends_at)}
+      </div>
+      ${summary ? `<div class="act-descr">${esc(summary)}</div>` : ""}
+      ${(linkChips || moreChip) ? `<div class="act-links">${linkChips}${moreChip}</div>` : ""}
+      <div class="act-meta">${relTime(Math.floor((a.created_at || 0) / 1000))} 收录 · ${authorHTML}</div>
+    </div>
+    <div class="act-actions">
+      ${mainAct}
+      ${a.has_qr ? `<button type="button" class="btn ghost sm" data-act="actQr" data-id="${esc(a.id)}" data-title="${esc(a.title)}" title="查看二维码"><i data-icon="qr"></i>二维码</button>` : ""}
+      ${!guide && a.url ? `<button type="button" class="btn ghost sm" data-act="actCopyLink" data-url="${esc(a.url)}" title="复制活动链接"><i data-icon="copy"></i>复制</button>` : ""}
+      <button type="button" class="btn ghost sm" data-act="actFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该情报反馈或举报（工单中心）"><i data-icon="message"></i>反馈</button>
+      <button type="button" class="btn ghost sm act-fav-btn${a.favorited ? " act-faved" : ""}" data-act="actFav" data-id="${esc(a.id)}" title="${a.favorited ? "取消收藏" : "收藏到我的收藏"}"><i data-icon="${a.favorited ? "starFill" : "star"}"></i>${a.favorited ? "已收藏" : "收藏"}</button>
+      ${isAdmin ? `<button type="button" class="btn ghost sm" data-act="actPinToggle" data-id="${esc(a.id)}" data-pinned="${a.pinned ? 1 : 0}" title="${a.pinned ? "取消置顶" : "置顶展示在列表最前（仅管理组可见此按钮）"}"><i data-icon="${a.pinned ? "chevronsDown" : "chevronsUp"}"></i>${a.pinned ? "取消置顶" : "置顶"}</button>` : ""}
+    </div>
+  </div>`;
+}
+
+/* 活动二维码弹窗：大图展示 + 底部下载（下载按钮在 modal-foot，走 document 级 actQrDownload）。
+   img 带 crossorigin=anonymous：API 对带 Origin 的请求返回 CORS 头，图片进 canvas 不被污染，
+   下载可直接从已显示的图本地导出（零二次网络请求）；加载异常时去掉属性重试一次 */
+function actQrModal(id, title) {
+  openModal(title || "活动二维码", `
+    <div class="act-qr-view">
+      <img src="${api.base}/api/activities/${encodeURIComponent(id)}/qr" crossorigin="anonymous" alt="${esc(title || "活动")}二维码">
+      <div class="act-qr-tip">扫码或长按识别二维码参与活动</div>
+    </div>`,
+    `<button type="button" class="btn ghost sm" data-act="actQrDownload" data-id="${esc(id)}" data-title="${esc(title || "")}">${icon("download")}下载二维码</button>`);
+  const img = $("modalBody")?.querySelector(".act-qr-view img");
+  if (img) img.addEventListener("error", function once() {
+    if (this.hasAttribute("crossorigin")) { this.removeAttribute("crossorigin"); this.src = this.src; }
+  }, { once: true });
+}
+
+/* 下载活动二维码：优先从弹窗已显示的 <img> 本地导出（canvas → PNG，零网络请求）；
+   canvas 被污染或图片未就绪时回退后端直链（?dl=1 → Content-Disposition: attachment） */
+function actQrDownload(id, title) {
+  const img = $("modalBody")?.querySelector(".act-qr-view img");
+  if (img && img.complete && img.naturalWidth) {
+    try {
+      const cv = document.createElement("canvas");
+      cv.width = img.naturalWidth;
+      cv.height = img.naturalHeight;
+      cv.getContext("2d").drawImage(img, 0, 0);
+      const aEl = document.createElement("a");
+      aEl.href = cv.toDataURL("image/png");
+      aEl.download = `活动二维码-${title || id}.png`;
+      document.body.appendChild(aEl);
+      aEl.click();
+      aEl.remove();
+      return;
+    } catch { /* 跨域污染等导出失败 → 走直链兜底 */ }
+  }
+  const aEl = document.createElement("a");
+  aEl.href = `${api.base}/api/activities/${encodeURIComponent(id)}/qr?dl=1`;
+  aEl.rel = "noopener";
+  document.body.appendChild(aEl);
+  aEl.click();
+  aEl.remove();
+}
+
+/* 活动链接复制（卡片按钮）：复用列表的剪贴板工具 */
+function actCopyLink(btn, url) {
+  copyToClipboard(url || "").then((ok) => {
+    if (!ok) { toast("复制失败"); return; }
+    const old = btn.innerHTML;
+    btn.innerHTML = icon("check") + "已复制";
+    setTimeout(() => { btn.innerHTML = old; }, 1200);
+  });
+}
+
+/* 情报反馈：确认后 sessionStorage 交接（工单中心读取即清除），分类默认「其他」 */
+function actFeedback(title, url) {
+  const t = String(title || "");
+  const okGo = confirm(`将前往工单中心反馈/举报情报「${t}」，工单分类默认为「其他」。继续？`);
+  if (!okGo) return;
+  try {
+    sessionStorage.setItem("chinamnos_ticket_prefill", JSON.stringify({
+      category: "其他",
+      source: "tariff",
+      title: `情报反馈：${t}`.slice(0, 60),
+      content: `情报标题：${t}\n相关链接：${url || ""}\n\n反馈/举报说明：\n`,
+      banner: "已带入情报反馈预设信息（来自情报酒馆卡片），请核对补充后提交",
+    }));
+  } catch { /* sessionStorage 不可用时跳转后手填 */ }
+  Shell.navigate("/ticket");
+}
+
+/* 模式分段选择器：两张模式卡（官方活动推广 / 个人攻略发布） */
+function actModeSeg() {
+  return `
+  <div class="act-mode-seg">
+    <button type="button" class="act-mode-card${actState.mode === "official" ? " active" : ""}" data-act="actMode" data-mode="official">
+      <b>官方活动推广</b><span>运营商官方优惠活动，主链接必填，可附二维码与截止时间</span>
+    </button>
+    <button type="button" class="act-mode-card${actState.mode === "guide" ? " active" : ""}" data-act="actMode" data-mode="guide">
+      <b>个人攻略发布</b><span>Markdown 正文攻略，支持多链接、全运营商通用与匿名展示</span>
+    </button>
+  </div>`;
+}
+
+/* 模式筛选 chips（客户端过滤列表；「我的收藏」仅登录用户可见） */
+function actFilterChips() {
+  const chip = (v, label) => `<button type="button" class="act-filter-chip${actState.filter === v ? " active" : ""}" data-act="actFilter" data-mode="${v}">${label}</button>`;
+  const favChip = Auth.isLoggedIn() ? chip("fav", "我的收藏") : "";
+  return `<div class="act-filter">${chip("", "全部")}${chip("official", "官方活动")}${chip("guide", "个人攻略")}${favChip}</div>`;
+}
+
+/* 图片引导弹窗：站内不提供图床直传，引导到公益图床上传后粘贴外链（与在线沟通同一引导文案结构） */
+function actImgGuide() {
+  openModal("插入图片 · 图床外链指引", `
+    <div class="act-img-guide">
+      <p>攻略正文支持图片：请先在<b>外部免费图床</b>上传图片获取直链，再粘贴进正文（<b>独立成一行</b>，或用 <code>![说明](图片链接)</code> 语法）：</p>
+      <ul>
+        <li>点击下方按钮，在新标签页打开图床 <b>111666.best</b>（亦支持 telegra.ph / i.ibb.co / catbox 等常见图床）</li>
+        <li>上传后复制图片<b>直链</b>（以 .png / .jpg / .webp 等结尾），粘贴到正文独立一行即可自动显示</li>
+      </ul>
+      <div class="act-img-warn">${icon("shield")} <span>该图床为<b>非官方</b>的第三方公益服务，与本站无关，图片将公开保存在站外。请<b>注意保护个人隐私</b>，勿上传身份证、银行卡、收款码等敏感内容。</span></div>
+      <div class="act-img-actions"><a class="btn primary sm" href="https://111666.best" target="_blank" rel="noopener noreferrer nofollow"><i data-icon="external"></i>打开图床</a></div>
+    </div>`);
+  mountIcons($("modalBody"));
+}
+
+/* 模式切换：保留公共字段（标题/范围/截止/匿名），模式私有字段从各自草稿恢复 */
+function actSwitchMode(mode) {
+  const next = mode === "guide" ? "guide" : "official";
+  if (next === actState.mode) return;
+  actDraftSave();
+  actState.mode = next;
+  const f = actState.form;
+  const keep = { title: f.title, scope: f.scope, ends: f.ends, anon: f.anon };
+  const d = actDraftLoad(next) || {};
+  actState.form = {
+    title: keep.title, scope: keep.scope, ends: keep.ends, anon: keep.anon,
+    url: typeof d.url === "string" ? d.url : "",
+    descr: typeof d.descr === "string" ? d.descr : "",
+    allCarriers: !!d.allCarriers,
+    content: typeof d.content === "string" ? d.content : "",
+    qr: null,
+  };
+  if (actState.editor) { actState.editor.destroy(); actState.editor = null; }
+  actRenderBody();
+}
+
+/* 详情弹窗：攻略渲染 Markdown 正文 + 全部链接；官方活动同弹窗展示主链接与二维码入口 */
+async function actOpenDetail(id) {
+  openModal("加载中…", `<div class="empty" style="padding:32px;text-align:center">加载中…</div>`);
+  const r = await api.activityDetail(id);
+  if (!r.ok) {
+    const msg = (r.data && r.data.message) || r.error || "加载失败";
+    openModal("详情", `<div class="empty" style="padding:32px;text-align:center">${esc(typeof msg === "string" ? msg : "加载失败")}</div>`);
+    return;
+  }
+  const a = r.data;
+  const guide = a.mode === "guide";
+  const authorHTML = a.anon
+    ? `<span class="act-anon-chip">匿名</span>`
+    : (a.submitted_by
+      ? `<button type="button" class="act-author" data-act="actAuthor" data-uid="${esc(a.submitted_by)}" title="查看提交者资料卡">${esc(a.submitter_nickname || "用户")}</button>`
+      : `<span>${esc(a.submitter_nickname || "用户")}</span>`);
+  const scopeBadge = a.carrier
+    ? `<span class="act-badge ${a.province ? "act-prov" : "act-nat"}">${a.province ? esc(a.province) : "全国"}</span>`
+    : `<span class="act-badge act-all">通用</span><span class="act-badge ${a.province ? "act-prov" : "act-nat"}">${a.province ? esc(a.province) : "全国"}</span>`;
+  const linksHTML = (a.links || []).map((l) =>
+    `<a class="btn ghost sm" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow"><i data-icon="external"></i>${esc(l.label)}</a>`).join("");
+  const body = `
+    <div class="act-detail">
+      <div class="act-title-line">
+        <span class="act-mode-badge ${guide ? "guide" : "official"}">${guide ? "个人攻略" : "官方活动"}</span>
+        ${scopeBadge}
+        ${actRemaining(a.ends_at)}
+      </div>
+      <h3 class="act-detail-title">${esc(a.title)}</h3>
+      ${a.descr ? `<div class="act-descr">${esc(a.descr)}</div>` : ""}
+      ${guide && a.content_md ? `<div class="act-md">${mdToSafeHtml(a.content_md, { nofollow: true })}</div>` : ""}
+      ${linksHTML ? `<div class="act-links">${linksHTML}</div>` : ""}
+      ${a.url ? `<div class="act-detail-main"><a class="btn primary sm" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer nofollow"><i data-icon="external"></i>${guide ? "打开主链接" : "参与活动"}</a>
+      <button type="button" class="btn ghost sm" data-act="actCopyLink" data-url="${esc(a.url)}"><i data-icon="copy"></i>复制链接</button></div>` : ""}
+      ${a.has_qr ? `<div class="act-detail-main"><button type="button" class="btn ghost sm" data-act="actQr" data-id="${esc(a.id)}" data-title="${esc(a.title)}"><i data-icon="qr"></i>查看二维码</button></div>` : ""}
+      <div class="act-meta">提交于 ${relTime(Math.floor((a.created_at || 0) / 1000))} · ${authorHTML}</div>
+    </div>`;
+  openModal(guide ? "攻略详情" : "活动详情", body);
+  mountIcons($("modalBody"));
+}
+
+function actRenderBody() {
+  const el = $("actTabBody");
+  if (!el) return;
+  const provName = chProvName();
+  const brand = (CARRIER_BRAND[currentCarrier] || {}).name || "";
+  const guide = actState.mode === "guide";
+  const mineHTML = (actState.mine || []).length ? `
+    <div class="act-mine">
+      <div class="act-mine-t">${icon("clock")} 我的提交（审核中，通过后公开展示）</div>
+      ${actState.mine.map((m) => `
+      <div class="act-mine-item">
+        <span class="act-mode-badge sm ${m.mode === "guide" ? "guide" : "official"}">${m.mode === "guide" ? "攻略" : "官方"}</span>
+        <span class="act-badge ${m.province ? "act-prov" : "act-nat"}">${m.province ? esc(m.province) : "全国"}</span>
+        <span class="act-mine-title">${esc(m.title)}</span>
+        <button type="button" class="btn ghost sm" data-act="actWithdraw" data-id="${esc(m.id)}">撤回</button>
+      </div>`).join("")}
+    </div>` : "";
+  /* 收藏视图：favItems（收藏时间倒序，服务端已滤 open）；常规视图：items 按 mode 客户端过滤 */
+  const favView = actState.filter === "fav";
+  const listSource = favView ? actState.favItems : actState.items;
+  const items = (favView || !actState.filter) ? listSource : listSource.filter((a) => a.mode === actState.filter);
+  const emptyTip = favView
+    ? (actState.favLoaded ? "暂无收藏，点击情报卡片上的「收藏」按钮即可保存到这里" : "登录后可收藏感兴趣的情报")
+    : `暂无${esc(provName)}的${esc(brand)}情报，欢迎投稿第一条！`;
+  const listHTML = items.length
+    ? `<div class="act-list">${items.map(actCardHTML).join("")}</div>`
+    : `<div class="empty" style="padding:32px;text-align:center">${emptyTip}</div>`;
+  const f = actState.form;
+  const commonFields = `
+        <label><span class="af-l">标题 <b>*</b></span><input class="inp" id="actFTitle" maxlength="40" value="${esc(f.title)}" placeholder="${guide ? "如：携号转网保号攻略" : "如：移动领 10GB 流量包"}"></label>
+        <label><span class="af-l">范围</span>
+          <select class="sel" id="actFScope">
+            <option value="prov" ${f.scope !== "nat" ? "selected" : ""}>${esc(provName || "本省")}</option>
+            <option value="nat" ${f.scope === "nat" ? "selected" : ""}>全国</option>
+          </select></label>
+        ${guide ? `<label><span class="af-l">适用运营商</span>
+          <select class="sel" id="actFCarrier">
+            <option value="cur" ${!f.allCarriers ? "selected" : ""}>${esc(brand || "当前运营商")}</option>
+            <option value="all" ${f.allCarriers ? "selected" : ""}>全运营商通用</option>
+          </select></label>` : ""}
+        <label><span class="af-l">截止日期 <i>选填 · ${guide ? "留空长期有效" : "到期自动下展"}</i></span><input class="inp" type="date" id="actFEnds" value="${esc(f.ends)}"></label>`;
+  const officialFields = `
+      <label class="act-panel-full"><span class="af-l">活动地址 <b>*</b></span><input class="inp" id="actFUrl" maxlength="300" value="${esc(f.url)}" placeholder="https:// 活动页面链接"></label>
+      <label class="act-panel-full"><span class="af-l">活动简介 <i>选填 · 200 字内</i></span><textarea class="inp" id="actFDescr" maxlength="200" rows="2" placeholder="一句话介绍活动内容与参与方式">${esc(f.descr)}</textarea></label>`;
+  const guideFields = `
+      <div class="act-panel-full"><span class="af-l">攻略正文 <b>*</b> <i>Markdown · ≤1 万字 · 链接与图片直接写进正文（图片用图床外链）</i></span><div id="actMdHost"></div></div>
+      <label class="act-panel-full"><span class="af-l">摘要 <i>选填 · 200 字内，列表卡片展示</i></span><textarea class="inp" id="actFDescr" maxlength="200" rows="2" placeholder="一句话概括攻略要点（留空自动取正文开头）">${esc(f.descr)}</textarea></label>`;
+  const qrField = `
+      <div class="act-panel-full"><span class="af-l">二维码 <i>选填 · PNG / JPG / WebP，自动压缩</i></span>
+        <span class="act-qr-row">
+          ${f.qr ? `<span class="act-qr-thumb"><img src="${esc(f.qr.data)}" alt="二维码预览"><button type="button" class="act-qr-del" data-act="actQrClear" title="移除二维码">${icon("x")}</button></span>`
+                : `<button type="button" class="btn ghost sm" data-act="actQrPick">${icon("image")}选择图片</button>`}
+          <input type="file" id="actFQr" accept="image/png,image/jpeg,image/webp" hidden>
+        </span>
+      </div>`;
+  const anonField = `
+      <label class="act-anon-row"><input type="checkbox" id="actFAnon" ${f.anon ? "checked" : ""}><span>匿名展示 <i>公众侧不显示我的昵称与资料卡（管理组审核可见）</i></span></label>`;
+  const panel = actState.panelOpen ? `
+    <div class="act-panel">
+      <div class="act-panel-t">投稿情报（提交后由管理组审核，通过后公开展示；待审上限 5 条）</div>
+      ${actModeSeg()}
+      <div class="act-panel-grid">${commonFields}</div>
+      <div class="act-panel-grid">${guide ? guideFields : officialFields}</div>
+      ${guide ? "" : qrField}
+      ${anonField}
+      <div class="act-panel-actions">
+        <button type="button" class="btn ghost" data-act="actCancel">取消</button>
+        <button type="button" class="btn primary" data-act="actSubmit"><i data-icon="send"></i>提交审核</button>
+      </div>
+    </div>` : "";
+  el.innerHTML = `
+    <h1 class="page-title">情报酒馆</h1>
+    <p class="page-sub">${esc(provName)} · ${esc(brand)} · 官方活动推广与个人攻略发布聚合（投稿后经管理组审核展示）</p>
+    ${mineHTML}
+    <div class="act-toolbar">
+      ${actFilterChips()}
+      <button type="button" class="btn primary" data-act="actTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${actState.panelOpen ? "收起投稿面板" : "投稿情报"}</span></button>
+    </div>
+    ${panel}
+    ${listHTML}`;
+  mountIcons(el);
+  /* 行内面板输入同步草稿（innerHTML 重建后重绑） */
+  const bind = (id, key) => { const n = $(id); if (n) n.addEventListener("input", () => { actState.form[key] = n.value; actDraftSave(); }); };
+  bind("actFTitle", "title"); bind("actFUrl", "url"); bind("actFDescr", "descr"); bind("actFEnds", "ends");
+  const sc = $("actFScope");
+  if (sc) sc.addEventListener("change", () => { actState.form.scope = sc.value; actDraftSave(); });
+  const csel = $("actFCarrier");
+  if (csel) csel.addEventListener("change", () => { actState.form.allCarriers = csel.value === "all"; actDraftSave(); });
+  const anonCb = $("actFAnon");
+  if (anonCb) anonCb.addEventListener("change", () => { actState.form.anon = anonCb.checked; actDraftSave(); });
+  /* 攻略正文编辑器：innerHTML 重建后重新挂载（正文先回存 form，草稿从 localStorage 恢复） */
+  if (guide && actState.panelOpen) {
+    const host = $("actMdHost");
+    if (host) {
+      if (actState.editor) { actState.form.content = actState.editor.getValue(); actState.editor.destroy(); }
+      actState.editor = mdCreateEditor(host, {
+        maxlength: ACT_MD_MAX,
+        rows: 12,
+        draftKey: ACT_DRAFT_KEYS.guide,
+        initial: actState.form.content || "",
+        placeholder: "用 Markdown 写攻略：## 步骤标题、**重点**、[链接文字](https://…)、> 提示、列表；图片粘贴图床外链（独立成一行）",
+        nofollow: true,
+        onImage: actImgGuide,
+      });
+    }
+  } else if (actState.editor) {
+    actState.form.content = actState.editor.getValue();
+    actState.editor.destroy();
+    actState.editor = null;
+  }
+  const qrInput = $("actFQr");
+  if (qrInput) qrInput.addEventListener("change", async () => {
+    const file = qrInput.files && qrInput.files[0];
+    if (!file) return;
+    try {
+      actState.form.qr = await readQrFile(file);
+      actRenderBody();
+    } catch (err) {
+      toast(typeof err === "string" ? err : "图片处理失败");
+    }
+    qrInput.value = "";
+  });
+}
+
+async function actSubmit() {
+  if (!Auth.isLoggedIn()) { toast("请先登录后再投稿"); Auth.openLogin(); return; }
+  const f = actState.form;
+  const guide = actState.mode === "guide";
+  const title = (f.title || "").trim();
+  const url = (f.url || "").trim();
+  if (title.length < 2 || title.length > 40) { toast("标题需 2~40 字"); return; }
+  if (!guide && !/^https:\/\/.+/i.test(url)) { toast("活动地址必须为 https:// 链接"); return; }
+  if (url && !/^https:\/\/.+/i.test(url)) { toast("链接必须为 https:// 地址"); return; }
+  const provName = chProvName();
+  if (f.scope !== "nat" && !provName) { toast("省份未就绪，请稍后再试"); return; }
+  const ends = f.ends ? new Date(f.ends + "T23:59:59+08:00").getTime() : null;
+  if (f.ends && (!Number.isFinite(ends) || ends <= Date.now())) { toast("截止日期必须是未来日期"); return; }
+  const content = guide && actState.editor ? actState.editor.getValue().trim() : "";
+  if (guide) {
+    if (!content) { toast("攻略正文不能为空"); return; }
+    if (content.length > ACT_MD_MAX) { toast(`攻略正文不超过 ${ACT_MD_MAX} 字`); return; }
+  }
+  const r = await api.activityCreate({
+    mode: actState.mode,
+    carrier: guide && f.allCarriers ? "" : (CH_CARRIER_MAP[currentCarrier] || ""),
+    province: f.scope === "nat" ? "" : provName,
+    title,
+    url: url || undefined,
+    descr: (f.descr || "").trim(),
+    ends_at: ends,
+    content_md: guide ? content : undefined,
+    anon: f.anon ? 1 : 0,
+    qr: guide ? undefined : (f.qr || undefined),
+  });
+  if (!r.ok) {
+    const cn = {
+      ACTIVITY_EXISTS: "已有相同提交（待审或展示中）",
+      ACTIVITY_QUOTA_EXCEEDED: "你的待审提交已达 5 条上限，请等审核或先撤回",
+      RATE_LIMITED: "提交太频繁，请一小时后再试",
+      UNAUTHORIZED: "请先登录",
+    };
+    // 字段校验错误（后端 data 带 field/message，如二维码无效）优先透出中文 message
+    const fieldMsg = r.data && r.data.message ? r.data.message : "";
+    toast(cn[r.error] || fieldMsg || r.error || "提交失败");
+    return;
+  }
+  toast("已提交，等待管理组审核");
+  actDraftClear(actState.mode);
+  actState.form = { title: "", url: "", scope: f.scope, descr: "", ends: "", qr: null, allCarriers: false, content: "", anon: false };
+  actState.panelOpen = false;
+  if (actState.editor) { actState.editor.destroy(); actState.editor = null; }
+  await actTabRefresh();
+  actRenderBody();
+}
+
+function actOnBodyClick(e) {
+  const actEl = e.target.closest("[data-act]");
+  if (!actEl) return;
+  const a = actEl.dataset.act;
+  if (a === "actTogglePanel") {
+    if (!Auth.isLoggedIn()) { toast("请先登录后再投稿"); Auth.openLogin(); return; }
+    actState.panelOpen = !actState.panelOpen;
+    actRenderBody();
+  } else if (a === "actCancel") {
+    actState.panelOpen = false;
+    actRenderBody();
+  } else if (a === "actMode") {
+    actSwitchMode(actEl.dataset.mode);
+  } else if (a === "actFilter") {
+    actState.filter = actEl.dataset.mode || "";
+    actRenderBody();
+  } else if (a === "actDetail") {
+    actOpenDetail(actEl.dataset.id);
+  } else if (a === "actAuthor") {
+    Auth.showProfileCard(actEl.dataset.uid);
+  } else if (a === "actSubmit") {
+    actSubmit();
+  } else if (a === "actWithdraw") {
+    const id = actEl.dataset.id;
+    const okGo = confirm("撤回后该提交将删除，确定撤回？");
+    if (!okGo) return;
+    api.activityDelete(id).then((r) => {
+      toast(r.ok ? "已撤回" : (r.error || "撤回失败"));
+      if (r.ok) actTabRefreshAndRender();
+    });
+  } else if (a === "actQrPick") {
+    const fi = $("actFQr");
+    if (fi) fi.click();
+  } else if (a === "actQrClear") {
+    actState.form.qr = null;
+    actRenderBody();
+  } else if (a === "actQr") {
+    actQrModal(actEl.dataset.id, actEl.dataset.title);
+  } else if (a === "actCopyLink") {
+    actCopyLink(actEl, actEl.dataset.url);
+  } else if (a === "actFeedback") {
+    actFeedback(actEl.dataset.title, actEl.dataset.url);
+  } else if (a === "actFav") {
+    if (!Auth.isLoggedIn()) { toast("请先登录后再收藏"); Auth.openLogin(); return; }
+    api.activityFavoriteToggle(actEl.dataset.id).then((r) => {
+      if (!r.ok) { toast(typeof r.error === "string" ? r.error : (r.error?.message || "操作失败")); return; }
+      toast(r.data?.favorited ? "已收藏，可在「我的收藏」查看" : "已取消收藏");
+      actTabRefreshAndRender(); // 同步列表收藏标记与收藏视图
+    });
+  } else if (a === "actPinToggle") {
+    const pinned = actEl.dataset.pinned === "1";
+    const id = actEl.dataset.id;
+    const req = pinned ? api.activityUnpin(id) : api.activityPin(id);
+    req.then((r) => {
+      if (!r.ok) { toast(typeof r.error === "string" ? r.error : (r.error?.message || "操作失败")); return; }
+      toast(pinned ? "已取消置顶" : "已置顶");
+      actTabRefreshAndRender();
+    });
+  }
+}
+
+/* ─────────────── 唠嗑聚落 tab（社群收录：论坛/QQ群/微信群/贴吧/纸飞机等；activities mode='chat'） ───────────────
+   ▸ 数据：/api/communities?carrier&province（复用 activities 表，范围匹配 本省+本运营商全国+通用）
+   ▸ 提交：登录用户先审后发（待审≤5 与情报酒馆共享配额）；种类单选；url/群号至少其一
+   ▸ 授权凭证（群主/管理员身份截图）选填强提醒，R2 私有存储仅管理组审核可见；二维码复用活动二维码端点
+   ▸ 无匿名、无截止时间（社群长期有效）；提交者实名（点头像看资料卡） */
+const CHAT_TYPES = ["论坛", "QQ群", "微信群", "贴吧", "纸飞机", "其他"];
+const chatState = {
+  items: [], mine: [], panelOpen: false,
+  form: { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", qr: null, proof: null },
+};
+
+let chatProvPending = false; // 直链 #chat 时 STATS 未就绪的补加载守卫（同 acts/announce 模式）
+async function chatTabRefresh() {
+  const carrierKey = CH_CARRIER_MAP[currentCarrier] || "";
+  let provName = chProvName();
+  if (!provName && !STATS && !chatProvPending) {
+    chatProvPending = true;
+    try {
+      STATS = await loadStats();
+      fillProvSelects();
+    } catch { /* 失败保留原行为，下次进 tab 重试 */ } finally { chatProvPending = false; }
+    provName = chProvName();
+  }
+  if (!carrierKey) { chatState.items = []; chatState.mine = []; return; }
+  const r = await api.communitiesList(carrierKey, provName);
+  if (r.ok) { chatState.items = r.data.items || []; chatState.mine = r.data.mine_pending || []; }
+}
+function chatTabRefreshAndRender() {
+  return chatTabRefresh().then(() => {
+    const el = $("view-chat");
+    if (el && el.classList.contains("active")) chatRenderBody();
+  });
+}
+function chatRenderIfActive() {
+  const el = $("view-chat");
+  if (el && el.classList.contains("active")) chatRenderBody();
+}
+
+function chatCardHTML(a) {
+  const scopeBadge = a.carrier
+    ? `<span class="act-badge ${a.province ? "act-prov" : "act-nat"}">${a.province ? esc(a.province) : "全国"}</span>`
+    : `<span class="act-badge act-all">全站</span>`;
+  const mainAct = a.url
+    ? `<a class="btn primary sm act-go" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer nofollow">加入 / 访问<i data-icon="external"></i></a>`
+    : (a.chat_id ? `<button type="button" class="btn primary sm" data-act="chatCopyId" data-id="${esc(a.chat_id)}" title="复制群号/账号"><i data-icon="copy"></i>复制群号</button>` : "");
+  const authorHTML = a.submitted_by
+    ? `<button type="button" class="act-author" data-act="chatAuthor" data-uid="${esc(a.submitted_by)}" title="查看提交者资料卡">${esc(a.submitter_nickname || "用户")}</button>`
+    : `<span>${esc(a.submitter_nickname || "用户")}</span>`;
+  return `
+  <div class="act-card chat-card">
+    <div class="act-main">
+      <div class="act-title-line">
+        <span class="act-mode-badge chat">${esc(a.chat_type || "其他")}</span>
+        ${scopeBadge}
+        <b class="act-title">${esc(a.title)}</b>
+      </div>
+      ${a.descr ? `<div class="act-descr">${esc(a.descr)}</div>` : ""}
+      ${a.chat_id ? `<div class="chat-id-line">${icon("hash")} 群号 / 账号：<b>${esc(a.chat_id)}</b></div>` : ""}
+      <div class="act-meta">${relTime(Math.floor((a.created_at || 0) / 1000))} 收录 · ${authorHTML}</div>
+    </div>
+    <div class="act-actions">
+      ${mainAct}
+      ${a.chat_id && a.url ? `<button type="button" class="btn ghost sm" data-act="chatCopyId" data-id="${esc(a.chat_id)}" title="复制群号/账号"><i data-icon="copy"></i>复制群号</button>` : ""}
+      ${a.has_qr ? `<button type="button" class="btn ghost sm" data-act="chatQr" data-id="${esc(a.id)}" data-title="${esc(a.title)}" title="查看群二维码"><i data-icon="qr"></i>二维码</button>` : ""}
+      <button type="button" class="btn ghost sm" data-act="chatFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该社群反馈或举报（工单中心）"><i data-icon="message"></i>反馈</button>
+    </div>
+  </div>`;
+}
+
+function chatRenderBody() {
+  const el = $("chatTabBody");
+  if (!el) return;
+  const provName = chProvName();
+  const brand = (CARRIER_BRAND[currentCarrier] || {}).shortName || "";
+  const mineHTML = (chatState.mine || []).length ? `
+    <div class="act-mine">
+      <span class="act-mine-t">我的待审（${chatState.mine.length}）</span>
+      ${chatState.mine.map((m) => `
+      <div class="act-mine-row">
+        <span class="act-mine-badge">${esc(m.chat_type || "其他")}</span>
+        <span class="act-mine-title">${esc(m.title)}</span>
+        <button type="button" class="btn ghost sm" data-act="chatWithdraw" data-id="${esc(m.id)}">撤回</button>
+      </div>`).join("")}
+    </div>` : "";
+  const items = chatState.items;
+  const listHTML = items.length
+    ? `<div class="act-list">${items.map(chatCardHTML).join("")}</div>`
+    : `<div class="empty" style="padding:32px;text-align:center">暂无${esc(provName)}的${esc(brand)}社群，欢迎收录第一条！</div>`;
+  const f = chatState.form;
+  const scopeBtn = (v, label) => `<button type="button" class="act-filter-chip${f.scope === v ? " active" : ""}" data-act="chatScope" data-scope="${v}">${label}</button>`;
+  const qrBlock = (pickAct, clearAct, key, label) => `
+        <span class="act-qr-row">
+          ${f[key] ? `<span class="act-qr-thumb"><img src="${esc(f[key].data)}" alt="${esc(label)}预览"><button type="button" class="act-qr-del" data-act="${clearAct}" title="移除图片">${icon("x")}</button></span>`
+                : `<button type="button" class="btn ghost sm" data-act="${pickAct}">${icon("image")}选择图片</button>`}
+          <input type="file" id="chatF_${key}" accept="image/png,image/jpeg,image/webp" hidden>
+        </span>`;
+  const panel = chatState.panelOpen ? `
+    <div class="act-panel">
+      <div class="act-panel-t">收录社群（提交后由管理组审核，通过后公开展示；待审上限 5 条）</div>
+      <div class="act-panel-grid">
+        <label><span class="af-l">种类 <b>*</b></span>
+          <select class="sel" id="chatFType">${CHAT_TYPES.map((t) => `<option value="${t}" ${f.type === t ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+        <label class="act-panel-full"><span class="af-l">范围 <b>*</b> <i>决定社群展示在哪些页签</i></span>
+          <div class="act-filter chat-scope">${scopeBtn("all", "通用 · 全站")}${scopeBtn("carrier", `仅 ${esc(brand || "当前运营商")}`)}${scopeBtn("prov", `仅 ${esc(brand || "当前运营商")} ${esc(provName || "…")}`)}</div></label>
+        <label><span class="af-l">社群名称 <b>*</b></span><input class="inp" id="chatFTitle" maxlength="40" value="${esc(f.title)}" placeholder="如：湖南移动宽带交流群"></label>
+        <label><span class="af-l">加入链接 <i>论坛/贴吧/TG 链接等</i></span><input class="inp" id="chatFUrl" maxlength="300" value="${esc(f.url)}" placeholder="https://…（微信群可留空）"></label>
+        <label><span class="af-l">群号 / 账号</span><input class="inp" id="chatFId" maxlength="50" value="${esc(f.chatId)}" placeholder="如 QQ 群号、微信号（链接与群号至少填其一）"></label>
+        <label class="act-panel-full"><span class="af-l">说明介绍 <i>选填 · 200 字内</i></span><textarea class="inp" id="chatFDescr" maxlength="200" rows="2" placeholder="群定位、活跃度、入群须知等">${esc(f.descr)}</textarea></label>
+        <div class="act-panel-full"><span class="af-l">群二维码 <i>选填 · PNG / JPG / WebP，自动压缩</i></span>${qrBlock("chatQrPick", "chatQrClear", "qr", "二维码")}</div>
+        <div class="act-panel-full"><span class="af-l">授权凭证 <i>选填 · 强烈建议上传，可大幅加快审核</i></span>${qrBlock("chatProofPick", "chatProofClear", "proof", "凭证")}</div>
+      </div>
+      <div class="act-form-note">${icon("shield")} 授权凭证（群主/管理员身份截图等）仅用于管理组核验你的收录权限，<b>不会公开展示</b>。</div>
+      <div class="act-panel-actions">
+        <button type="button" class="btn ghost" data-act="chatCancel">取消</button>
+        <button type="button" class="btn primary" data-act="chatSubmit"><i data-icon="send"></i>提交审核</button>
+      </div>
+    </div>` : "";
+  el.innerHTML = `
+    <h1 class="page-title">唠嗑聚落</h1>
+    <p class="page-sub">${esc(provName)} · ${esc(brand)} · 交流社群聚合（论坛 / QQ 群 / 微信群 / 贴吧 / 纸飞机，投稿后经管理组审核展示）</p>
+    ${mineHTML}
+    <div class="act-toolbar">
+      <div class="act-filter"><span class="hint">收录你运营或知晓的交流社群；入群请遵守群规并自行甄别信息，站点仅提供信息展示渠道</span></div>
+      <button type="button" class="btn primary" data-act="chatTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${chatState.panelOpen ? "收起收录面板" : "收录社群"}</span></button>
+    </div>
+    ${panel}
+    ${listHTML}`;
+  mountIcons(el);
+  /* 表单输入同步内存草稿（innerHTML 重建后重绑；草稿不落 localStorage，切 tab 保留） */
+  const bindV = (id, key) => { const n = $(id); if (n) { n.value = chatState.form[key] || ""; n.addEventListener("input", () => { chatState.form[key] = n.value; }); } };
+  bindV("chatFTitle", "title"); bindV("chatFUrl", "url"); bindV("chatFId", "chatId"); bindV("chatFDescr", "descr");
+  const ts = $("chatFType");
+  if (ts) { ts.value = chatState.form.type || "QQ群"; ts.addEventListener("change", () => { chatState.form.type = ts.value; }); }
+  const qrInput = $("chatF_qr");
+  if (qrInput) qrInput.addEventListener("change", async () => {
+    const file = qrInput.files && qrInput.files[0];
+    if (!file) return;
+    try { chatState.form.qr = await readQrFile(file); chatRenderBody(); } catch (err) { toast(typeof err === "string" ? err : "图片处理失败"); }
+    qrInput.value = "";
+  });
+  const proofInput = $("chatF_proof");
+  if (proofInput) proofInput.addEventListener("change", async () => {
+    const file = proofInput.files && proofInput.files[0];
+    if (!file) return;
+    try { chatState.form.proof = await readQrFile(file); chatRenderBody(); } catch (err) { toast(typeof err === "string" ? err : "图片处理失败"); }
+    proofInput.value = "";
+  });
+}
+
+async function chatSubmit() {
+  if (!Auth.isLoggedIn()) { toast("请先登录后再收录社群"); Auth.openLogin(); return; }
+  const f = chatState.form;
+  const title = (f.title || "").trim();
+  const url = (f.url || "").trim();
+  const chatId = (f.chatId || "").trim();
+  if (title.length < 2 || title.length > 40) { toast("名称需 2~40 字"); return; }
+  if (url && !/^https:\/\/.+/i.test(url)) { toast("加入链接必须为 https:// 地址"); return; }
+  if (!url && !chatId) { toast("加入方式至少提供其一：链接或群号/账号"); return; }
+  const provName = chProvName();
+  if (f.scope === "prov" && !provName) { toast("省份未就绪，请稍后再试"); return; }
+  const body = {
+    chat_type: f.type, scope: f.scope,
+    carrier: CH_CARRIER_MAP[currentCarrier] || "",
+    province: provName,
+    title, url, chat_id: chatId, descr: (f.descr || "").trim(),
+  };
+  if (f.qr) body.qr = f.qr;
+  if (f.proof) body.proof = f.proof;
+  const r = await api.communityCreate(body);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : (r.error?.message || (r.data && r.data.message) || "提交失败，请稍后再试")); return; }
+  chatState.panelOpen = false;
+  chatState.form = { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", qr: null, proof: null };
+  toast("已提交，等待管理组审核");
+  chatTabRefreshAndRender();
+}
+
+function chatOnBodyClick(e) {
+  const actEl = e.target.closest("[data-act]");
+  if (!actEl) return;
+  const a = actEl.dataset.act;
+  if (a === "chatTogglePanel") {
+    if (!Auth.isLoggedIn()) { toast("请先登录后再收录社群"); Auth.openLogin(); return; }
+    chatState.panelOpen = !chatState.panelOpen;
+    chatRenderBody();
+  } else if (a === "chatCancel") {
+    chatState.panelOpen = false;
+    chatRenderBody();
+  } else if (a === "chatScope") {
+    chatState.form.scope = actEl.dataset.scope || "prov";
+    chatRenderBody();
+  } else if (a === "chatQrPick") {
+    const fi = $("chatF_qr");
+    if (fi) fi.click();
+  } else if (a === "chatQrClear") {
+    chatState.form.qr = null;
+    chatRenderBody();
+  } else if (a === "chatProofPick") {
+    const fi = $("chatF_proof");
+    if (fi) fi.click();
+  } else if (a === "chatProofClear") {
+    chatState.form.proof = null;
+    chatRenderBody();
+  } else if (a === "chatSubmit") {
+    chatSubmit();
+  } else if (a === "chatWithdraw") {
+    const id = actEl.dataset.id;
+    const okGo = confirm("撤回后该收录将删除，确定撤回？");
+    if (!okGo) return;
+    api.communityDelete(id).then((r) => {
+      toast(r.ok ? "已撤回" : (r.error || "撤回失败"));
+      if (r.ok) chatTabRefreshAndRender();
+    });
+  } else if (a === "chatAuthor") {
+    Auth.showProfileCard(actEl.dataset.uid);
+  } else if (a === "chatQr") {
+    actQrModal(actEl.dataset.id, actEl.dataset.title);
+  } else if (a === "chatCopyId") {
+    actCopyLink(actEl, actEl.dataset.id);
+  } else if (a === "chatFeedback") {
+    actFeedback(actEl.dataset.title, actEl.dataset.url);
+  }
+}
+
+/* 活动二维码文件读取：小图保留原始编码（PNG 防压缩失真），超大/超宽先等比缩到 ≤1500，
+   PNG 超限再降级 JPEG 循环降质，最终与后端 300KB 上限对齐 */
+function readQrFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!/^image\/(png|jpeg|jpg|webp)$/i.test(file.type)) { reject("仅支持 PNG / JPG / WebP 图片"); return; }
+    if (file.size > 8 * 1024 * 1024) { reject("图片文件过大（>8MB）"); return; }
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if (!w || !h) { reject("图片读取失败"); return; }
+      const MAX = 1500;
+      if (w > MAX || h > MAX || file.size > 280 * 1024) {
+        if (w > MAX || h > MAX) { const r = Math.min(MAX / w, MAX / h); w = Math.round(w * r); h = Math.round(h * r); }
+        const cv = document.createElement("canvas");
+        cv.width = w; cv.height = h;
+        cv.getContext("2d").drawImage(img, 0, 0, w, h);
+        let data = cv.toDataURL("image/png");
+        if (data.length > 380000) {
+          let q = 0.85;
+          data = cv.toDataURL("image/jpeg", q);
+          while (data.length > 380000 && q > 0.5) { q -= 0.12; data = cv.toDataURL("image/jpeg", q); }
+        }
+        resolve({ data, w, h });
+        return;
+      }
+      const fr = new FileReader();
+      fr.onload = () => resolve({ data: String(fr.result), w, h });
+      fr.onerror = () => reject("图片读取失败");
+      fr.readAsDataURL(file);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject("图片读取失败"); };
+    img.src = url;
+  });
 }
 
 /* ─────────────── 数据总览 ─────────────── */
@@ -499,14 +1547,17 @@ function renderOverview() {
     }
 
     fillProvSelects();
+    chTabRefresh(true); // #gProv 已填充 → 省份中文名可用 → 跳蚤市集 tab 探测（须在 fillProvSelects 之后）
+    actTabRefreshAndRender(); // 情报酒馆列表随省份联动
+    annPrefetch(); // 预拉当前运营商公告：未读红点 + 进 tab 零等待
+    updateOfficialLink();
     buildDynamicTabs(s);
-    const natTariffs = s.provinces.reduce((sum, p) => sum + (p.breakdown && p.breakdown["1"] ? p.breakdown["1"].tariffs : 0), 0);
-    const allTariffs = s.provinces.reduce((sum, p) => sum + (p.total ? p.total.tariffs : 0), 0);
+    // 全网资费总量（去重）：采集端跨省按条目名去重（全网+31省专区）；旧 stats 无该字段时显示 "-"
+    const natTariffs = s.total_unique;
     const todayAdd = Object.values(s.today || {}).reduce((sum, c) => sum + (c && c.added ? c.added : 0), 0);
     const todayRm = Object.values(s.today || {}).reduce((sum, c) => sum + (c && c.removed ? c.removed : 0), 0);
 
-    setStat("stNational", natTariffs);
-    setStat("stTotal", allTariffs);
+    setStat("stNational", natTariffs == null ? "-" : natTariffs);
     setStat("stTodayAdd", todayAdd);
     setStat("stTodayRm", todayRm);
     $("updateTime").textContent = fmtTime(s.crawl_time);
@@ -535,23 +1586,24 @@ function renderProvStatsRow(s) {
   const p = s.provinces ? s.provinces.find(x => x.code === code) : null;
   if (!p) { el.innerHTML = ""; return; }
   const name = provName(code);
-  const allTariffs = s.provinces.reduce((sum, x) => sum + (x.total ? x.total.tariffs : 0), 0);
+  // 「占全国」分母 = 全网资费总量（去重，跨省条目名去重含全网+31省专区）
+  const allTariffs = s.total_unique || 0;
   const pTariffs = p.total ? p.total.tariffs : 0;
   const pct = allTariffs > 0 ? ((pTariffs / allTariffs) * 100).toFixed(1) : "0";
   const pAdd = Object.values(p.today || {}).reduce((sum, c) => sum + (c && c.added ? c.added : 0), 0);
   const pRm = Object.values(p.today || {}).reduce((sum, c) => sum + (c && c.removed ? c.removed : 0), 0);
   const pChg = Object.values(p.today || {}).reduce((sum, c) => sum + (c && c.changed ? c.changed : 0), 0);
-  const bdParts = [];
+  const bdItems = [];
   Object.keys(p.breakdown || {}).forEach(attr => {
     const v = p.breakdown[attr];
-    if (v && v.tariffs) bdParts.push(`${attrLabel(attr)} ${fmt(v.tariffs)}`);
+    if (v && v.tariffs) bdItems.push(`<span class="bd-item"><span class="bd-lab">${esc(attrLabel(attr))}</span><span class="bd-num">${fmt(v.tariffs)}</span></span>`);
   });
-  const bdText = bdParts.length ? bdParts.join(" / ") : "-";
+  const bdHtml = bdItems.length ? bdItems.join("") : `<span class="bd-num">-</span>`;
   el.innerHTML = `
     <div class="stat-card tilt"><div class="stat-info"><div class="stat-label">${esc(name)} 资费总数</div><div class="stat-value accent">${fmt(pTariffs)}<span style="font-size:13px;color:var(--sub);font-weight:400;margin-left:6px">占全国 ${pct}%</span></div></div><div class="stat-icon total">${icon("home")}</div></div>
-    <div class="stat-card tilt"><div class="stat-info"><div class="stat-label">分类资费分布</div><div class="stat-value" style="font-size:17px">${esc(bdText)}</div></div><div class="stat-icon sum">${icon("chart")}</div></div>
     <div class="stat-card tilt"><div class="stat-info"><div class="stat-label">今日新增</div><div class="stat-value green">${fmt(pAdd)}</div></div><div class="stat-icon added">${icon("plusCircle")}</div></div>
     <div class="stat-card tilt"><div class="stat-info"><div class="stat-label">今日下架 / 变更</div><div class="stat-value" style="font-size:21px"><span style="color:var(--red)">${fmt(pRm)}</span> / <span style="color:var(--amber)">${fmt(pChg)}</span></div></div><div class="stat-icon removed">${icon("edit")}</div></div>
+    <div class="stat-card tilt stat-card-bd"><div class="stat-info"><div class="stat-label">分类资费分布</div><div class="bd-list">${bdHtml}</div></div><div class="stat-icon sum">${icon("chart")}</div></div>
   `;
 }
 
@@ -663,7 +1715,7 @@ function renderDistBars() {
   }
 
   const renderGroup = (attr, startIdx) => {
-    const rows = groups[attr];
+    const rows = groups[attr].slice().sort((a, b) => b.n - a.n);
     const max = Math.max(1, ...rows.map(r => r.n));
     let g = `<div class="dist-group-title">${esc(attrLabel(attr))}</div>`;
     rows.forEach((r, i) => {
@@ -795,24 +1847,28 @@ function buildDynamicTabs(stats) {
           <span class="sort-tit">排序</span>
           <button type="button" class="sort-btn" data-sort="time">最新上架</button>
           <button type="button" class="sort-btn" data-sort="price">按价格</button>
-          <button type="button" class="sort-btn s-dir" data-sort="dir">降序 ↓</button>
+          <button type="button" class="sort-btn s-dir" data-sort="dir" hidden>降序 ↓</button>
+        </div>
+        <div class="view-mode" id="${t1Id(code, "cardMode")}" title="卡片形态切换">
+          <button type="button" class="vm-btn${cardMode === "list" ? " on" : ""}" data-mode="list">列表</button>
+          <button type="button" class="vm-btn${cardMode === "card" ? " on" : ""}" data-mode="card">卡片</button>
         </div>
         <div class="filter-bar" id="${t1Id(code, "filterBar")}">
           <span class="filter-tit">筛选</span>
           <button type="button" class="filter-btn toggle-btn" id="${t1Id(code, "zeroBtn")}">零元</button>
-          <button type="button" class="filter-btn toggle-btn" id="${t1Id(code, "favBtn")}">${icon("star")} 只看收藏</button>
-          <span class="filter-label">价格</span>
+          <button type="button" class="filter-btn toggle-btn" id="${t1Id(code, "favBtn")}">${icon("star")} 只看收藏<span class="fav-badge"${favCount() ? "" : " hidden"}>${favCount()}</span></button>
+          <span class="filter-group"><span class="filter-label">价格</span>
           <input type="number" id="${t1Id(code, "priceMin")}" class="filter-input" placeholder="最低" min="0">
           <span class="filter-sep">~</span>
-          <input type="number" id="${t1Id(code, "priceMax")}" class="filter-input" placeholder="最高" min="0">
-          <span class="filter-label">上线</span>
+          <input type="number" id="${t1Id(code, "priceMax")}" class="filter-input" placeholder="最高" min="0"></span>
+          <span class="filter-group"><span class="filter-label">上线</span>
           <input type="date" id="${t1Id(code, "dateFrom")}" class="filter-input date-input">
           <span class="filter-sep">~</span>
-          <input type="date" id="${t1Id(code, "dateTo")}" class="filter-input date-input">
-          <span class="filter-label">下线</span>
+          <input type="date" id="${t1Id(code, "dateTo")}" class="filter-input date-input"></span>
+          <span class="filter-group"><span class="filter-label">下线</span>
           <input type="date" id="${t1Id(code, "offFrom")}" class="filter-input date-input">
           <span class="filter-sep">~</span>
-          <input type="date" id="${t1Id(code, "offTo")}" class="filter-input date-input">
+          <input type="date" id="${t1Id(code, "offTo")}" class="filter-input date-input"></span>
           <button type="button" class="filter-btn clear-btn" id="${t1Id(code, "clearFilter")}">清除</button>
         </div>
         <div class="search-wrap"><input type="search" id="${t1Id(code, "search")}" class="search-box" placeholder="搜索名称/资费标准/说明…"><kbd class="search-kbd" title="按 / 快速聚焦">/</kbd></div>
@@ -841,6 +1897,17 @@ function buildDynamicTabs(stats) {
 /* ─────────────── 资费列表 ─────────────── */
 const PAGE_SIZE = 20;
 const listState = {};
+
+/* 卡片形态：list（列表，默认） / card（浮动卡） */
+const CARD_MODE_KEY = "chinamnos_v2_cardmode";
+let cardMode = (() => { try { return localStorage.getItem(CARD_MODE_KEY) === "card" ? "card" : "list"; } catch { return "list"; } })();
+function setCardMode(mode) {
+  cardMode = mode === "card" ? "card" : "list";
+  try { localStorage.setItem(CARD_MODE_KEY, cardMode); } catch {}
+  const root = document.getElementById("tariffRoot") || document;
+  root.querySelectorAll(".view-mode .vm-btn").forEach(b => b.classList.toggle("on", b.dataset.mode === cardMode));
+  root.querySelectorAll(".list").forEach(l => l.classList.toggle("mode-card", cardMode === "card"));
+}
 
 function updateAttrOptions(selId, items) {
   const sel = $(selId);
@@ -959,10 +2026,19 @@ function bindListSection(type1Code) {
       const s = getListState(type1Code + "_" + c);
       const sort = sortBtn.dataset.sort;
       if (sort === "dir") { s.order = (s.order == null ? -1 : s.order) * -1; }
+      else if (s.sort === sort) { s.sort = null; s.order = null; } // 再次点击已激活键 → 取消排序回到默认
       else { s.sort = sort; s.order = sort === "price" ? 1 : -1; }
       s.page = 1;
       syncSortUI(sortBtn.closest(".sort-bar"), s);
       drawList(type1Code, c);
+      return;
+    }
+
+    // 卡片形态切换（列表 / 浮动卡）
+    const modeBtn = t.closest(".view-mode .vm-btn");
+    if (modeBtn && section.contains(modeBtn)) {
+      setCardMode(modeBtn.dataset.mode);
+      drawList(type1Code, getProvCode());
       return;
     }
 
@@ -990,13 +2066,36 @@ function bindListSection(type1Code) {
     const favBtn = t.closest(".fav-btn");
     if (favBtn && section.contains(favBtn)) {
       e.stopPropagation();
-      toggleFavById(favBtn.dataset.favId);
-      const on = isFav(favBtn.dataset.favId);
+      const fid = favBtn.dataset.favId;
+      const s0 = getListState(type1Code + "_" + getProvCode());
+      const item = (s0.items || []).find(x => String(x.id) === String(fid)) || null;
+      toggleFavById(fid, item);
+      const on = isFav(fid);
       favBtn.classList.toggle("on", on);
       favBtn.title = on ? "取消收藏" : "收藏";
       favBtn.innerHTML = icon(on ? "starFill" : "star");
-      const s = getListState(type1Code + "_" + getProvCode());
-      if (s.favOnly) drawList(type1Code, getProvCode());
+      if (s0.favOnly) drawList(type1Code, getProvCode());
+      return;
+    }
+
+    // 复制资费名称 / 概要
+    const copyBtn = t.closest(".copy-btn");
+    if (copyBtn && section.contains(copyBtn)) {
+      e.stopPropagation();
+      const cid = copyBtn.dataset.copyId;
+      const s0 = getListState(type1Code + "_" + getProvCode());
+      const item = (s0.items || []).find(x => String(x.id) === String(cid));
+      if (item) {
+        const mode = copyBtn.dataset.copy;
+        const text = mode === "name" ? String(item.name || "") : summaryOf(item);
+        copyToClipboard(text).then(ok => {
+          if (!ok) return;
+          const old = copyBtn.innerHTML;
+          copyBtn.innerHTML = icon("check");
+          copyBtn.classList.add("ok");
+          setTimeout(() => { copyBtn.innerHTML = old; copyBtn.classList.remove("ok"); }, 1200);
+        });
+      }
       return;
     }
 
@@ -1009,10 +2108,16 @@ function bindListSection(type1Code) {
     // 清除筛选
     if (t.closest("#" + t1Id(type1Code, "clearFilter"))) {
       const s = getListState(type1Code + "_" + getProvCode());
+      s.q = ""; s.attr = ""; s.type2 = "";
       s.zeroOnly = false; s.favOnly = false; s.priceMin = null; s.priceMax = null; s.dateFrom = null; s.dateTo = null; s.offFrom = null; s.offTo = null;
+      s.sort = null; s.order = null;
       zeroBtn.classList.remove("active");
       if (favBtnEl) favBtnEl.classList.remove("active");
+      searchEl.value = "";
+      $(attrId).value = "";
+      $(type2Id).value = "";
       priceMinEl.value = ""; priceMaxEl.value = ""; dateFromEl.value = ""; dateToEl.value = ""; offFromEl.value = ""; offToEl.value = "";
+      syncSortUI($(t1Id(type1Code, "sortBar")), s);
       s.page = 1;
       drawList(type1Code, getProvCode());
       return;
@@ -1033,11 +2138,21 @@ function bindListSection(type1Code) {
       return;
     }
 
-    // 分页
+    // 分页：上一页 / 下一页
     const pageBtn = t.closest('.pager button[data-p]');
     if (pageBtn && section.contains(pageBtn)) {
       const s = getListState(type1Code + "_" + getProvCode());
       s.page += Number(pageBtn.dataset.p);
+      drawList(type1Code, getProvCode());
+      window.scrollTo({top: 0, behavior: "smooth"});
+      return;
+    }
+
+    // 分页：跳转到指定页
+    const pgBtn = t.closest('.pager button[data-pg]');
+    if (pgBtn && section.contains(pgBtn)) {
+      const s = getListState(type1Code + "_" + getProvCode());
+      s.page = Number(pgBtn.dataset.pg);
       drawList(type1Code, getProvCode());
       window.scrollTo({top: 0, behavior: "smooth"});
       return;
@@ -1051,40 +2166,189 @@ function bindListSection(type1Code) {
       return;
     }
 
-    // 条目展开/收起
-    const head = t.closest(".item-head");
-    if (head && section.contains(head)) {
-      const d = head.closest(".item").querySelector(".detail");
-      if (d) d.classList.toggle("open");
+    // 条目展开/收起：卡片形态整卡可点；列表形态整行可点（点击详情内容区不触发展收起）
+    const card = t.closest(".item, .tcard");
+    if (card && section.contains(card)) {
+      if (card.classList.contains("tcard")) {
+        toggleCardDetail(card);
+      } else {
+        // 列表形态：点击详情内容区（fields-table / notes-block）时不触发展收起
+        if (t.closest(".detail")) return;
+        const d = card.querySelector(".detail");
+        if (d) d.classList.toggle("open");
+      }
     }
   });
 }
 
-/* ─────────────── 收藏（localStorage: chinamnos_v2_favs）+ 导出 CSV ─────────────── */
-const FAV_KEY = "chinamnos_v2_favs";
-let FAVS = new Set();
+/* ─────────────── 卡片模式：全宽详情面板 ───────────────
+   点击卡片后，在该卡片所在行的末尾插入一个占满整行的详情面板，
+   避免同行其他卡片被拉高。再次点击同一卡片则收起。 */
+function toggleCardDetail(card) {
+  const list = card.parentElement;
+  if (!list) return;
+
+  // 已存在的全宽详情面板
+  const existing = list.querySelector(".card-detail-panel");
+  const existingFor = existing ? existing.dataset.forCard : null;
+  const cardId = card.dataset.cardId || (card.dataset.cardId = "c_" + Math.random().toString(36).slice(2, 9));
+
+  // 若当前卡片已是展开状态 → 收起
+  if (existing && existingFor === cardId) {
+    closeCardDetail(list);
+    return;
+  }
+
+  // 先移除已有面板（切换到其他卡片时）
+  if (existing) existing.remove();
+
+  // 计算当前列数，找到被点击卡片所在行的末尾卡片
+  const cols = getComputedStyle(list).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
+  const cards = Array.from(list.children).filter(el => el.classList.contains("tcard"));
+  const idx = cards.indexOf(card);
+  const rowStart = Math.floor(idx / cols) * cols;
+  const rowEnd = Math.min(rowStart + cols - 1, cards.length - 1);
+  const anchor = cards[rowEnd];
+
+  // 从卡片内取出详情 HTML（卡片内 .detail 被 CSS 隐藏，仅作内容源）
+  const innerDetail = card.querySelector(".detail");
+  const html = innerDetail ? innerDetail.innerHTML : "";
+
+  const panel = document.createElement("div");
+  panel.className = "card-detail-panel";
+  panel.dataset.forCard = cardId;
+  panel.innerHTML = html; // 包含 .detail-inner > .detail-inner-pad
+
+  // 面板头部：名称 + 价格 + 关闭按钮，明确面板对应的卡片
+  const pad = panel.querySelector(".detail-inner-pad");
+  if (pad) {
+    const name = (card.querySelector(".tc-name") || {}).textContent || "";
+    const price = (card.querySelector(".tc-price") || {}).textContent || "";
+    const head = document.createElement("div");
+    head.className = "cdp-head";
+    head.innerHTML =
+      `<span class="cdp-badge">资费详情</span>` +
+      `<div class="cdp-name">${esc(name)}</div>` +
+      (price ? `<span class="cdp-price">${esc(price)}</span>` : "") +
+      `<button class="cdp-close" type="button" title="收起">` +
+      `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>` +
+      `</button>`;
+    head.querySelector(".cdp-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeCardDetail(list);
+    });
+    pad.prepend(head);
+  }
+
+  // 插入到行末卡片之后
+  anchor.after(panel);
+
+  // 指示箭头：指向源卡片中心，直观关联面板与卡片
+  const arrow = document.createElement("div");
+  arrow.className = "cdp-arrow";
+  panel.prepend(arrow);
+
+  // 高亮当前卡片
+  list.querySelectorAll(".tcard.detail-active").forEach(c => c.classList.remove("detail-active"));
+  card.classList.add("detail-active");
+
+  // 触发展开动画
+  requestAnimationFrame(() => {
+    panel.classList.add("open");
+    const pr = panel.getBoundingClientRect();
+    const cr = card.getBoundingClientRect();
+    const x = Math.max(16, Math.min(cr.left + cr.width / 2 - pr.left, pr.width - 16));
+    arrow.style.setProperty("--ax", x + "px");
+    panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+}
+function closeCardDetail(list) {
+  const panel = list.querySelector(".card-detail-panel");
+  if (!panel) return;
+  panel.classList.remove("open");
+  const onEnd = () => {
+    panel.remove();
+    list.querySelectorAll(".tcard.detail-active").forEach(c => c.classList.remove("detail-active"));
+  };
+  panel.addEventListener("transitionend", onEnd, { once: true });
+  // 兜底：过渡结束事件可能不触发
+  setTimeout(() => { if (panel.parentElement) onEnd(); }, 400);
+}
+
+/* ─────────────── 收藏 v2（localStorage: chinamnos_v2_favs_v2）+ 导出 CSV ───────────────
+   结构：{ [carrier]: { [prov]: { [id]: { n:名称, p:收藏时价格, t:收藏时间 } } } }
+   - 按运营商+省份隔离（用户需求）；id 内含 carrier_prov 前缀
+   - 附快照：条目下架后可在"只看收藏"视图中以快照呈现并标记"已下架"；
+     价格与快照不一致时标记"价格已变"
+   - 旧键 chinamnos_v2_favs（{carrier:[id]}）首次自动迁移：按 id 前缀归省，
+     无法解析的归 "*" 通配桶；旧键保留不删 */
+const FAV_KEY_V2 = "chinamnos_v2_favs_v2";
+const OLD_FAV_KEY = "chinamnos_v2_favs";
+const FAV_LEGACY = "*";
+let RAW_FAVS = {};
+
 function loadFavs() {
-  FAVS = new Set();
+  migrateFavs();
+  try { RAW_FAVS = JSON.parse(localStorage.getItem(FAV_KEY_V2) || "{}") || {}; } catch { RAW_FAVS = {}; }
+  if (typeof RAW_FAVS !== "object") RAW_FAVS = {};
+}
+function migrateFavs() {
   try {
-    const raw = JSON.parse(localStorage.getItem(FAV_KEY) || "{}");
-    const arr = raw[currentCarrier];
-    if (Array.isArray(arr)) arr.forEach(id => FAVS.add(String(id)));
+    if (localStorage.getItem(FAV_KEY_V2)) return;
+    const raw = JSON.parse(localStorage.getItem(OLD_FAV_KEY) || "null");
+    if (!raw || typeof raw !== "object") return;
+    const out = {};
+    Object.keys(raw).forEach(carrier => {
+      const arr = raw[carrier];
+      if (!Array.isArray(arr)) return;
+      const cb = out[carrier] = out[carrier] || {};
+      arr.forEach(id => {
+        const s = String(id);
+        const parts = s.split("_");
+        const prov = parts.length > 2 && /^[a-z]{2,3}$/.test(parts[1]) ? parts[1] : FAV_LEGACY;
+        (cb[prov] = cb[prov] || {})[s] = { t: Date.now() };
+      });
+    });
+    localStorage.setItem(FAV_KEY_V2, JSON.stringify(out));
   } catch {}
+}
+function favBuckets() {
+  // 当前运营商：当前省份桶 + 旧迁移的通配桶
+  const cb = RAW_FAVS[currentCarrier] || {};
+  return [cb[getProvCode()] || {}, cb[FAV_LEGACY] || {}];
+}
+function isFav(id) { const k = String(id); return favBuckets().some(b => Object.prototype.hasOwnProperty.call(b, k)); }
+function favSnap(id) {
+  const k = String(id);
+  const b = favBuckets().find(x => Object.prototype.hasOwnProperty.call(x, k));
+  return b ? b[k] : null;
+}
+function favCount() { return favBuckets().reduce((n, b) => n + Object.keys(b).length, 0); }
+function toggleFavById(id, it) {
+  const k = String(id);
+  const cb = RAW_FAVS[currentCarrier] = RAW_FAVS[currentCarrier] || {};
+  const prov = getProvCode();
+  const pb = cb[prov] = cb[prov] || {};
+  const lb = cb[FAV_LEGACY] = cb[FAV_LEGACY] || {};
+  if (Object.prototype.hasOwnProperty.call(pb, k)) {
+    delete pb[k];
+  } else if (Object.prototype.hasOwnProperty.call(lb, k)) {
+    // 通配桶中取消 → 落到当前省份为未收藏，同时移除通配记录
+    delete lb[k];
+  } else {
+    let p = "";
+    try { p = it ? (repFields(it)["资费标准"] || "") : ""; } catch {}
+    pb[k] = { n: it ? it.name : "", p, t: Date.now() };
+  }
+  saveFavs();
+  refreshFavBadges();
 }
 function saveFavs() {
-  try {
-    let raw = null;
-    try { raw = JSON.parse(localStorage.getItem(FAV_KEY) || "null"); } catch {}
-    if (!raw || typeof raw !== "object") raw = {};
-    raw[currentCarrier] = Array.from(FAVS);
-    localStorage.setItem(FAV_KEY, JSON.stringify(raw));
-  } catch {}
+  try { localStorage.setItem(FAV_KEY_V2, JSON.stringify(RAW_FAVS)); } catch {}
 }
-function isFav(id) { return FAVS.has(String(id)); }
-function toggleFavById(id) {
-  const k = String(id);
-  if (FAVS.has(k)) FAVS.delete(k); else FAVS.add(k);
-  saveFavs();
+function refreshFavBadges() {
+  const n = favCount();
+  document.querySelectorAll(".fav-badge").forEach(b => { b.hidden = !n; b.textContent = n; });
 }
 
 function exportListCsv(type1Code, code) {
@@ -1119,9 +2383,12 @@ function filterItems(st) {
     if (st.type2 && it.type2 !== st.type2) return false;
     if (st.zeroOnly && !isZeroFee(it)) return false;
     if (st.favOnly && !isFav(it.id)) return false;
-    const p = priceOf(it);
-    if (st.priceMin != null && p < st.priceMin) return false;
-    if (st.priceMax != null && p > st.priceMax) return false;
+    if (st.priceMin != null || st.priceMax != null) {
+      const p = priceOf(it);
+      if (isNaN(p)) return false; // 无价格信息的条目不参与价格区间筛选
+      if (st.priceMin != null && p < st.priceMin) return false;
+      if (st.priceMax != null && p > st.priceMax) return false;
+    }
     if (st.dateFrom || st.dateTo) {
       const d = dateOf(repFields(it)["上线日期"]);
       if (st.dateFrom && d < st.dateFrom) return false;
@@ -1129,6 +2396,7 @@ function filterItems(st) {
     }
     if (st.offFrom || st.offTo) {
       const d = dateOf(repFields(it)["下线日期"]);
+      if (!d) return false; // 无下线日期（仍在售）不参与下线范围筛选
       if (st.offFrom && d < st.offFrom) return false;
       if (st.offTo && d > st.offTo) return false;
     }
@@ -1145,9 +2413,11 @@ function repFields(it) {
   return it.fields || {};
 }
 function timeOf(it) {
-  const s = repFields(it)["上线日期"] || "";
-  if (s) { const m = s.match(/20\d{2}/); if (m) return new Date(+m[0], 0, 1).getTime(); }
-  return 0;
+  /* 完整解析「2026年9月30日」等格式到日粒度（复用 dateOf，与日期筛选一致）。
+     旧实现只抓年份（new Date(年,0,1)），同年内全部同键，降序退化成数组原始顺序，
+     导致「最新上架」排序错乱（如 9-30 上架排不过 8 月的老条目） */
+  const d = dateOf(repFields(it)["上线日期"]);
+  return d ? new Date(d + "T00:00:00+08:00").getTime() : 0;
 }
 function dateOf(raw) {
   if (!raw) return "";
@@ -1160,16 +2430,18 @@ function dateOf(raw) {
   return "";
 }
 function priceOf(it) {
-  const raw = repFields(it)["资费标准"] || "";
-  const m = String(raw).match(/\d+(?:\.\d+)?/);
-  return m ? parseFloat(m[0]) : 0;
+  const raw = String(repFields(it)["资费标准"] || "");
+  const m = raw.match(/\d+(?:\.\d+)?/);
+  if (!m) return /免费/.test(raw) ? 0 : NaN; // "免费"视为 0 元，其余无数字视为未知价格
+  return parseFloat(m[0]);
 }
 function isZeroFee(it) {
-  const f = repFields(it);
-  const raw = String(f["资费标准"] || "");
-  if (/免费/.test(raw)) return true;
+  const raw = String(repFields(it)["资费标准"] || "");
   const m = raw.match(/\d+(?:\.\d+)?/);
-  return !!m && Math.abs(parseFloat(m[0])) < 1e-9;
+  // 有明确正价格（如"300元/月（首月免费）"）不算零元
+  if (m && parseFloat(m[0]) >= 0.01) return false;
+  // 其余：含"免费" 或 首数字≈0 视为零元
+  return /免费/.test(raw) || (!!m && parseFloat(m[0]) < 1e-9);
 }
 function zeroRank(it) {
   const f = repFields(it);
@@ -1183,8 +2455,18 @@ function sortFiltered(arr, st) {
   if (!st.sort) return;
   const dir = (st.order == null ? -1 : st.order) < 0 ? -1 : 1;
   arr.sort((a, b) => {
-    const av = st.sort === "price" ? priceOf(a) : timeOf(a);
-    const bv = st.sort === "price" ? priceOf(b) : timeOf(b);
+    if (st.sort === "price") {
+      const av = priceOf(a);
+      const bv = priceOf(b);
+      // 无价格信息（NaN）永远沉底；0 元按真实价格参与排序（升序时 0 元开头）
+      const aNaN = isNaN(av), bNaN = isNaN(bv);
+      if (aNaN && bNaN) return 0;
+      if (aNaN) return 1;
+      if (bNaN) return -1;
+      return (av > bv ? 1 : av < bv ? -1 : 0) * dir;
+    }
+    const av = timeOf(a);
+    const bv = timeOf(b);
     if (av === 0 && bv !== 0) return 1;
     if (bv === 0 && av !== 0) return -1;
     return (av > bv ? 1 : av < bv ? -1 : 0) * dir;
@@ -1198,7 +2480,60 @@ function syncSortUI(bar, st) {
     if (s !== "dir") b.classList.toggle("active", !!st.sort && st.sort === s);
   });
   const d = bar.querySelector('.sort-btn[data-sort="dir"]');
-  if (d) d.textContent = (st.order == null ? -1 : st.order) < 0 ? "降序 ↓" : "升序 ↑";
+  if (d) {
+    d.hidden = !st.sort; // 未选择排序方式时隐藏升/降序按钮
+    d.textContent = (st.order == null ? -1 : st.order) < 0 ? "降序 ↓" : "升序 ↑";
+  }
+}
+
+/* ── 复制资费名称 / 概要 ── */
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).then(() => true, () => legacyCopy(text));
+  }
+  return Promise.resolve(legacyCopy(text));
+}
+function legacyCopy(text) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch (e) { return false; }
+}
+function summaryOf(it) {
+  const f = it.fields || {};
+  const lines = [];
+  if (it.name) lines.push("名称：" + it.name);
+  const mainKeys = ["资费标准","方案编号","资费类型","归属","适用范围","适用地区","上线日期","下线日期","有效期限"];
+  const noteKeys = ["权益","其他说明","超出资费说明","其他服务内容","在网要求","退订方式","违约责任","销售渠道"];
+  const seen = new Set(mainKeys.concat(noteKeys));
+  const push = (k) => {
+    const v = f[k];
+    if (v == null || String(v).trim() === "") return;
+    lines.push(k + "：" + (k === "适用地区" ? areaCn(v) : String(v)));
+  };
+  mainKeys.forEach(push);
+  Object.keys(f).filter(k => !seen.has(k)).forEach(push);
+  noteKeys.forEach(push);
+  return lines.join("\n");
+}
+
+function pgSeq(page, pages) {
+  if (pages <= 9) { const a = []; for (let i = 1; i <= pages; i++) a.push(i); return a; }
+  const seq = [1];
+  if (page > 4) seq.push("…");
+  const st = Math.max(2, page - 2);
+  const en = Math.min(pages - 1, page + 2);
+  for (let i = st; i <= en; i++) seq.push(i);
+  if (page < pages - 3) seq.push("…");
+  seq.push(pages);
+  return seq;
 }
 
 function drawList(type1Code, code) {
@@ -1206,14 +2541,30 @@ function drawList(type1Code, code) {
   const listEl = $(t1Id(type1Code, "list"));
   const pagerEl = $(t1Id(type1Code, "pager"));
   const cntEl = $(t1Id(type1Code, "count"));
+  // 运营商切换后异步回调可能晚于视图重建，分类 DOM 不存在时静默跳过
+  if (!listEl || !pagerEl || !cntEl) return;
   const filtered = filterItems(st);
   if (st.zeroOnly) { filtered.sort((a, b) => zeroRank(a) - zeroRank(b)); }
   else if (st.sort) { sortFiltered(filtered, st); }
+  // 只看收藏：把已下架的收藏条目（快照中存在、当前数据中不存在）追加到结果尾部
+  if (st.favOnly) {
+    const present = new Set(filtered.map(it => String(it.id)));
+    favBuckets().forEach(b => {
+      Object.keys(b).forEach(id => {
+        if (!present.has(id)) {
+          const snap = b[id] || {};
+          filtered.push({ __removed: true, id, name: snap.n || id, snap });
+          present.add(id);
+        }
+      });
+    });
+  }
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   if (st.page > totalPages) st.page = totalPages;
   const start = (st.page - 1) * PAGE_SIZE;
   const pageItems = filtered.slice(start, start + PAGE_SIZE);
-  cntEl.textContent = "共 " + fmt(filtered.length) + " 条";
+  listEl.classList.toggle("mode-card", cardMode === "card");
+  cntEl.textContent = "共 " + fmt(filtered.length) + " 条 · 第 " + st.page + "/" + totalPages + " 页";
 
   if (!pageItems.length) {
     listEl.innerHTML = '<div class="empty">没有匹配的资费条目</div>';
@@ -1221,25 +2572,73 @@ function drawList(type1Code, code) {
     listEl.innerHTML = pageItems.map((it, i) => itemHtml(it, st.changeMap, i)).join("");
   }
 
+  const seq = pgSeq(st.page, totalPages);
   pagerEl.innerHTML =
     `<button ${st.page <= 1 ? "disabled" : ""} data-p="-1">上一页</button>` +
-    `<span class="page-info">第 ${st.page} / ${totalPages} 页</span>` +
+    seq.map(k => k === "…"
+      ? `<span class="pg-dots">…</span>`
+      : `<button class="pg${k === st.page ? " on" : ""}" data-pg="${k}">${k}</button>`).join("") +
     `<button ${st.page >= totalPages ? "disabled" : ""} data-p="1">下一页</button>`;
 }
 
+function favBtnHtml(it, fav) {
+  return `<button type="button" class="fav-btn${fav ? " on" : ""}" data-fav-id="${esc(it.id)}" title="${fav ? "取消收藏" : "收藏"}" aria-label="收藏">${icon(fav ? "starFill" : "star")}</button>`;
+}
+function copyBtnsHtml(it) {
+  return `<button type="button" class="copy-btn" data-copy="name" data-copy-id="${esc(it.id)}" title="复制资费名称" aria-label="复制资费名称">${icon("copy")}</button><button type="button" class="copy-btn" data-copy="summary" data-copy-id="${esc(it.id)}" title="复制资费概要" aria-label="复制资费概要">${icon("list")}</button>`;
+}
+/* 规格标签：流量/宽带/通话/短信（存在才显示；短信从其他服务内容/权益正则提取） */
+function specBrief(it) {
+  const f = it.fields || {};
+  const out = [];
+  const add = (k, v, n) => {
+    let x = String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+    if (!x || /^(无|-|—|\/|暂无|不含)$/.test(x)) return;
+    if (x.length > (n || 14)) x = x.slice(0, n || 14) + "…";
+    out.push({ k, v: x });
+  };
+  add("流量", f["国内通用流量"]);
+  add("宽带", f["宽带"]);
+  add("通话", f["国内通话"]);
+  add("短信", f["短信"]);
+  // 无直接"短信"字段时，从其他服务内容/权益正则提取
+  if (!out.some(x => x.k === "短信")) {
+    const sm = (f["其他服务内容"] || "") + " " + (f["权益"] || "");
+    const m = sm.match(/(\d[\d,]*)\s*条(?:国内)?短信|(?:国内)?短信\s*(\d[\d,]*)\s*条/);
+    if (m) out.push({ k: "短信", v: (m[1] || m[2]) + "条" });
+  }
+  return out;
+}
+function specsHtml(it) {
+  const b = specBrief(it);
+  if (!b.length) return "";
+  return `<div class="specs">${b.map(x => `<span class="spec"><b>${esc(x.k)}</b>${esc(x.v)}</span>`).join("")}</div>`;
+}
+function removedItemHtml(it, idx) {
+  const snap = it.snap || {};
+  const ts = snap.t ? new Date(snap.t).toLocaleDateString() : "";
+  const favBtn = `<button type="button" class="fav-btn on" data-fav-id="${esc(it.id)}" title="移出收藏" aria-label="移出收藏">${icon("starFill")}</button>`;
+  if (cardMode === "card") {
+    let h = `<article class="tcard fav-removed-item" style="--i:${idx}"><div class="tc-head"><div class="tc-name">${esc(it.name)}</div><span class="tag chg-removed">已下架</span></div>`;
+    if (snap.p) h += `<div class="tc-price">${esc(snap.p)}</div>`;
+    if (ts) h += `<div class="tc-date">收藏于 ${esc(ts)}</div>`;
+    h += `<div class="tc-foot"><span></span>${favBtn}</div></article>`;
+    return h;
+  }
+  let h = `<div class="item fav-removed-item" style="--i:${idx}"><div class="item-head"><span class="item-name">${esc(it.name)}</span><span class="item-extras"><span class="tag chg-removed">已下架</span>${ts ? `<span class="fav-ts">收藏于 ${esc(ts)}</span>` : ""}${favBtn}</span></div>`;
+  if (snap.p) h += `<div class="item-facts"><span>收藏时价格 <b>${esc(snap.p)}</b></span></div>`;
+  h += "</div>";
+  return h;
+}
 function itemHtml(it, changeMap, idx) {
+  if (it.__removed) return removedItemHtml(it, idx);
+
   const f = it.fields || {};
   const rf = repFields(it);
   const type1 = t1Label(it.type1);
-  const attr = attrLabel(it.tariff_attr);
   const type2 = t2Label(it.type2);
   const price = rf["资费标准"] || "";
-  const scope = rf["适用范围"] || "";
-  const facts = [];
-  if (scope) facts.push(`<span>适用：${esc(scope)}</span>`);
-  if (rf["国内通话"]) facts.push(`<span>通话 <b>${esc(rf["国内通话"])}</b></span>`);
-  if (rf["国内通用流量"]) facts.push(`<span>流量 <b>${esc(rf["国内通用流量"])}</b></span>`);
-  if (rf["宽带"] && rf["宽带"] !== "无") facts.push(`<span>宽带 <b>${esc(rf["宽带"])}</b></span>`);
+  const fav = isFav(it.id);
 
   const tags = [];
   const chType = changeMap && it.id ? changeMap[it.id] : null;
@@ -1249,14 +2648,42 @@ function itemHtml(it, changeMap, idx) {
   if (type1) tags.push(`<span class="tag attr-${it.type1}">${esc(type1)}</span>`);
   if (type2) tags.push(`<span class="tag type-${it.type2}">${esc(type2)}</span>`);
   if (price) tags.push(`<span class="tag tag-price">${esc(price)}</span>`);
+  if (fav) {
+    const snap = favSnap(it.id);
+    if (snap && snap.p && price && snap.p !== price) tags.push(`<span class="tag chg-changed" title="收藏时：${esc(snap.p)}">价格已变</span>`);
+  }
 
+  const specs = specsHtml(it);
   const hasFields = Object.keys(f).some(k => f[k]);
-  const fav = isFav(it.id);
-  let html = `<div class="item" style="--i:${idx}"><div class="item-head"><span class="item-name">${esc(it.name)}</span>${tags.join("")}<button type="button" class="fav-btn${fav ? " on" : ""}" data-fav-id="${esc(it.id)}" title="${fav ? "取消收藏" : "收藏"}" aria-label="收藏">${icon(fav ? "starFill" : "star")}</button></div>`;
-  if (facts.length) html += `<div class="item-facts">${facts.join("")}</div>`;
-  if (hasFields) html += `<div class="detail"><div class="detail-inner"><div class="detail-inner-pad">${fieldsTable(f)}</div></div></div>`;
+  const detail = hasFields ? `<div class="detail"><div class="detail-inner"><div class="detail-inner-pad">${fieldsTable(f)}</div></div></div>` : "";
 
-  html += "</div>";
+  if (cardMode === "card") {
+    return cardHtml(it, tags, specs, detail, idx, fav);
+  }
+  return listHtml(it, tags, specs, detail, idx, fav);
+}
+function listHtml(it, tags, specs, detail, idx, fav) {
+  const rf = repFields(it);
+  const scope = rf["适用范围"] || "";
+  let html = `<div class="item" style="--i:${idx}"><div class="item-head"><span class="item-name">${esc(it.name)}</span><span class="item-extras">${tags.join("")}${favBtnHtml(it, fav)}${copyBtnsHtml(it)}</span></div>`;
+  if (specs) html += specs;
+  if (scope) html += `<div class="item-facts"><span>适用：${esc(scope)}</span></div>`;
+  html += detail + "</div>";
+  return html;
+}
+function cardHtml(it, tags, specs, detail, idx, fav) {
+  const rf = repFields(it);
+  const price = rf["资费标准"] || "";
+  const scope = rf["适用范围"] || "";
+  const belong = rf["归属"] || "";
+  const online = rf["上线日期"] || "";
+  let html = `<article class="tcard" style="--i:${idx}"><div class="tc-head"><div class="tc-name">${esc(it.name)}</div><div class="tc-actions">${favBtnHtml(it, fav)}${copyBtnsHtml(it)}</div></div>`;
+  if (tags.length) html += `<div class="tc-tags">${tags.join("")}</div>`;
+  if (price) html += `<div class="tc-price">${esc(price)}</div>`;
+  if (specs) html += specs;
+  if (scope) html += `<div class="tc-scope">${esc(scope)}</div>`;
+  if (belong || online) html += `<div class="tc-foot"><span class="tc-bo">${esc(belong || "—")}</span>${online ? `<span class="tc-date">上线 ${esc(online)}</span>` : ""}</div>`;
+  html += detail + "</article>";
   return html;
 }
 
@@ -1289,100 +2716,281 @@ function fieldsTable(f) {
 }
 
 /* ─────────────── 变更日志 ─────────────── */
-const clPageState = {};
+const clPageState = {};   // clKey(code+筛选) → 已显示批次数
+let clProvPending = false; // 直链 #changelog 时省份未就绪的补加载守卫
+let clView = null;        // 变更日志视图数据：{ logs, itemMap, groups, clKey }
+const clOpenOverride = new Map();  // 批次 ts → bool（展开记忆，重渲染不弹回）
+const clSecOverride = new Map();   // ts|type → bool（类型子卡片展开记忆）
+let clForceCollapse = false;       // 「全部收起」后新批次也默认收起
+let clObserver = null;             // 上滑自动加载哨兵 observer
+
+/** 批次时间标签：相对日（今天/昨天）+ 时分；更早为 月-日 时分 */
+function clBatchLabel(ts) {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return String(ts);
+  const now = new Date();
+  const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  const md = (d.getMonth() + 1) + "-" + String(d.getDate()).padStart(2, "0");
+  if (sameDay(d, now)) return "今天 " + hm;
+  if (sameDay(d, new Date(now.getTime() - 86400000))) return "昨天 " + hm;
+  return md + " " + hm;
+}
+
+/* 变更详情弹窗复制：记录当前弹窗对应日志，名称/概要两种文本（概要复用 summaryOf 的字段铺法） */
+let clModalLog = null;
+function clModalCopyText(mode) {
+  const log = clModalLog;
+  if (!log) return "";
+  if (mode === "name") return String(log.name || "");
+  const typeLabel = log.type === "added" ? "新增" : log.type === "removed" ? "下架" : "变更";
+  const lines = [`名称：${log.name || ""}`, `类型：${typeLabel}`, `变更时间：${fmtTime(log.ts)}`];
+  const path = [attrLabel(log.attr), t1Label(log.t1), t2Label(log.t2)].filter(Boolean).join(" · ");
+  if (path) lines.push(`分类：${path}`);
+  const snapItem = clView && clView.itemMap ? clView.itemMap[log.id] : null;
+  const fields = (log.type !== "removed" && snapItem && snapItem.fields) ? snapItem.fields : (log.snapshot || null);
+  if (fields) {
+    // summaryOf 首行即名称，去掉避免重复
+    const body = summaryOf({ name: log.name, fields }).split("\n").slice(1).join("\n");
+    if (body) lines.push(body);
+  } else if (log.diff) {
+    Object.entries(log.diff).forEach(([field, vals]) => {
+      const f = field === "适用地区" ? areaCn(vals[0]) : vals[0];
+      const t = field === "适用地区" ? areaCn(vals[1]) : vals[1];
+      lines.push(`${field}：${f} → ${t}`);
+    });
+  }
+  return lines.join("\n");
+}
+function clModalCopyClick(btn) {
+  const text = clModalCopyText(btn.dataset.mode);
+  if (!text) return;
+  copyToClipboard(text).then((ok) => {
+    if (!ok) return;
+    const old = btn.innerHTML;
+    btn.innerHTML = icon("check");
+    btn.classList.add("ok");
+    setTimeout(() => { btn.innerHTML = old; btn.classList.remove("ok"); }, 1200);
+  });
+}
+
+/** 详情 HTML（弹窗用）：从旧版全量渲染逻辑原样抽出 */
+function clDetailHTML(log, itemMap) {
+  let html = '<div class="tl-body-pad">';
+  const typeLabel = log.type === "added" ? "新增" : log.type === "removed" ? "下架" : "变更";
+  const chipCls = log.type === "added" ? "add" : log.type === "removed" ? "del" : "mod";
+  const aLbl = attrLabel(log.attr);
+  const t1Lbl = t1Label(log.t1);
+  const t2Lbl = t2Label(log.t2);
+  const path = [aLbl, t1Lbl, t2Lbl].filter(Boolean).join(" · ");
+  html += `<div class="tl-chips"><span class="chip ${chipCls}">${typeLabel}</span></div>`;
+  html += `<div class="tl-title">${esc(log.name || "")}</div>`;
+  if (path) html += `<div class="tl-path">${esc(path)}</div>`;
+  html += `<div class="tl-id">ID: ${esc(log.id)}</div>`;
+
+  const snapItem = itemMap[log.id];
+  if (log.type === "added" && snapItem && snapItem.fields) {
+    html += '<div class="tl-detail-title" style="color:var(--green)">新增业务详情：</div>';
+    const flds = snapItem.fields;
+    const fldKeys = Object.keys(flds).filter(k => flds[k]);
+    if (fldKeys.length) {
+      html += '<table class="sub-table">' + fldKeys.map(k => `<tr><th>${esc(k)}</th><td>${esc(k === "适用地区" ? areaCn(flds[k]) : flds[k])}</td></tr>`).join("") + "</table>";
+    }
+  } else if (log.type === "changed" && snapItem && snapItem.fields) {
+    html += '<div class="tl-detail-title" style="color:var(--acc)">字段详情：</div>';
+    const flds = snapItem.fields;
+    const diffFields = log.diff ? Object.keys(log.diff) : [];
+    const fldKeys = Object.keys(flds).filter(k => flds[k]);
+    if (fldKeys.length) {
+      html += '<table class="sub-table">' + fldKeys.map(k => {
+        const isDiff = diffFields.includes(k);
+        if (isDiff && log.diff[k]) {
+          const norm = (v) => k === "适用地区" ? areaCn(v) : v;
+          return `<tr><th>${esc(k)}</th><td><span class="diff-old">${esc(norm(log.diff[k][0]))}</span> <span class="diff-arrow">→</span> <span class="diff-new">${esc(norm(log.diff[k][1]))}</span></td></tr>`;
+        }
+        return `<tr><th>${esc(k)}</th><td>${esc(k === "适用地区" ? areaCn(flds[k]) : flds[k])}</td></tr>`;
+      }).join("") + "</table>";
+    }
+  } else if (log.diff) {
+    html += '<div class="tl-detail-title" style="color:var(--acc)">字段变更：</div>';
+    Object.entries(log.diff).forEach(([field, vals]) => {
+      const norm = (v) => field === "适用地区" ? areaCn(v) : v;
+      html += `<div class="diff-row"><span class="diff-field">${esc(field)}</span><span class="diff-old">${esc(norm(vals[0]))}</span> <span class="diff-arrow">→</span> <span class="diff-new">${esc(norm(vals[1]))}</span></div>`;
+    });
+  }
+
+  if (log.snapshot) {
+    html += '<div class="tl-detail-title" style="color:var(--red)">下架前快照：</div>';
+    const snap2 = log.snapshot || {};
+    const snapKeys = Object.keys(snap2).filter(k => snap2[k]);
+    if (snapKeys.length) {
+      html += '<table class="sub-table">' + snapKeys.map(k => `<tr><th>${esc(k)}</th><td>${esc(k === "适用地区" ? areaCn(snap2[k]) : snap2[k])}</td></tr>`).join("") + "</table>";
+    }
+  }
+  return html + "</div>";
+}
+
+/** 加载更多批次（追加 6 个，重渲染不重新拉数据） */
+function clMoreBatch() {
+  if (!clView || !clView.groups || !clView.clKey) return;
+  const total = clView.groups.length;
+  clPageState[clView.clKey] = Math.min((clPageState[clView.clKey] || 6) + 6, total);
+  clDraw();
+}
+
+/** 全部收起/展开（单按钮互换；清空记忆让默认规则接管） */
+function clToggleAll() {
+  const box = $("changelogBox");
+  if (!box) return;
+  const anyOpen = box.querySelectorAll(".tl-item.open").length > 0;
+  clForceCollapse = anyOpen;
+  clOpenOverride.clear();
+  clSecOverride.clear();
+  const btn = $("clToggleAll");
+  if (btn) btn.innerHTML = icon(anyOpen ? "chevronsUp" : "chevronsDown") + "<span>全部" + (anyOpen ? "展开" : "收起") + "</span>";
+  clDraw();
+}
+
+/** 上滑自动加载：哨兵进入视口即追加下一批，无需点按钮（不支持时降级为按钮） */
+function setupClAutoLoad(totalGroups) {
+  if (clObserver) { try { clObserver.disconnect(); } catch {} clObserver = null; }
+  const sentinel = document.getElementById("clSentinel");
+  if (!sentinel || !clView) return;
+  const shownN = clPageState[clView.clKey] || 6;
+  if (shownN >= totalGroups) return;
+  if (typeof IntersectionObserver === "undefined") {
+    sentinel.innerHTML = '<button type="button" class="load-more-btn cl-more-btn">加载更多批次（剩余 ' + (totalGroups - shownN) + ' 个）</button>';
+    return;
+  }
+  clObserver = new IntersectionObserver((entries) => {
+    if (entries[0] && entries[0].isIntersecting) clMoreBatch();
+  }, { rootMargin: "300px" });
+  clObserver.observe(sentinel);
+}
 
 function renderChangelog() {
   const code = getProvCode();
   const typeFilter = $("cType") ? $("cType").value : "";
   const box = $("changelogBox");
 
+  // 省份尚未就绪（直链 #changelog 早于 STATS 加载完成时 value 为空）：
+  // 不发无效请求，主动拉取 STATS 并经 fillProvSelects → 补渲染
+  if (!code) {
+    box.innerHTML = '<div class="loading">正在加载省份列表…</div>';
+    if (!clProvPending) {
+      clProvPending = true;
+      loadStats().then(s => {
+        STATS = s;
+        clProvPending = false;
+        fillProvSelects();
+      }).catch(() => {
+        clProvPending = false;
+        if ($("changelogBox")) $("changelogBox").innerHTML = '<div class="empty">省份列表加载失败，请刷新重试</div>';
+      });
+    }
+    return;
+  }
   box.innerHTML = '<div class="loading">加载变更记录…</div>';
   Promise.all([loadChangelog(code), loadSnapshot(code).catch(() => null)]).then(([cl, snap]) => {
-    let logs = cl.logs || [];
-    if (typeFilter) logs = logs.filter(l => l.type === typeFilter);
-
+    const logs = cl.logs || [];
     const itemMap = {};
     if (snap && snap.items) snap.items.forEach(it => { if (it.id) itemMap[it.id] = it; });
 
     if (!logs.length) {
       box.innerHTML = '<div class="empty">暂无变更记录</div>';
+      clView = null;
       return;
     }
 
-    const CL_PAGE_SIZE = 50;
-    const clKey = code + "_" + typeFilter;
-    if (!clPageState[clKey]) clPageState[clKey] = 1;
-    const clPage = clPageState[clKey];
-    const display = logs.slice(0, CL_PAGE_SIZE * clPage);
-    let html = '<div class="tl">';
-    display.forEach((log, idx) => {
-      const typeLabel = log.type === "added" ? "新增" : log.type === "removed" ? "下架" : "变更";
-      const chipCls = log.type === "added" ? "add" : log.type === "removed" ? "del" : "mod";
-      const aLbl = attrLabel(log.attr);
-      const t1Lbl = t1Label(log.t1);
-      const t2Lbl = t2Label(log.t2);
-      const path = [aLbl, t1Lbl, t2Lbl].filter(Boolean).join(" · ");
-      const title = log.name || "";
-
-      html += `<div class="tl-item tl-${esc(log.type)}${idx === 0 ? " open" : ""}">`;
-      html += `<div class="tl-head"><span class="tl-type-bar ${chipCls}"></span><div class="tl-time">${fmtTime(log.ts)}</div><span class="tl-arrow"></span></div>`;
-      html += `<div class="tl-body"><div>`;
-      html += `<div class="tl-body-pad">`;
-      html += `<div class="tl-chips"><span class="chip ${chipCls}">${typeLabel}</span></div>`;
-      html += `<div class="tl-title">${esc(title)}</div>`;
-      if (path) html += `<div class="tl-path">${esc(path)}</div>`;
-      html += `<div class="tl-id">ID: ${esc(log.id)}</div>`;
-
-      const snapItem = itemMap[log.id];
-      if (log.type === "added" && snapItem && snapItem.fields) {
-        html += '<div class="tl-detail-title" style="color:var(--green)">新增业务详情：</div>';
-        const flds = snapItem.fields;
-        const fldKeys = Object.keys(flds).filter(k => flds[k]);
-        if (fldKeys.length) {
-          html += '<table class="sub-table">' + fldKeys.map(k => `<tr><th>${esc(k)}</th><td>${esc(k === "适用地区" ? areaCn(flds[k]) : flds[k])}</td></tr>`).join("") + "</table>";
-        }
-      } else if (log.type === "changed" && snapItem && snapItem.fields) {
-        html += '<div class="tl-detail-title" style="color:var(--acc)">字段详情：</div>';
-        const flds = snapItem.fields;
-        const diffFields = log.diff ? Object.keys(log.diff) : [];
-        const fldKeys = Object.keys(flds).filter(k => flds[k]);
-        if (fldKeys.length) {
-          html += '<table class="sub-table">' + fldKeys.map(k => {
-            const isDiff = diffFields.includes(k);
-            if (isDiff && log.diff[k]) {
-              const norm = (v) => k === "适用地区" ? areaCn(v) : v;
-              return `<tr><th>${esc(k)}</th><td><span class="diff-old">${esc(norm(log.diff[k][0]))}</span> <span class="diff-arrow">→</span> <span class="diff-new">${esc(norm(log.diff[k][1]))}</span></td></tr>`;
-            }
-            return `<tr><th>${esc(k)}</th><td>${esc(k === "适用地区" ? areaCn(flds[k]) : flds[k])}</td></tr>`;
-          }).join("") + "</table>";
-        }
-      } else if (log.diff) {
-        html += '<div class="tl-detail-title" style="color:var(--acc)">字段变更：</div>';
-        Object.entries(log.diff).forEach(([field, vals]) => {
-          const norm = (v) => field === "适用地区" ? areaCn(v) : v;
-          html += `<div class="diff-row"><span class="diff-field">${esc(field)}</span><span class="diff-old">${esc(norm(vals[0]))}</span><span class="diff-arrow">→</span><span class="diff-new">${esc(norm(vals[1]))}</span></div>`;
-        });
-      }
-
-      if (log.snapshot) {
-        html += '<div class="tl-detail-title" style="color:var(--red)">下架前快照：</div>';
-        const snap2 = log.snapshot || {};
-        const snapKeys = Object.keys(snap2).filter(k => snap2[k]);
-        if (snapKeys.length) {
-          html += '<table class="sub-table">' + snapKeys.map(k => `<tr><th>${esc(k)}</th><td>${esc(k === "适用地区" ? areaCn(snap2[k]) : snap2[k])}</td></tr>`).join("") + "</table>";
-        }
-      }
-
-      html += "</div></div></div></div>";
-    });
-    html += "</div>";
-    if (logs.length > CL_PAGE_SIZE * clPage) {
-      html += '<div style="text-align:center;padding:12px"><button data-clkey="' + esc(clKey) + '" class="load-more-btn">加载更多（已显示 ' + display.length + ' / ' + logs.length + '）</button></div>';
+    // 类型筛选（内存过滤）：不符合的条目不参与分组 → 所在批次无符合项时整组自然隐藏
+    const filtered = typeFilter ? logs.filter(l => l.type === typeFilter) : logs;
+    if (!filtered.length) {
+      box.innerHTML = `<div class="empty">当前筛选下没有匹配的变更记录（共 ${logs.length} 条记录被过滤）</div>`;
+      clView = null;
+      return;
     }
-    box.innerHTML = html;
+    const cnt = { added: 0, removed: 0, changed: 0 };
+    filtered.forEach(l => { cnt[l.type] = (cnt[l.type] || 0) + 1; });
+
+    // 按采集批次分组：同一轮采集的全部 entries 共用 crawl_time（ts 全值相同），零数据改动
+    const groups = [];
+    const gmap = {};
+    filtered.forEach((log, idx) => {
+      let g = gmap[log.ts];
+      if (!g) { g = { ts: log.ts, items: [] }; gmap[log.ts] = g; groups.push(g); }
+      g.items.push(idx);
+    });
+
+    const clKey = code + "_" + typeFilter;
+    if (!clPageState[clKey]) clPageState[clKey] = 6;
+    clView = { logs: filtered, itemMap, groups, clKey };
+    clDraw();
   }).catch(e => {
     box.innerHTML = '<div class="empty">变更记录加载失败：' + esc(e.message) + ' <button data-act="retryChangelog" class="btn sm soft">重试</button></div>';
   });
+}
+
+/** 渲染时间轴（数据已就绪；加载更多/收展切换只走这里，不重新拉数据） */
+function clDraw() {
+  const box = $("changelogBox");
+  if (!box || !clView) return;
+  const { logs: filtered, groups, clKey } = clView;
+
+  const shownN = Math.min(clPageState[clKey] || 6, groups.length);
+  const shown = groups.slice(0, shownN);
+
+  // 统计条：每次渲染都重建（自动加载重渲染不丢）
+  const cnt = { added: 0, removed: 0, changed: 0 };
+  filtered.forEach(l => { cnt[l.type] = (cnt[l.type] || 0) + 1; });
+
+  const chip = (cls, lbl, n) => `<span class="chip ${cls}">${lbl} ${n}</span>`;
+  let html = `<div class="cl-stats">共 <strong>${filtered.length}</strong> 条变更 · <strong>${groups.length}</strong> 个采集批次
+    <span class="cl-stat-chips">${chip("add", "新增", cnt.added || 0)}${chip("del", "下架", cnt.removed || 0)}${chip("mod", "变更", cnt.changed || 0)}</span></div>`;
+
+  html += '<div class="tl">';
+  shown.forEach((g, gi) => {
+    const tsKey = String(g.ts ?? ("#" + gi));
+    const gc = { added: 0, removed: 0, changed: 0 };
+    g.items.forEach(idx => { const l = filtered[idx]; gc[l.type] = (gc[l.type] || 0) + 1; });
+
+    // 展开状态：用户记忆优先；默认仅最新批次展开（fresh）
+    const fresh = gi === 0;
+    const open = clOpenOverride.has(tsKey) ? clOpenOverride.get(tsKey) : (clForceCollapse ? false : fresh);
+    // 折叠态色条：不用数字堆叠，一眼看出本轮变化的类型构成
+    const bars =
+      (gc.added ? '<i class="b-add" title="有新增"></i>' : "") +
+      (gc.changed ? '<i class="b-mod" title="有变更"></i>' : "") +
+      (gc.removed ? '<i class="b-del" title="有下架"></i>' : "") +
+      (!gc.added && !gc.changed && !gc.removed ? '<i class="b-none" title="无变化"></i>' : "");
+
+    html += `<div class="tl-item${open ? " open" : ""}${fresh ? " fresh" : ""}" data-cts="${esc(tsKey)}" role="button" aria-expanded="${open}">`;
+    html += `<div class="tl-head"><span class="tl-time">${esc(clBatchLabel(g.ts))} 采集</span>${fresh ? '<span class="tl-fresh">最新</span>' : ""}<span class="tl-bars">${bars}</span><span class="tl-arrow"></span></div>`;
+
+    // 展开后：类型子卡片（新增/下架/变更），卡片体为业务胶囊，点击弹窗看详情
+    html += '<div class="tl-sec-list">';
+    ["added", "removed", "changed"].forEach(tp => {
+      if (!gc[tp]) return;
+      const cls = tp === "added" ? "add" : tp === "removed" ? "del" : "mod";
+      const lbl = tp === "added" ? "新增" : tp === "removed" ? "下架" : "变更";
+      const secOpen = clSecOverride.get(tsKey + "|" + tp) === true;
+      html += `<div class="tl-sec-entry${secOpen ? " open" : ""}" data-stype="${tp}">`;
+      html += `<div class="tl-sec-head" role="button" aria-expanded="${secOpen}"><b>${lbl}</b><span class="tl-sec-chips"><span class="chip ${cls}">${gc[tp]} 项</span></span><span class="tl-sec-arrow"></span></div>`;
+      html += '<div class="tl-sec-body"><div class="tl-chipbox">';
+      html += g.items.filter(idx => filtered[idx].type === tp).map(idx => {
+        const log = filtered[idx];
+        return `<a class="tl-chip-btn c-${cls}" href="javascript:void(0)" data-clidx="${idx}" title="点击查看该业务详情">${esc(log.name || "")}</a>`;
+      }).join("");
+      html += '</div></div></div>';
+    });
+    html += '</div></div>';
+  });
+  html += '</div>';
+
+  if (groups.length > shown.length) {
+    html += `<div class="cl-more" id="clSentinel"><span class="cl-hint">上滑加载更多（剩余 ${groups.length - shown.length} 个批次）…</span></div>`;
+  }
+  box.innerHTML = html;
+  setupClAutoLoad(groups.length);
 }
 
 /* ─────────────── 采集监控 ─────────────── */
@@ -1487,9 +3095,10 @@ function renderDiagnostics(diag) {
 }
 
 /* ─────────────── 模态框（<dialog>） ─────────────── */
-function openModal(title, html) {
+function openModal(title, html, footExtra) {
   $("modalTitle").textContent = title;
   $("modalBody").innerHTML = html;
+  $("modalFootExtra").innerHTML = footExtra || "";
   $("modalDlg").showModal();
 }
 function closeModal() {
@@ -1527,11 +3136,89 @@ function initTheme() {
   btn.addEventListener("click", () => { theme.toggle(); paint(); });
 }
 
+/* ─────────────── 省份选择器（带搜索过滤，替代原生 select） ───────────────
+   保留 #gProv 的 value 属性读写与 change 事件，与既有调用点兼容 */
+function buildProvPicker(el) {
+  if (!el || el.dataset.picker) return;
+  el.dataset.picker = "1";
+  el.classList.add("prov-picker");
+  el.innerHTML =
+    `<button type="button" class="prov-toggle" aria-haspopup="listbox" aria-expanded="false"><span class="prov-cur">请选择</span>${icon("chevronDown")}</button>` +
+    `<div class="prov-pop" hidden><div class="prov-search-wrap">${icon("search")}<input type="text" class="prov-search" placeholder="搜索省份…" enterkeyhint="search"></div><ul class="prov-list" role="listbox"></ul></div>`;
+  const toggle = el.querySelector(".prov-toggle");
+  const pop = el.querySelector(".prov-pop");
+  const search = el.querySelector(".prov-search");
+  const list = el.querySelector(".prov-list");
+  const cur = el.querySelector(".prov-cur");
+  let options = [];
+  let value = "";
+  let open = false;
+
+  const curName = () => { const o = options.find(x => x.code === value); return o ? o.name : (value || "请选择"); };
+  function renderList(kw) {
+    const k = (kw || "").trim().toLowerCase();
+    const shown = k ? options.filter(o => o.name.toLowerCase().includes(k) || o.code.toLowerCase().includes(k)) : options;
+    list.innerHTML = shown.map(o => `<li role="option" class="prov-opt${o.code === value ? " sel" : ""}" data-code="${esc(o.code)}">${esc(o.name)}</li>`).join("") || `<li class="prov-empty">无匹配省份</li>`;
+  }
+  function setOpen(v) {
+    open = v;
+    pop.hidden = !v;
+    el.classList.toggle("open", v);
+    toggle.setAttribute("aria-expanded", v ? "true" : "false");
+    if (v) { search.value = ""; renderList(""); setTimeout(() => search.focus(), 0); }
+  }
+  toggle.addEventListener("click", e => { e.stopPropagation(); setOpen(!open); });
+  search.addEventListener("input", () => renderList(search.value));
+  search.addEventListener("keydown", e => {
+    const opts = Array.from(list.querySelectorAll(".prov-opt"));
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!opts.length) return;
+      const i = opts.findIndex(x => x.classList.contains("hl"));
+      const ni = e.key === "ArrowDown" ? (i < 0 ? 0 : Math.min(i + 1, opts.length - 1)) : Math.max(i - 1, 0);
+      opts.forEach(x => x.classList.remove("hl"));
+      opts[ni].classList.add("hl");
+      opts[ni].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      const t = list.querySelector(".prov-opt.hl") || list.querySelector(".prov-opt");
+      if (t) t.click();
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  });
+  list.addEventListener("click", e => {
+    const li = e.target.closest(".prov-opt");
+    if (!li) return;
+    el.value = li.dataset.code;
+    setOpen(false);
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  document.addEventListener("click", e => { if (open && !el.contains(e.target)) setOpen(false); });
+
+  el.setOptions = (opts, defVal) => {
+    options = opts || [];
+    if (!options.some(o => o.code === value)) value = defVal || (options[0] ? options[0].code : "");
+    cur.textContent = curName();
+  };
+  Object.defineProperty(el, "value", {
+    configurable: true,
+    get: () => value,
+    set: v => {
+      if (options.some(o => o.code === v)) {
+        value = v;
+        cur.textContent = curName();
+        list.querySelectorAll(".prov-opt").forEach(x => x.classList.toggle("sel", x.dataset.code === v));
+      }
+    }
+  });
+}
+
 function initProvListeners() {
   const el = $("gProv");
   if (!el) return;
   el.addEventListener("change", () => {
     saveProvCode();
+    updateOfficialLink();
     const v = getProvCode();
     renderDistBars();
     if (STATS) renderProvStatsRow(STATS);
@@ -1543,6 +3230,8 @@ function initProvListeners() {
       else if (id.startsWith("view-t1_")) renderList(id.slice(8));
       else if (id === "view-changelog") renderChangelog();
     }
+    chTabRefresh(true); // 省份变化 → 跳蚤市集 tab 重新探测（显隐与内容随省份联动，与 goProvince 同款）
+    actTabRefreshAndRender(); // 情报酒馆列表随省份联动
   });
   if ($("cType")) $("cType").addEventListener("change", () => renderChangelog());
 }
@@ -1653,10 +3342,11 @@ function onRootClick(e) {
   const actEl = e.target.closest("[data-act]");
   if (actEl) {
     const a = actEl.dataset.act;
-    if (a === "goConfig") { Shell.navigate("/config"); return; }
     if (a === "retryList") { renderList(actEl.dataset.arg); return; }
     if (a === "retryChangelog") { renderChangelog(); return; }
     if (a === "retryMonitor") { renderMonitor(); return; }
+    if (a === "clModalCopy") { clModalCopyClick(actEl); return; }
+    if (a === "actQrDownload") { actQrDownload(actEl.dataset.id, actEl.dataset.title); return; }
   }
 
   const carrierBtn = e.target.closest("[data-carrier]");
@@ -1671,21 +3361,45 @@ function onRootClick(e) {
     return;
   }
 
-  // 变更日志：条目展开/收起
-  const tlHead = e.target.closest(".tl-head");
-  if (tlHead && $("tariffRoot") && $("tariffRoot").contains(tlHead)) {
-    const item = tlHead.closest(".tl-item");
-    if (item) item.classList.toggle("open");
+  // 变更日志：业务胶囊 → 详情弹窗（先于子卡片头/批次头判定）
+  const clChip = e.target.closest(".tl-chip-btn");
+  if (clChip && $("tariffRoot") && $("tariffRoot").contains(clChip)) {
+    const log = clView && clView.logs ? clView.logs[Number(clChip.dataset.clidx)] : null;
+    if (log) {
+      clModalLog = log;
+      openModal(log.name || "变更详情",
+        '<div class="res-row sub">变更时间：' + esc(fmtTime(log.ts)) + "</div>" +
+        clDetailHTML(log, clView.itemMap),
+        `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="name" title="复制资费名称">${icon("copy")}名称</button>` +
+        `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="summary" title="复制资费概要">${icon("list")}概要</button>`);
+    }
     return;
   }
 
-  // 变更日志：加载更多
-  const clMore = e.target.closest(".load-more-btn");
-  if (clMore && clMore.dataset.clkey) {
-    clPageState[clMore.dataset.clkey] = (clPageState[clMore.dataset.clkey] || 1) + 1;
-    renderChangelog();
+  // 变更日志：类型子卡片折叠/展开（记忆用户选择，重渲染不弹回）
+  const clSecHead = e.target.closest(".tl-sec-head");
+  if (clSecHead && $("tariffRoot") && $("tariffRoot").contains(clSecHead)) {
+    const entry = clSecHead.closest(".tl-sec-entry");
+    const item = entry.closest(".tl-item");
+    const open = entry.classList.toggle("open");
+    clSecHead.setAttribute("aria-expanded", open ? "true" : "false");
+    if (item && item.dataset.cts) clSecOverride.set(item.dataset.cts + "|" + (entry.dataset.stype || ""), open);
     return;
   }
+
+  // 变更日志：批次节点展开/收起（记忆用户选择）
+  const clHead = e.target.closest(".tl-item .tl-head");
+  if (clHead && $("tariffRoot") && $("tariffRoot").contains(clHead)) {
+    const item = clHead.closest(".tl-item");
+    const open = item.classList.toggle("open");
+    item.setAttribute("aria-expanded", open ? "true" : "false");
+    if (item.dataset.cts) clOpenOverride.set(item.dataset.cts, open);
+    return;
+  }
+
+  // 变更日志：加载更多（IntersectionObserver 不可用时的兜底按钮）
+  const clMoreBtn = e.target.closest(".cl-more-btn");
+  if (clMoreBtn) { clMoreBatch(); return; }
 
   const tile = e.target.closest(".heatmap-tile");
   if (tile && tile.dataset.code) {
@@ -1727,16 +3441,34 @@ function initTariff() {
   $("refreshBtn").addEventListener("click", doCheck);
 
   navTabs = new Tabs($("mainNav"), onTabChange);
+  navTabs.add("announce", { label: "运营公告", icon: "bell", before: "monitor" }); // 运营公告 tab（数据总览→变更日志→运营公告→采集监控）
+  navTabs.add("chat", { label: "唠嗑聚落", icon: "users", before: "about" }); // 唠嗑聚落 tab（情报酒馆之后、关于之前）
+  navTabs.add("notices", { label: "公告推广", icon: "bell", before: "about" }); // 公告推广 tab（唠嗑聚落之后、关于之前）：弹窗内容随时回看
+  /* 跳蚤市集 tab 内点击路由（onEnter 每次 innerHTML 重建后重绑，旧节点随之丢弃无泄漏） */
+  const chBody = $("chTabBody");
+  if (chBody) chBody.addEventListener("click", chOnBodyClick);
+  /* 情报酒馆 tab 内点击路由（提交面板/撤回） */
+  const actBody = $("actTabBody");
+  if (actBody) actBody.addEventListener("click", actOnBodyClick);
+  /* 公告 tab 内点击路由（筛选/展开/重试；annTabBody 是固定容器，整块重绘不丢监听） */
+  const annBody = $("annTabBody");
+  if (annBody) annBody.addEventListener("click", annOnBodyClick);
+  /* 唠嗑聚落 tab 内点击路由（收录面板/撤回/复制等；chatTabBody 是固定容器） */
+  const chatBody = $("chatTabBody");
+  if (chatBody) chatBody.addEventListener("click", chatOnBodyClick);
+  /* 路由重入（如从管理后台返回）：DOM 已重建，但模块级缓存 dynamicType1Keys 还留着旧值，
+     buildDynamicTabs 的「codes 未变化即 return」守卫会跳过重建，导致侧边栏分类按钮消失。
+     故 onEnter 必须清空该缓存键，强制下次 buildDynamicTabs 全量重挂 */
+  dynamicType1Keys = [];
+  bindTlTip();
+  loadAboutTimeline(); // 关于页时间轴：站长配置优先，未配置保留内置默认
+  loadAboutThanks();   // 关于页鸣谢名单：站长配置（空组隐藏，全空整块隐藏）
+  loadAboutLinks();    // 关于页友情链接：站长配置（空数组整块隐藏；申请走工单预填）
 
-  if ($("clExpandAll")) $("clExpandAll").addEventListener("click", () => {
-    document.querySelectorAll("#changelogBox .tl-item").forEach(el => el.classList.add("open"));
-  });
-  if ($("clCollapseAll")) $("clCollapseAll").addEventListener("click", () => {
-    document.querySelectorAll("#changelogBox .tl-item").forEach(el => el.classList.remove("open"));
-  });
+  if ($("clToggleAll")) $("clToggleAll").addEventListener("click", clToggleAll);
 
   var raw = (location.hash || "").replace("#", "").trim();
-  var staticTabs = ["overview","changelog","monitor","about"];
+  var staticTabs = ["overview","changelog","announce","monitor","cardhub","acts","chat","notices","about"];
   if (staticTabs.includes(raw)) {
     goTab(raw);
   } else if (raw.startsWith("t1_")) {
@@ -1747,18 +3479,483 @@ function initTariff() {
   }
 }
 
+/* ─────────────── 关于页 · 项目历程时间轴（站长在管理中心 about_timeline 配置；内置节点已 seed 进 settings，清空=隐藏区块）
+   ▸ aboutCache 会话级缓存：页面生命周期内只拉一次，之后进关于页零请求即时渲染 ─────────────── */
+const aboutCache = { tl: null, th: null, lk: null };
+function aboutTimelineNodeHTML(n) {
+  return `
+  <div class="tl-node" data-desc="${esc(n.desc || "")}">
+    <div class="tl-time">${esc(n.t || "")}</div>
+    <div class="tl-phase">${esc(n.title || "")}</div>
+    <div class="tl-dot"></div>
+  </div>`;
+}
+function loadAboutTimeline() {
+  const el = $("aboutTl");
+  if (!el) return;
+  const render = (list) => {
+    if (!list.length) { const p = el.closest(".panel"); if (p) p.hidden = true; return; }
+    const panel = el.closest(".panel");
+    if (panel) panel.hidden = false; // 解除初始 hidden（有节点才显示区块）
+    /* 均匀铺满为默认；仅当每列可用宽度不足 160px（节点多或视口窄）时切换横向滚动 */
+    const scroll = list.length > 3 && (el.clientWidth || 0) / list.length < 160;
+    el.innerHTML = `<div class="tl-track${scroll ? " tl-many" : ""}">${list.map(aboutTimelineNodeHTML).join("")}</div>`;
+  };
+  if (aboutCache.tl) { render(aboutCache.tl); return; }
+  /* 快照优先（data/public-config.json 的 about.timeline，下一轮采集更新）；缺失回落 Worker 接口 */
+  getPubConfig().then((pc) => {
+    if (pc && pc.about && pc.about.timeline) { aboutCache.tl = pc.about.timeline; render(aboutCache.tl); return null; }
+    return api.request("/api/about/timeline").then((r) => {
+      aboutCache.tl = r.ok ? (r.data.timeline || []) : [];
+      render(aboutCache.tl);
+    }).catch(() => render([]));
+  }).catch(() => render([]));
+}
+
+/* ─────────────── 关于页 · 鸣谢名单（表格形式 · 类型切换；站长 settings 键 about_thanks 维护；空组隐藏，全空整块隐藏）
+   ▸ 槽位语义按类别：打赏 f1=留言 f2=金额 f3=渠道 f4=时间；反馈 f1=摘要 f2=时间；参考 f1=介绍 f2=参考说明 f3=链接 ─────────────── */
+const THANKS_CATS = [
+  { key: "donor", label: "任意打赏", ic: "coins",
+    cols: ["昵称", "打赏留言", "金额", "渠道", "时间"],
+    cells: [["name", ""], ["f1", "desc"], ["f2", "amt"], ["f3", "chan"], ["f4", "time"]] },
+  { key: "feedback", label: "反馈建议", ic: "message",
+    cols: ["昵称", "建议内容", "时间"],
+    cells: [["name", ""], ["f1", "desc"], ["f2", "time"]] },
+  { key: "ref", label: "参考项目", ic: "box",
+    cols: ["项目名称", "项目介绍", "参考说明"],
+    cells: [["name", "namelink"], ["f1", "desc"], ["f2", "note"]] },
+];
+function loadAboutThanks() {
+  const el = $("aboutThanks");
+  if (!el) return;
+  let groups = {};
+  let cur = "";
+  const render = () => {
+    const secs = THANKS_CATS.filter((c) => (groups[c.key] || []).length);
+    if (!secs.length) { const p = el.closest(".panel"); if (p) p.hidden = true; return; }
+    const panel = el.closest(".panel");
+    if (panel) panel.hidden = false; // 解除初始 hidden（有内容才显示区块）
+    if (!cur || !secs.some((c) => c.key === cur)) cur = secs[0].key;
+    const cat = THANKS_CATS.find((c) => c.key === cur);
+    const items = groups[cur] || [];
+    const cellHTML = (it, [k, cls]) => {
+      const v = String(it[k] || "").trim();
+      if (!v) return `<td class="thx-td-empty">—</td>`;
+      /* namelink：项目名称整格可点（跳该条 f3 链接；无链接则纯文本）——参考项目的链接列已取消 */
+      if (cls === "namelink") {
+        const link = String(it.f3 || "").trim();
+        const inner = `${esc(v)}${/^https?:\/\//i.test(link) ? icon("external") : ""}`;
+        return /^https?:\/\//i.test(link)
+          ? `<td><a class="thx-name-cell" href="${esc(link)}" target="_blank" rel="noopener noreferrer" title="打开 ${esc(link)}">${inner}</a></td>`
+          : `<td class="thx-name-cell">${inner}</td>`;
+      }
+      if (cls === "") return `<td class="thx-name-cell">${esc(v)}</td>`;
+      return `<td><span class="thx-${cls}">${esc(v)}</span></td>`;
+    };
+    el.innerHTML = `
+      <div class="thx-seg">${secs.map((c) => `
+        <button class="seg-btn${c.key === cur ? " active" : ""}" data-thxcat="${c.key}">${icon(c.ic)} ${esc(c.label)}<span class="thx-seg-n">${(groups[c.key] || []).length}</span></button>`).join("")}
+      </div>
+      <div class="thx-table-wrap">
+        <table class="thx-table">
+          <thead><tr>${cat.cols.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+          <tbody>${items.map((it) => `<tr>${cat.cells.map((c2) => cellHTML(it, c2)).join("")}</tr>`).join("")}</tbody>
+        </table>
+      </div>`;
+  };
+  el.onclick = (e) => { // onclick 赋值天然幂等（直链 #about 时 onEnter 可能多次执行）
+    const btn = e.target.closest("[data-thxcat]");
+    if (!btn || btn.dataset.thxcat === cur) return;
+    cur = btn.dataset.thxcat;
+    render();
+  };
+  if (aboutCache.th) { groups = aboutCache.th; render(); return; }
+  /* 快照优先（data/public-config.json 的 about.thanks，下一轮采集更新）；缺失回落 Worker 接口 */
+  getPubConfig().then((pc) => {
+    if (pc && pc.about && pc.about.thanks) { groups = pc.about.thanks; aboutCache.th = groups; render(); return null; }
+    return api.request("/api/about/thanks").then((r) => { groups = r.ok ? (r.data.groups || {}) : {}; aboutCache.th = groups; render(); }).catch(() => { groups = {}; render(); });
+  }).catch(() => { groups = {}; render(); });
+}
+
+/* ─────────────── 关于页 · 友情链接（站长 settings 键 about_links 维护；空数组整块隐藏）
+   ▸ 每条 = 链接名 + 一句话介绍，整条可点跳转（新窗口 nofollow）；「申请友链」走工单通用预填 ─────────────── */
+function loadAboutLinks() {
+  const el = $("aboutLinks");
+  if (!el) return;
+  const render = (links) => {
+    const panel = el.closest(".panel");
+    if (!(links || []).length) { const p = el.closest(".panel"); if (p) p.hidden = true; return; }
+    if (panel) panel.hidden = false;
+    const applyBtn = Auth.isLoggedIn()
+      ? `<button type="button" class="btn ghost sm" data-flink-apply><i data-icon="external"></i>申请友链</button>
+         <span class="hint">收录由站长审核后展示，点此通过工单申请</span>`
+      : `<span class="hint">登录后可通过工单申请友链</span>`;
+    el.innerHTML = `
+      <div class="flink-list">
+        ${links.map((l) => `
+        <a class="flink-row" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow">
+          <span class="flink-name">${esc(l.name)}</span>
+          <span class="flink-descr">${esc(l.descr || "")}</span>
+          <span class="flink-go">${icon("external")}</span>
+        </a>`).join("")}
+      </div>
+      <div class="flink-apply">${applyBtn}</div>`;
+  };
+  el.onclick = (e) => { // onclick 赋值天然幂等（同 loadAboutThanks）
+    const btn = e.target.closest("[data-flink-apply]");
+    if (!btn) return;
+    if (!Auth.isLoggedIn()) { toast("请先登录后再申请友链"); Auth.openLogin(); return; }
+    const okGo = confirm("将前往工单中心提交友情链接申请，分类默认为「其他」。继续？");
+    if (!okGo) return;
+    try {
+      sessionStorage.setItem("chinamnos_ticket_prefill", JSON.stringify({
+        category: "其他",
+        source: "tariff",
+        title: "友情链接申请",
+        content: `站长您好：\n\n我想申请在关于页「友情链接」中收录以下站点：\n\n1. 链接名称：\n2. 一句话介绍：\n3. 链接地址（https:// 开头）：\n\n站点内容简要说明：\n\n期待您的审核，谢谢！`,
+        banner: "已带入友情链接申请模板，请补全链接信息后提交",
+      }));
+    } catch { /* sessionStorage 不可用时跳转后手填 */ }
+    Shell.navigate("/ticket");
+  };
+  if (aboutCache.lk) { render(aboutCache.lk); return; }
+  /* 快照优先（data/public-config.json 的 about.links，下一轮采集更新）；缺失回落 Worker 接口 */
+  getPubConfig().then((pc) => {
+    if (pc && pc.about && pc.about.links) { aboutCache.lk = pc.about.links; render(aboutCache.lk); return null; }
+    return api.request("/api/about/links").then((r) => { aboutCache.lk = r.ok ? (r.data.links || []) : []; render(aboutCache.lk); }).catch(() => { render([]); });
+  }).catch(() => { render([]); });
+}
+/* 描述浮窗：body 直下单例（fixed 定位不受滚动容器裁剪；不可放在 .panel 内——
+   其 backdrop-filter 与入场动画会建立包含块，使 fixed 相对 panel 而非视口定位） */
+let tlTipBound = false;
+function bindTlTip() {
+  if (tlTipBound) return;
+  tlTipBound = true;
+  const box = () => {
+    let b = document.getElementById("tlTipBox");
+    if (!b) {
+      b = document.createElement("div");
+      b.id = "tlTipBox";
+      b.className = "tl-tipbox";
+      document.body.appendChild(b); // body 直下，避开 panel 的包含块影响
+    }
+    return b;
+  };
+  document.addEventListener("mouseover", (e) => {
+    const node = e.target.closest(".tl-node");
+    const b = box();
+    if (!b) return;
+    const desc = node ? (node.dataset.desc || "") : "";
+    if (!node || !desc) { b.classList.remove("show"); return; }
+    b.textContent = desc;
+    const r = node.getBoundingClientRect();
+    const half = 130;
+    let x = r.left + r.width / 2 - half;
+    x = Math.max(10, Math.min(x, window.innerWidth - half * 2 - 10));
+    b.style.left = x + "px";
+    b.style.top = (r.top + 62) + "px"; // dot 行下方固定偏移（time16 + phase22 + dot 区上 10 ≈ 58）
+    b.classList.add("show");
+  });
+  document.addEventListener("mouseout", (e) => {
+    if (e.target.closest && e.target.closest(".tl-node")) { const b = box(); b && b.classList.remove("show"); }
+  });
+}
+
+/* ─────────────── 公告 tab（运营商官方公告监测展示） ───────────────
+   ▸ 数据：./data/{carrier}/announce.json（采集端产出 v=1，规格 docs/announce-monitoring-spec.md §4.3/§五）
+   ▸ 过滤：默认「本省·全国」（province === 当前省短名 || 全国）；「全国」「全部」可切换，选择按运营商记忆
+   ▸ 红点：最新一条 id ≠ localStorage 已读标记 → 侧边栏红点；进入 tab 即写已读
+   ▸ 降级：content 为空的条目（电信瑞数限制等）→ 展开区提示并引导官网外链；正文白名单二次消毒
+   ▸ 隔离：全部 ann 前缀 + .ann-* 样式 + 独立 localStorage 键，不触碰 shell/公共模块/Worker */
+let annProvPending = false; // 直链 #announce 时 STATS 未就绪的补加载守卫（同 changelog clProvPending 模式）
+const annState = {
+  data: {},      // carrier → announce.json（仅 v=1 且 ok 的数据进缓存）
+  loading: {},   // carrier → 进行中的请求 Promise（防并发重拉）
+  scope: "home", // home=本省·全国 | national=全国 | all=全部（渲染时按运营商从 localStorage 恢复）
+};
+const ANN_SAN_TAGS = new Set(["p", "br", "div", "span", "a", "img", "strong", "b", "em", "i", "u", "ul", "ol", "li", "table", "tr", "td", "th", "tbody", "thead", "h1", "h2", "h3", "h4", "blockquote"]);
+const ANN_SAN_STYLE = new Set(["color", "background-color", "text-align", "vertical-align"]);
+const ANN_SCOPE_KEY = () => "chinamnos_an_scope_" + currentCarrier;
+const ANN_READ_KEY = () => "chinamnos_an_read_" + currentCarrier;
+
+function annLoadScope() {
+  try {
+    const s = localStorage.getItem(ANN_SCOPE_KEY());
+    if (s === "home" || s === "national" || s === "all") return s;
+  } catch { /* 隐私模式等忽略 */ }
+  return "home";
+}
+
+/* 独立于 loadJson：announce.json 承载红点判定，始终拉最新（loadJson 有会话内存缓存会掩盖更新） */
+function annFetch(carrier) {
+  return fetchTimeout(`./data/${carrier}/announce.json?v=` + Date.now(), { cache: "no-store" })
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(j => {
+      if (j && j.v === 1 && j.ok && Array.isArray(j.items)) annState.data[carrier] = j;
+      else delete annState.data[carrier];
+      return j;
+    });
+}
+
+function annUnread(carrier) {
+  const d = annState.data[carrier];
+  if (!d || !d.items.length) return false;
+  let read = null;
+  try { read = localStorage.getItem(ANN_READ_KEY()); } catch { /* */ }
+  return d.items[0].id !== read;
+}
+
+function annUpdateDot() {
+  const btn = navTabs && navTabs.nav ? navTabs.nav.querySelector('.nav-item[data-view="announce"]') : null;
+  if (!btn) return;
+  const unread = annUnread(currentCarrier);
+  const dot = btn.querySelector(".ann-navdot");
+  if (unread && !dot) {
+    const el = document.createElement("span");
+    el.className = "ann-navdot";
+    btn.appendChild(el);
+  } else if (!unread && dot) {
+    dot.remove();
+  }
+}
+
+/* 取数入口：有会话缓存直接复用（页面初始化/切运营商时由 annPrefetch 预热），进 tab 零等待 */
+function annTabRefresh() {
+  const c = currentCarrier;
+  if (annState.data[c]) { annUpdateDot(); return Promise.resolve(); }
+  if (!annState.loading[c]) {
+    annState.loading[c] = annFetch(c)
+      .catch(() => { /* 失败与文件缺失同样按「暂无公告源」渲染；此处清态以便下次进 tab 重试 */ })
+      .then(() => { delete annState.loading[c]; annUpdateDot(); });
+  }
+  return annState.loading[c];
+}
+function annPrefetch() { return annTabRefresh(); }
+
+function annRenderIfActive() {
+  const el = $("view-announce");
+  if (el && el.classList.contains("active")) annRenderBody();
+}
+
+function annSetScope(v) {
+  if (v !== "home" && v !== "national" && v !== "all") return;
+  annState.scope = v;
+  try { localStorage.setItem(ANN_SCOPE_KEY(), v); } catch { /* */ }
+  annRenderBody();
+}
+
+/* 正文白名单消毒（采集端 clean_html 之后的第二道防线）：
+   模板内解析不执行脚本；非白名单标签用子节点原位替换（多层嵌套循环收集直至清完），
+   再逐元素清洗属性——a/img 的 URL 校验协议，style 仅保留采集端同款四个属性 */
+function annSanUrl(u) {
+  const v = String(u || "").trim();
+  if (/^https?:/i.test(v) || /^mailto:/i.test(v)) return v;
+  if (/^(\/|\.\/|\.\.\/|#)/.test(v)) return v; // 相对路径兜底（采集端已补全官网域名）
+  return "";
+}
+/* 正文内附件链接去重：源站正文常自带「附件名」链接段（与底部附件 chips 重复），
+   剔除后统一由底部附件区展示；顺带清理附件行紧邻的纯空段，消除大段留白 */
+function annStripAttachments(root, atts) {
+  const norm = s => String(s || "").replace(/\s+/g, "").toLowerCase();
+  const names = new Set((atts || []).map(t => norm(t.name)).filter(Boolean));
+  if (!names.size) return;
+  const emptyBlock = (el) => el && /^(p|div)$/i.test(el.tagName)
+    && !el.textContent.trim() && !el.querySelector("img") && !el.querySelector("a");
+  Array.from(root.querySelectorAll("a")).forEach(a => {
+    if (!names.has(norm(a.textContent))) return;
+    const block = a.closest("p, div, li, blockquote") || a.parentElement;
+    a.remove();
+    if (!block || block.textContent.trim() || block.querySelector("img")) return;
+    let nxt = block.nextElementSibling, prv = block.previousElementSibling;
+    block.remove();
+    while (emptyBlock(nxt)) { const n2 = nxt.nextElementSibling; nxt.remove(); nxt = n2; }
+    while (emptyBlock(prv)) { const p2 = prv.previousElementSibling; prv.remove(); prv = p2; }
+  });
+  /* 纯文本形态兜底：a 标签被清洗剥掉后只剩文件名文字的段落 */
+  Array.from(root.querySelectorAll("p, div")).forEach(el => {
+    if (el.children.length === 0 && names.has(norm(el.textContent))) el.remove();
+  });
+}
+
+function annSanitize(html, atts) {
+  if (!html) return "";
+  const tpl = document.createElement("template");
+  tpl.innerHTML = String(html);
+  for (let guard = 0; guard < 20; guard++) {
+    const bad = [];
+    (function collect(p) {
+      Array.from(p.children).forEach((el) => {
+        if (!ANN_SAN_TAGS.has(el.tagName.toLowerCase())) bad.push(el);
+        collect(el);
+      });
+    })(tpl.content);
+    if (!bad.length) break;
+    bad.forEach((el) => el.replaceWith(...el.childNodes));
+  }
+  tpl.content.querySelectorAll("*").forEach((el) => {
+    const tag = el.tagName.toLowerCase();
+    Array.from(el.attributes).forEach((at) => {
+      const n = at.name.toLowerCase();
+      if ((tag === "a" && n === "href") || (tag === "img" && n === "src")) {
+        const u = annSanUrl(at.value);
+        if (u) el.setAttribute(n, u); else el.removeAttribute(n);
+      } else if (n === "style") {
+        const keep = String(at.value).split(";").map(s => s.trim()).filter(s => {
+          const i = s.indexOf(":");
+          return i > 0 && ANN_SAN_STYLE.has(s.slice(0, i).trim().toLowerCase());
+        }).join("; ");
+        if (keep) el.setAttribute("style", keep); else el.removeAttribute("style");
+      } else if (!((tag === "td" || tag === "th") && (n === "colspan" || n === "rowspan"))) {
+        el.removeAttribute(n);
+      }
+    });
+  });
+  if (atts) annStripAttachments(tpl.content, atts);
+  return tpl.innerHTML;
+}
+
+function annItemHTML(a) {
+  const nat = !a.province;
+  const date = String(a.date || "").slice(5); // 2026-10-12 → 10-12
+  const att = (a.attachments || []).length;
+  return `
+  <div class="ann-item" data-id="${esc(a.id || "")}">
+    <div class="ann-row">
+      <span class="ann-date">${esc(date || "--")}</span>
+      <span class="ann-badge${nat ? " nat" : ""}">${nat ? "全国" : esc(a.province)}</span>
+      <span class="ann-title" title="点击展开/收起正文">${esc(a.title || "（无标题）")}</span>
+      ${att ? `<span class="ann-att">附件 ${att}</span>` : ""}
+      <span class="ann-chev">${icon("chevronDown")}</span>
+    </div>
+  </div>`;
+}
+
+/* 展开正文惰性构建：点开时才从 annState 取数渲染（全量直出数百条正文 DOM 太重）；
+   附件 chips 与「官网原文」轻量链接同行（foot），正文内不再重复出现附件链接段 */
+function annItemBodyHTML(id) {
+  const data = annState.data[currentCarrier];
+  const a = data && (data.items || []).find(x => x.id === id);
+  if (!a) return "";
+  const atts = Array.isArray(a.attachments) ? a.attachments : [];
+  const hasContent = a.content && String(a.content).trim();
+  const foot = (atts.length || a.pageUrl) ? `
+  <div class="ann-foot">
+    ${atts.length ? `<div class="ann-atts">${atts.map(t =>
+      `<a class="ann-att-chip" href="${esc(t.url || "#")}" target="_blank" rel="noopener noreferrer">${icon("download")}${esc(t.name || "附件")}</a>`).join("")}</div>` : ""}
+    ${a.pageUrl ? `<a class="ann-golink" href="${esc(a.pageUrl)}" target="_blank" rel="noopener noreferrer">官网原文 ${icon("external")}</a>` : ""}
+  </div>` : "";
+  return `
+  <div class="ann-body">
+    ${hasContent ? `<div class="ann-html">${annSanitize(a.content, atts)}</div>`
+                 : `<div class="ann-miss">正文暂未采集 · 源站接口限制</div>`}
+    ${foot}
+  </div>`;
+}
+
+function annRenderBody() {
+  const body = $("annTabBody");
+  if (!body) return;
+  const data = annState.data[currentCarrier];
+  const prov = chProvName();
+  annState.scope = annLoadScope();
+  const scope = annState.scope;
+  const brand = (CARRIER_BRAND[currentCarrier] || {}).shortName || "";
+  const segBtn = (v, label) =>
+    `<button type="button" class="ann-seg-btn${scope === v ? " active" : ""}" data-ann="annScope" data-scope="${v}">${label}</button>`;
+  const seg = segBtn("home", "本省·全国") + segBtn("national", "全国") + segBtn("all", "全部");
+  const sub = scope === "home" ? `${esc(prov || "…")} · 本省与全国` : (scope === "national" ? "全国范围" : "全部省份");
+
+  if (!data) {
+    body.innerHTML = `
+      <h1 class="page-title">运营公告</h1>
+      <p class="page-sub">${esc(brand)}官方公告</p>
+      <div class="ann-toolbar"><div class="ann-seg">${seg}</div></div>
+      <div class="ann-empty">${icon("bell", "ann-empty-ic")}<div>该运营商暂无公告源</div>
+        <button type="button" class="ann-retry" data-ann="annRetry">重新加载</button></div>`;
+    return;
+  }
+  /* 本省过滤依赖 STATS 的省名解析；直链 #announce 时主动拉 STATS 并经 fillProvSelects → 补渲染 */
+  if (scope === "home" && !prov) {
+    body.innerHTML = `
+      <h1 class="page-title">运营公告</h1>
+      <p class="page-sub">${esc(brand)}官方公告</p>
+      <div class="ann-toolbar"><div class="ann-seg">${seg}</div></div>
+      <div class="empty" style="padding:40px;text-align:center">正在加载省份信息…</div>`;
+    if (!annProvPending) {
+      annProvPending = true;
+      loadStats().then(s => {
+        STATS = s;
+        annProvPending = false;
+        fillProvSelects();
+      }).catch(() => {
+        annProvPending = false;
+        const b = $("annTabBody");
+        if (b) b.innerHTML = '<div class="empty">省份列表加载失败，请刷新重试</div>';
+      });
+    }
+    return;
+  }
+
+  const items = data.items.filter(a => {
+    if (scope === "national") return !a.province;
+    if (scope === "all") return true;
+    return a.province === prov || !a.province; // home：本省 + 全国
+  });
+  const upd = data.updated
+    ? new Date(data.updated).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : "";
+
+  body.innerHTML = `
+    <h1 class="page-title">运营公告</h1>
+    <p class="page-sub">${esc(brand)}官方公告 · ${sub}<span class="panel-sub">来自官网公开信息，自动采集整理</span></p>
+    <div class="ann-toolbar">
+      <div class="ann-seg">${seg}</div>
+      <span class="ann-meta">共 ${items.length} 条 · 更新于 ${esc(upd)}</span>
+    </div>
+    ${items.length
+      ? `<div class="ann-list">${items.map(annItemHTML).join("")}</div>`
+      : `<div class="ann-empty">${icon("bell", "ann-empty-ic")}<div>${scope === "home" ? "当前省份暂无公告" : "暂无公告"}</div></div>`}`;
+
+  /* 进入 tab 即写已读（按最新一条），红点随之消除 */
+  try { if (data.items[0] && data.items[0].id) localStorage.setItem(ANN_READ_KEY(), data.items[0].id); } catch { /* */ }
+  annUpdateDot();
+}
+
+function annOnBodyClick(e) {
+  const scopeBtn = e.target.closest('[data-ann="annScope"]');
+  if (scopeBtn) { annSetScope(scopeBtn.dataset.scope); return; }
+  if (e.target.closest('[data-ann="annRetry"]')) {
+    delete annState.data[currentCarrier];
+    const body = $("annTabBody");
+    if (body) body.innerHTML = '<div class="empty" style="padding:40px;text-align:center">加载中…</div>';
+    annTabRefresh().then(annRenderBody);
+    return;
+  }
+  /* 附件/官网原文为外链，放行默认行为；标题与整行点击均为展开/收起 */
+  if (e.target.closest(".ann-att-chip") || e.target.closest(".ann-golink")) return;
+  const row = e.target.closest(".ann-row");
+  if (!row) return;
+  const item = row.closest(".ann-item");
+  if (!item) return;
+  if (!item.querySelector(".ann-body")) { // 惰性构建一次，反复开合复用（防重复插入多份正文）
+    const html = annItemBodyHTML(item.dataset.id || "");
+    if (!html) { item.remove(); return; } // 数据已不在（切运营商等）→ 移除空壳
+    item.insertAdjacentHTML("beforeend", html);
+    item.querySelectorAll("img").forEach(im => {
+      im.loading = "lazy";
+      im.referrerPolicy = "no-referrer";
+      im.addEventListener("error", () => im.remove(), { once: true });
+    });
+  }
+  item.classList.toggle("open");
+}
+
 /* ─────────────── 页面注册 ─────────────── */
 Shell.registerPage({
   id: "tariff",
   route: "/",
-  onEnter: function(root) {
-    if (!document.querySelector('link[data-module="tariff"]')) {
-      var link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = Shell.config.base + "modules/tariff/style.css";
-      link.setAttribute("data-module", "tariff");
-      document.head.appendChild(link);
-    }
+  onEnter: async function(root) {
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">
@@ -1776,7 +3973,8 @@ Shell.registerPage({
       <button type="button" class="seg-btn" data-carrier="ctcc">电信</button>
       <button type="button" class="seg-btn" data-carrier="cbn">广电</button>
     </div>
-    <select id="gProv" class="sel topbar-prov"></select>
+    <div id="gProv" class="topbar-prov"></div>
+    <a class="official-link magnetic" id="officialLink" href="https://www.10086.cn/" target="_blank" rel="noopener noreferrer" title="中国移动 · 湖南 网上营业厅"><i data-icon="external"></i><span>去官网</span></a>
   </div>
   <div class="topbar-status">
     <div class="status-pill"><span class="status-dot" id="healthDot"></span><span id="healthText">加载中…</span></div>
@@ -1784,9 +3982,10 @@ Shell.registerPage({
     <div class="status-pill" id="healthMetaPill"><span id="healthMeta"></span></div>
   </div>
   <div class="topbar-actions">
-    <a class="btn ghost magnetic" data-act="goConfig" href="javascript:void(0)" title="配置生成工具"><i data-icon="sliders"></i>配置</a>
+    <div id="appsMenuSlot"></div>
     <button class="icon-btn magnetic" id="themeBtn" title="切换主题"></button>
-    <button class="btn primary magnetic" id="refreshBtn" title="检测资费变化"><i data-icon="refresh"></i>检测</button>
+    <div id="tariffAuthSlot"></div>
+    <button class="btn primary magnetic" id="refreshBtn" title="检测资费变化"><i data-icon="refresh"></i><span class="btn-txt">检测</span></button>
   </div>
 </header>
 
@@ -1799,6 +3998,8 @@ Shell.registerPage({
       <button type="button" class="nav-item" data-view="changelog"><div class="nav-icon"><i data-icon="list"></i></div><span>变更日志</span></button>
       <button type="button" class="nav-item" data-view="monitor"><div class="nav-icon"><i data-icon="radar"></i></div><span>采集监控</span></button>
       <div class="sidebar-divider"></div>
+      <button type="button" class="nav-item" data-view="cardhub" hidden><div class="nav-icon"><i data-icon="box"></i></div><span>跳蚤市集</span></button>
+      <button type="button" class="nav-item" data-view="acts"><div class="nav-icon"><i data-icon="trendingUp"></i></div><span>情报酒馆</span></button>
       <button type="button" class="nav-item" data-view="about"><div class="nav-icon"><i data-icon="info"></i></div><span>关于</span></button>
     </div>
   </nav>
@@ -1807,11 +4008,10 @@ Shell.registerPage({
     <section id="view-overview" class="view active">
       <h1 class="page-title">数据总览</h1>
       <p class="page-sub">实时监控全国及各省资费套餐变化</p>
-      <div class="stat-grid">
-        <div class="stat-card tilt rise" style="--i:0"><div class="stat-info"><div class="stat-label">全网通用资费</div><div class="stat-value accent"><num-ticker id="stNational">-</num-ticker></div></div><div class="stat-icon total">${icon("package")}</div></div>
-        <div class="stat-card tilt rise" style="--i:1"><div class="stat-info"><div class="stat-label">31省资费合计</div><div class="stat-value"><num-ticker id="stTotal">-</num-ticker></div></div><div class="stat-icon sum">${icon("globe")}</div></div>
-        <div class="stat-card tilt rise" style="--i:2"><div class="stat-info"><div class="stat-label">今日新增</div><div class="stat-value green"><num-ticker id="stTodayAdd">-</num-ticker></div></div><div class="stat-icon added">${icon("plusCircle")}</div></div>
-        <div class="stat-card tilt rise" style="--i:3"><div class="stat-info"><div class="stat-label">今日下架</div><div class="stat-value red"><num-ticker id="stTodayRm">-</num-ticker></div></div><div class="stat-icon removed">${icon("minusCircle")}</div></div>
+      <div class="stat-grid" id="ovStatsRow">
+        <div class="stat-card tilt rise" style="--i:0"><div class="stat-info"><div class="stat-label">全网资费总量（去重）</div><div class="stat-value accent"><num-ticker id="stNational">-</num-ticker></div></div><div class="stat-icon total">${icon("package")}</div></div>
+        <div class="stat-card tilt rise" style="--i:1"><div class="stat-info"><div class="stat-label">今日新增</div><div class="stat-value green"><num-ticker id="stTodayAdd">-</num-ticker></div></div><div class="stat-icon added">${icon("plusCircle")}</div></div>
+        <div class="stat-card tilt rise" style="--i:2"><div class="stat-info"><div class="stat-label">今日下架</div><div class="stat-value red"><num-ticker id="stTodayRm">-</num-ticker></div></div><div class="stat-icon removed">${icon("minusCircle")}</div></div>
       </div>
       <div class="stat-grid" id="provStatsRow"></div>
       <div class="panel">
@@ -1848,10 +4048,13 @@ Shell.registerPage({
       <p class="page-sub">资费套餐增删改时间线</p>
       <div class="toolbar htl">
         <select id="cType" class="sel" style="width:auto"><option value="">全部变更</option><option value="added">新增</option><option value="removed">下架</option><option value="changed">变更</option></select>
-        <button type="button" class="btn ghost" id="clExpandAll" title="展开全部记录">${icon("chevronsDown")} 全部展开</button>
-        <button type="button" class="btn ghost" id="clCollapseAll" title="收起全部记录">${icon("chevronsUp")} 全部收起</button>
+        <button type="button" class="btn ghost" id="clToggleAll" title="全部收起/展开">${icon("chevronsDown")}<span>全部收起</span></button>
       </div>
       <div id="changelogBox"><div class="loading">选择省份后加载变更记录…</div></div>
+    </section>
+
+    <section id="view-announce" class="view">
+      <div id="annTabBody"><div class="empty" style="padding:40px;text-align:center">加载中…</div></div>
     </section>
 
     <section id="view-monitor" class="view">
@@ -1879,46 +4082,95 @@ Shell.registerPage({
       </div>
     </section>
 
-    <section id="view-about" class="view">
-      <h1 class="page-title">关于本站</h1>
-      <p class="page-sub">数据来源与系统说明</p>
+    <section id="view-acts" class="view">
+      <div id="actTabBody"><div class="empty" style="padding:40px;text-align:center">加载中…</div></div>
+    </section>
+    <section id="view-chat" class="view">
+      <div id="chatTabBody"><div class="empty" style="padding:40px;text-align:center">加载中…</div></div>
+    </section>
+    <section id="view-cardhub" class="view">
+      <div id="chTabBody"><div class="empty" style="padding:40px;text-align:center">加载中…</div></div>
+    </section>
+    <section id="view-notices" class="view">
+      <h1 class="page-title">公告推广</h1>
+      <p class="page-sub">站点公告 · 活动推广（弹窗内容随时可回看）</p>
+
       <div class="panel">
         <div class="about-text">
-          <p>本站展示中国移动/联通/电信/广电全网及各省公开资费数据，数据由自动监控程序定期采集官网并存入 Cloudflare R2 存储，通过 Worker API 发布为实时数据面板。</p>
+          <h3>${icon("bell", "title-ic")} 站点公告</h3>
+          <div id="ntcNoticeBody"><div class="empty" style="padding:16px;text-align:center">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:16px">
+        <div class="about-text">
+          <h3>${icon("info", "title-ic")} 推广</h3>
+          <div id="ntcPromoChips" style="margin:6px 0 4px;display:flex;gap:8px"></div>
+          <div id="ntcPromosBody"><div class="empty" style="padding:16px;text-align:center">加载中…</div></div>
+        </div>
+      </div>
+    </section>
+    <section id="view-about" class="view">
+      <h1 class="page-title">关于本站</h1>
+      <p class="page-sub">站点简介 · 数据说明 · 项目历程</p>
+
+      <div class="panel" id="aboutTlPanel" hidden>
+        <div class="about-text">
+          <h3>${icon("clock", "title-ic")} 项目历程</h3>
+          <div class="tl" id="aboutTl"><div class="tl-track"></div></div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:16px">
+        <div class="about-text">
+          <h3>${icon("info", "title-ic")} 站点简介</h3>
+          <p class="about-lead">ChinaMNOs 为方便<b>号卡爱好者</b>搭建参考站点，依托自动化程序采集<b>中国移动、中国联通、中国电信、中国广电</b>四大运营商官网公开资费数据，提供全国及分省资费项目的<b>检索、对比与资费变动追踪</b>；平台在此基础上配套<b>号卡信息发布、活动聚合、工具宝库</b>等基础能力。</p>
+          <div class="about-notice">${icon("info")}<span><b>平台定位：</b>ChinaMNOs 定位为资费信息公开平台，无意发展为大型交流论坛，因此将永久不开放论坛社区、用户发帖、交友互动类功能。</span></div>
           <ul>
-            <li><b>数据版本：</b>v4 schema — 扁平化单条资费结构，39标准字段+extra拓展+extra_other兜底</li>
-            <li><b>数据来源：</b>各运营商官网公开资费专区</li>
-            <li><b>采集方式：</b>青龙面板定时任务 → 各运营商采集脚本 → R2 存储 → Worker API</li>
-            <li><b>更新频率：</b>每日两次（08:00 / 20:00），可在配置中调整</li>
-            <li><b>分类体系：</b>归属(个人/政企) × 范围(全网/本省) × 类型(套餐/加装包/营销活动/其他)</li>
-            <li><b>变更追踪：</b>单条资费级变更记录，支持新增/下架/字段修改追踪</li>
-            <li><b>免责声明：</b>展示内容可能存在延迟或误差，办理业务请以各运营商营业厅 / 官方信息为准</li>
+            <li><b>资费监控：</b>全网及分省套餐的快照展示与变更日志，附采集监控与运行诊断</li>
+            <li><b>跳蚤市集：</b>用户发布的求购、出让、出租、求租信息，先审后发，支持站内沟通与联系方式可见性分级</li>
+            <li><b>情报酒馆：</b>官方活动推广与个人攻略发布，用户投稿、管理组审核后公开展示</li>
+            <li><b>工具宝库：</b>用户提交、经审核上架的实用工具导航</li>
+            <li><b>工单系统：</b>用户与管理组之间的正式沟通渠道</li>
           </ul>
         </div>
       </div>
+
       <div class="panel" style="margin-top:16px">
         <div class="about-text">
-          <h3>${icon("sparkles", "title-ic")} 未来工作计划</h3>
+          <h3>${icon("radar", "title-ic")} 数据说明</h3>
           <ul>
-            <li><b>Worker 缓存机制：</b>优化 Worker 响应速度，引入边缘缓存策略，减少 R2 读取频次</li>
-            <li><b>官网跳转：</b>为每个资费套餐提供运营商官网办理入口，一键直达业务页面</li>
-            <li><b>聚集地：</b>搭建用户社区，汇聚资费讨论、套餐推荐、省钱攻略</li>
-            <li><b>资讯瀑布：</b>聚合运营商新闻、资费调整公告、行业动态，瀑布流实时呈现</li>
-            <li><b>友情链接：</b>与同类资费监控、通信行业站点互换链接，共建生态</li>
-            <li><b>友情站点：</b>推荐优质通信工具、号卡比价、携号转网等实用站点</li>
+            <li><b>数据来源：</b>各运营商官方网站公开的资费信息，由自动化程序定期采集</li>
+            <li><b>变更追踪：</b>记录单条资费粒度的历史变更，涵盖新增、下架与字段修改</li>
+            <li><b>采集监控：</b>提供每次采集的覆盖范围、抓取量、耗时与失败原因等诊断信息</li>
           </ul>
+          <p class="hint" style="margin-top:10px"><b>免责声明：</b>本站所载数据均来源于公开渠道的自动化采集，仅作整理与展示之用，可能存在延迟、遗漏或偏差，本站不对其准确性、完整性与时效性作出任何保证。跳蚤市集信息由用户自行发布，本站仅提供信息展示与沟通渠道，不参与任何实际交易环节。办理任何业务请以运营商官方渠道（营业厅、客户端、官方网站）公布的信息为准，由此产生的交易行为请用户自行审慎甄别风险。</p>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:16px" id="aboutThanksPanel" hidden>
+        <div class="about-text">
+          <h3>${icon("coins", "title-ic")} 鸣谢名单</h3>
+          <div id="aboutThanks"></div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:16px" id="aboutLinksPanel" hidden>
+        <div class="about-text">
+          <h3>${icon("external", "title-ic")} 友情链接</h3>
+          <div id="aboutLinks"></div>
         </div>
       </div>
     </section>
   </main>
 </div>
 
-<footer class="foot">ChinaMNOs 资费监控 · 数据仅供个人学习参考</footer>
+<footer class="foot">ChinaMNOs · 数据来自公开渠道自动采集 · 仅供学习参考 · 不为准确性负责 · 办理业务以运营商官方信息为准</footer>
 
 <dialog class="modal" id="modalDlg">
   <div class="modal-head"><span id="modalTitle">提示</span><button class="modal-close" id="modalClose">×</button></div>
   <div class="modal-body" id="modalBody"></div>
-  <div class="modal-foot"><button class="btn primary" id="modalOk">知道了</button></div>
+  <div class="modal-foot"><span class="modal-foot-extra" id="modalFootExtra"></span><button class="btn primary" id="modalOk">知道了</button></div>
 </dialog>
 
 <div class="loading-overlay" id="dataLoading">
@@ -1929,9 +4181,15 @@ Shell.registerPage({
 `;
     mountIcons(document.getElementById("tariffRoot"));
     initFX(document.getElementById("tariffRoot"));
+    mountAuth(document.getElementById("tariffAuthSlot"));
+    mountAppsMenu($("appsMenuSlot"), "tariff");
 
+    /* 幂等注册：onEnter 在特定路由时序下可能连续执行，
+       先摘除旧监听再挂新监听，确保 document 上始终只有一个 */
+    if (_rootClickHandler) document.removeEventListener("click", _rootClickHandler);
     _rootClickHandler = onRootClick;
     document.addEventListener("click", _rootClickHandler);
+    if (_rootKeyHandler) document.removeEventListener("keydown", _rootKeyHandler);
     _rootKeyHandler = onRootKeydown;
     document.addEventListener("keydown", _rootKeyHandler);
 
@@ -1948,8 +4206,8 @@ Shell.registerPage({
     }
     const tip = document.getElementById("provTip");
     if (tip) tip.remove();
+    if (navTabs) { navTabs.destroy(); navTabs = null; }
     root.innerHTML = "";
-    navTabs = null;
     STATS = null;
     Object.keys(TAB_SHOWN).forEach(function(k) { delete TAB_SHOWN[k]; });
     Object.keys(listState).forEach(function(k) { delete listState[k]; });

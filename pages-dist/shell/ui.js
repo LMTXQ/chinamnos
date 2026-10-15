@@ -38,6 +38,7 @@ const ICONS = {
   terminal: '<path d="M4 17l6-6-6-6M12 19h8"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   check: '<path d="M20 6L9 17l-5-5"/>',
@@ -47,6 +48,8 @@ const ICONS = {
   trendingUp: '<path d="M23 6l-9.5 9.5-5-5L1 18"/><path d="M17 6h6v6"/>',
   trendingDown: '<path d="M23 18l-9.5-9.5-5 5L1 6"/><path d="M17 18h6v-6"/>',
   edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+  key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
 
   /* ── 第三轮扩充（参考项目打磨） ── */
   star: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14l-5-4.87 6.91-1.01L12 2z"/>',
@@ -62,6 +65,7 @@ const ICONS = {
   percent: '<path d="M19 5L5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   coins: '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="M16.71 13.88l.7.71-2.82 2.82"/>',
   phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/>',
   wifi: '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M12 20h.01"/>',
   sparkles: '<path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/><path d="M5 3v4M3 5h4M19 17v4M17 19h4"/>',
   hash: '<path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/>',
@@ -69,13 +73,19 @@ const ICONS = {
   arrowRight: '<path d="M5 12h14M12 5l7 7-7 7"/>',
   flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
   layers: '<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>',
-  keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"/>',
+  keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 12h.01M6 12h.01M10 12h.01M14 12h.01M18 8h.01M8 16h8"/>',
+  message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  send: '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><path d="M7 7h.01"/><rect x="14" y="3" width="7" height="7" rx="1"/><path d="M17 7h.01"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M7 17h.01"/><path d="M14 14h1.5v1.5H14zM17.5 14H21M14 17.5v1.5M17.5 17.5h1.5v1.5h-1.5zM20 17.5v3.5M14 21h1.5"/>',
 };
 
 export function icon(name, cls = "") {
   const body = ICONS[name] || ICONS.info;
+  /* width/height 固有尺寸：CSS 未约束的容器中 svg 不再按默认 object size 爆为 300×150；
+     各处 CSS 约束（如 .icon-btn svg{width:15px}）仍优先于属性，不受影响 */
   return (
-    '<svg class="' + cls + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    '<svg class="' + cls + '" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" ' +
     'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     body + "</svg>"
   );
@@ -86,6 +96,27 @@ export function mountIcons(root) {
   (root || document).querySelectorAll("i[data-icon]").forEach((el) => {
     el.outerHTML = icon(el.dataset.icon, el.className || "");
   });
+}
+
+/* ─────────────── Toast 轻提示 ─────────────── */
+let toastEl = null;
+let toastTimer = 0;
+export function toast(msg) {
+  /* 路由切换会重写 body.innerHTML，缓存节点可能已游离文档外，需重建 */
+  if (!toastEl || !document.body.contains(toastEl)) {
+    toastEl = document.createElement("div");
+    toastEl.id = "uiToast";
+    toastEl.style.cssText = "position:fixed;left:50%;top:24px;transform:translateX(-50%) translateY(-20px);background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 18px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:99999;display:flex;align-items:center;gap:8px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;max-width:80vw;word-break:break-all";
+    document.body.appendChild(toastEl);
+  }
+  toastEl.innerHTML = icon("check") + "<span>" + String(msg == null ? "" : msg).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) + "</span>";
+  mountIcons(toastEl);
+  const tsvg = toastEl.querySelector("svg");
+  if (tsvg) { tsvg.style.width = "16px"; tsvg.style.height = "16px"; tsvg.style.flexShrink = "0"; tsvg.style.color = "#22c55e"; }
+  toastEl.style.opacity = "1";
+  toastEl.style.transform = "translateX(-50%) translateY(0)";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastEl.style.opacity = "0"; toastEl.style.transform = "translateX(-50%) translateY(-20px)"; }, 2400);
 }
 
 /* ─────────────── <num-ticker> 数字滚动动画 ─────────────── */
@@ -149,6 +180,26 @@ if (!customElements.get("num-ticker")) {
    tabs.add("tabId", { label: "页签名", icon: "chart", before: "anchorId" });
    tabs.activate("tabId");
 */
+/* 按钮 pending 态：禁点 + .is-pending 样式（theme.css 转圈）+ 防重复点击，fn 结束自动恢复。
+   用法：await withPending(actEl, () => doAsyncThing())；btn 传 null 则只执行不加视觉（如回车提交路径） */
+export async function withPending(btn, fn) {
+  if (btn && btn.dataset.pending === "1") return null;
+  if (btn) {
+    btn.dataset.pending = "1";
+    btn.classList.add("is-pending");
+    if (btn.tagName === "BUTTON") btn.disabled = true;
+  }
+  try {
+    return await fn();
+  } finally {
+    if (btn) {
+      delete btn.dataset.pending;
+      btn.classList.remove("is-pending");
+      if (btn.tagName === "BUTTON") btn.disabled = false;
+    }
+  }
+}
+
 export class Tabs {
   constructor(nav, onChange) {
     this.nav = nav;
@@ -162,8 +213,16 @@ export class Tabs {
       if (!btn || !nav.contains(btn)) return;
       this.activate(btn.dataset.view);
     });
-    window.addEventListener("resize", () => this._moveIndicator());
+    // resize 监听持有具名引用，destroy() 时解绑；_moveIndicator 内部自带 rAF 节流
+    this._onResize = () => this._moveIndicator();
+    window.addEventListener("resize", this._onResize);
     this._raf = 0;
+  }
+
+  /** 页面卸载时调用：解绑全局 resize 监听并移除指示器，防止跨页面泄漏 */
+  destroy() {
+    window.removeEventListener("resize", this._onResize);
+    this.indicator.remove();
   }
 
   /** 动态添加页签；before: 插入到该 data-view 之前 */

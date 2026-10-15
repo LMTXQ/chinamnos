@@ -1,0 +1,14 @@
+# Cloudflare Pages 自定义缓存策略
+# 模块/共享脚本强制协商缓存：部署后所有客户端立即拿到新版本（etag 304/200），
+# 杜绝「页面执行旧 JS」类问题（无需手动 bump 版本参数）
+/modules/*
+  Cache-Control: public, max-age=0, must-revalidate
+
+/shell/*
+  Cache-Control: public, max-age=0, must-revalidate
+
+/frontend-config.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/data/*
+  Cache-Control: public, max-age=300

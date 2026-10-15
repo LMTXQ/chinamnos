@@ -1,0 +1,170 @@
+/* ═══════════════════════════════════════════════════════════════
+   工具箱样式（依赖 shell/theme.css 设计系统，类名前缀 tl-）
+   ═══════════════════════════════════════════════════════════════ */
+
+#toolsRoot { min-height: 100vh; display: flex; flex-direction: column; }
+
+/* ─────────────── 顶栏 ─────────────── */
+.tl-topbar {
+  position: sticky; top: 0; z-index: 100;
+  height: var(--topbar-h);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 22px; gap: 16px;
+  background: color-mix(in oklab, var(--surface) 80%, transparent);
+  backdrop-filter: blur(12px) saturate(1.3);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 85%, transparent);
+}
+.tl-topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.tl-brand { display: flex; align-items: center; gap: 10px; }
+.tl-brand-logo {
+  width: 38px; height: 38px; border-radius: 12px;
+  display: grid; place-items: center; font-size: 18px; font-weight: 900; color: #fff;
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+  box-shadow: 0 4px 14px color-mix(in oklab, var(--acc) 38%, transparent);
+}
+.tl-brand-logo svg { width: 20px; height: 20px; }
+.tl-brand-text {
+  font-size: 16.5px; font-weight: 700; letter-spacing: 0.3px;
+  background: linear-gradient(120deg, var(--txt) 30%, var(--acc));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  white-space: nowrap;
+}
+.tl-topbar-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ─────────────── 内容区 ─────────────── */
+.tl-content { flex: 1; width: 100%; max-width: 1080px; margin: 0 auto; padding: 30px 22px 20px; }
+
+.tl-hero { margin-bottom: 26px; }
+.tl-title {
+  font-size: clamp(22px, 2.4vw, 28px); font-weight: 750; letter-spacing: 0.2px;
+  background: linear-gradient(120deg, var(--txt) 55%, var(--acc));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.tl-sub { font-size: 13.5px; color: var(--sub); margin-top: 6px; }
+.tl-hero-actions { margin-top: 14px; display: flex; gap: 8px; }
+
+/* ─────────────── 分组 ─────────────── */
+.tl-group { margin-bottom: 30px; }
+.tl-group-title {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 14.5px; font-weight: 750; color: var(--txt);
+  margin-bottom: 12px; letter-spacing: 0.3px;
+}
+.tl-group-title svg { width: 15px; height: 15px; color: var(--acc); flex: none; }
+.tl-group-n {
+  font-size: 11px; font-weight: 700; color: var(--sub);
+  background: var(--surface-2); border: 1px solid var(--line);
+  padding: 1px 8px; border-radius: var(--r-full); font-variant-numeric: tabular-nums;
+}
+
+/* ─────────────── 卡片网格 ─────────────── */
+.tl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.tl-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 14px; border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+  box-shadow: var(--shadow-1);
+  text-decoration: none; color: inherit; cursor: pointer;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
+  animation: tlRise 0.3s var(--ease) backwards;
+  animation-delay: calc(var(--i, 0) * 0.03s);
+  min-width: 0;
+}
+@keyframes tlRise { from { opacity: 0; transform: translateY(8px); } }
+.tl-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklab, var(--acc) 45%, var(--line));
+  box-shadow: var(--shadow-2);
+}
+.tl-card:active { transform: scale(0.98); }
+
+.tl-card-ico {
+  width: 40px; height: 40px; border-radius: 11px; flex: none;
+  object-fit: cover; background: var(--surface-2);
+  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
+}
+.tl-ico-txt {
+  display: grid; place-items: center;
+  font-size: 16px; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+  border: none;
+}
+.tl-card-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tl-card-name {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 13.5px; font-weight: 700; color: var(--txt);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tl-card-name svg { width: 12px; height: 12px; color: var(--sub); flex: none; opacity: 0.7; }
+.tl-card:hover .tl-card-name svg { color: var(--acc); opacity: 1; }
+.tl-card-desc {
+  font-size: 12px; color: var(--sub); line-height: 1.45;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ─────────────── 空态 / 加载 ─────────────── */
+.tl-empty { text-align: center; padding: 70px 20px; color: var(--sub); font-size: 14px; }
+.tl-empty-ico {
+  width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 18px;
+  display: grid; place-items: center;
+  background: color-mix(in oklab, var(--acc) 10%, transparent);
+  color: var(--acc);
+}
+.tl-empty-ico svg { width: 26px; height: 26px; }
+.tl-empty-sub { font-size: 12.5px; margin-top: 6px; opacity: 0.8; }
+
+/* ─────────────── 提交面板 ─────────────── */
+.tl-submit-panel { margin: -10px 0 26px; }
+.tl-panel-card {
+  border: 1px solid color-mix(in oklab, var(--acc) 30%, var(--line));
+  border-radius: var(--r-lg);
+  background: color-mix(in oklab, var(--acc) 4%, var(--surface));
+  padding: 18px 20px;
+  box-shadow: var(--shadow-1);
+}
+.tl-panel-title {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 15px; font-weight: 750; color: var(--txt); margin: 0 0 4px;
+}
+.tl-panel-title svg { width: 15px; height: 15px; color: var(--acc); }
+.tl-panel-sub { font-size: 12.5px; color: var(--sub); margin: 0 0 14px; }
+.tl-form { display: flex; flex-direction: column; gap: 10px; }
+.tl-form label {
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: 12.5px; font-weight: 600; color: var(--txt);
+}
+.tl-form .req { color: var(--red); }
+.tl-form .opt { color: var(--sub); font-weight: 400; font-size: 11.5px; }
+.tl-form input {
+  padding: 9px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--txt); font-size: 13px; font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tl-form input:focus {
+  outline: none; border-color: var(--acc);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--acc) 16%, transparent);
+}
+.tl-form-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+/* ─────────────── 页脚 ─────────────── */
+.tl-foot {
+  text-align: center; padding: 18px; font-size: 12px; color: var(--sub);
+  border-top: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
+}
+
+/* ─────────────── 窄屏 ─────────────── */
+@media (max-width: 640px) {
+  .tl-content { padding: 22px 14px 16px; }
+  .tl-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  .tl-card { padding: 11px 12px; gap: 10px; }
+  .tl-card-ico { width: 34px; height: 34px; border-radius: 9px; }
+  .tl-card-desc { display: none; }
+  .tl-brand-text { display: none; }
+}

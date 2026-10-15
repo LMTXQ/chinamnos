@@ -1,0 +1,43 @@
+# Wrangler 部署配置模板：复制为 wrangler.toml 并填入你自己的值（真实 wrangler.toml 已被 gitignore）
+# 前置准备：
+#   1. Cloudflare 账号 + npm i（安装 wrangler）+ npx wrangler login
+#   2. 创建 D1 数据库：npx wrangler d1 create <名称>   → 填入 database_name / database_id
+#      随后执行迁移：npx wrangler d1 migrations apply <数据库名> --remote
+#   3. 创建 R2 桶：npx wrangler r2 bucket create <名称> → 填入 bucket_name
+#   4. 密钥不入本文件，逐个执行：npx wrangler secret put RESEND_API_KEY / CARDHUB_SECRET / TURNSTILE_SECRET
+#      （CARDHUB_SECRET = 32 字节随机十六进制，用于会话签名与联系方式加密）
+
+name = "your-worker-name"
+main = "src/index.ts"
+compatibility_date = "2026-09-27"
+
+# API 自定义域：workers.dev 在大陆被 DNS 污染不可用，建议绑定自有域
+routes = [
+  { pattern = "api.your-domain.com", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "your-d1-name"
+database_id = "your-d1-database-id"
+
+[[r2_buckets]]
+binding = "PROOFS"
+bucket_name = "your-r2-bucket-name"
+
+[observability]
+enabled = true
+
+[vars]
+# 前端来源白名单：站点实际使用的域名（含主域/备线/本地调试）
+ALLOWED_ORIGINS = "https://your-domain.com,http://localhost:3000"
+# 邮件内回执/跳转链接基准域
+PUBLIC_BASE_URL = "https://your-domain.com"
+# 站长邮箱（Resend 注册邮箱）
+OWNER_EMAIL = "you@example.com"
+# 发件人域名（需先在 Resend 完成 DKIM/SPF 验证）
+MAIL_FROM = "noreply@your-domain.com"
+# 单收件人每日上限
+MAIL_DAILY_CAP = "30"
+# Turnstile 站点密钥（公开，前端嵌入用；对应 secret 为 TURNSTILE_SECRET）
+TURNSTILE_SITEKEY = "0x4AAAAAAA_yoursitekey"

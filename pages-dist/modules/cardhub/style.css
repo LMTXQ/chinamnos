@@ -1,0 +1,2019 @@
+/* ═══════════════════════════════════════════════════════════════
+   跳蚤市集 · 精简原型样式
+   沿用 shell/theme.css 设计体系（OKLCH 变量 / 玻璃卡 / .btn / .seg /
+   .nav-item / .status-pill 等直接复用，此处只写 cardhub 专属布局）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────── 顶栏 ─────────────── */
+.ch-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 22px;
+  background: color-mix(in oklab, var(--surface) 80%, transparent);
+  backdrop-filter: blur(12px) saturate(1.3);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 85%, transparent);
+}
+.ch-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ch-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ch-brand-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+  color: #fff;
+  box-shadow: 0 4px 14px color-mix(in oklab, var(--acc) 38%, transparent);
+}
+.ch-brand-logo svg {
+  width: 18px;
+  height: 18px;
+}
+.ch-brand-text {
+  font-size: 16.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.ch-topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.ch-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ch-dev-pill {
+  border-color: color-mix(in oklab, var(--amber) 45%, transparent);
+  color: var(--amber);
+  font-weight: 700;
+}
+.ch-hamburger {
+  display: none;
+}
+
+/* ─────────────── 布局 ─────────────── */
+.ch-layout {
+  display: flex;
+  min-height: calc(100vh - var(--topbar-h));
+}
+.ch-sidebar {
+  width: var(--sidebar-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 14px;
+  position: sticky;
+  top: var(--topbar-h);
+  height: calc(100vh - var(--topbar-h));
+  overflow-y: auto;
+}
+.ch-sidebar-head {
+  display: none; /* 桌面端隐藏，对齐 config 侧边栏 */
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--sub);
+}
+.ch-side-foot {
+  margin-top: auto;
+  padding: 12px;
+  font-size: 11.5px;
+  text-align: center;
+  color: color-mix(in oklab, var(--sub) 75%, transparent);
+}
+.ch-nav-count {
+  margin-left: auto;
+  min-width: 24px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--sub);
+}
+.ch-nav-count.warn {
+  background: color-mix(in oklab, var(--amber) 22%, var(--surface));
+  color: var(--amber);
+}
+.ch-nav-publish {
+  width: 100%;
+  margin: 4px 0 10px;
+}
+/* 毛遂自荐（申请成为卡商担保人 → 工单中心预填） */
+.ch-nav-apply {
+  width: 100%;
+  margin: -4px 0 10px;
+  justify-content: center;
+}
+.ch-content {
+  flex: 1;
+  min-width: 0;
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 26px 28px 60px;
+}
+.ch-sidebar-overlay {
+  display: none;
+}
+
+/* ─────────────── 页头 ─────────────── */
+.ch-board-sub {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sub);
+  margin-left: 10px;
+}
+
+/* ─────────────── 筛选栏 ─────────────── */
+.ch-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.ch-filter-sel {
+  width: 138px;
+  flex: none;
+}
+.ch-search {
+  max-width: 300px;
+}
+.ch-count {
+  font-size: 12.5px;
+  color: var(--sub);
+  margin: 0 2px 10px;
+}
+.ch-count strong {
+  color: var(--acc);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─────────────── 帖子卡片列表 ─────────────── */
+.ch-list {
+  display: grid;
+  gap: 12px;
+}
+.ch-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+.ch-card:hover {
+  border-color: color-mix(in oklab, var(--acc) 38%, transparent);
+  box-shadow: var(--shadow-2);
+}
+.ch-card-side {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+.ch-card-side svg {
+  width: 17px;
+  height: 17px;
+}
+.ch-bc-lost {
+  background: linear-gradient(135deg, var(--amber), color-mix(in oklab, var(--amber) 65%, var(--acc-2)));
+}
+.ch-bc-found {
+  background: linear-gradient(135deg, var(--green), color-mix(in oklab, var(--green) 70%, var(--acc-2)));
+}
+.ch-bc-rent-out,
+.ch-bc-rent-want {
+  background: linear-gradient(135deg, var(--purple), color-mix(in oklab, var(--purple) 70%, var(--acc-deep)));
+}
+.ch-card-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.ch-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ch-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.ch-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ch-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--sub);
+  white-space: nowrap;
+}
+.ch-chip svg {
+  width: 11px;
+  height: 11px;
+}
+/* 卡片规格标签行（资费页 .spec 同款）：【流量 70GB】【宽带 300M】 */
+.ch-card-specs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.ch-spec {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 11.5px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--acc) 9%, transparent);
+  border: 1px solid color-mix(in oklab, var(--acc) 22%, transparent);
+  color: var(--txt);
+  white-space: nowrap;
+}
+.ch-spec b {
+  color: var(--acc);
+  font-weight: 650;
+  margin-right: 2px;
+}
+/* ── 发布表单 multi 字段（多条规格）── */
+.ch-multi {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--surface-2) 55%, transparent);
+  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
+}
+.ch-multi.error {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--red) 12%, transparent);
+}
+.ch-multi-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 紧凑单行：组 chips + 数值 + 删除同行；放不下才允许换行 */
+  flex-wrap: wrap;
+}
+.ch-multi-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* 分组维度：组名 + 组内单选 chips */
+.ch-mgroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ch-mgroup-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--sub);
+  margin-right: 1px;
+  white-space: nowrap;
+}
+.ch-mtag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  padding: 2px 7px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--line);
+  color: var(--sub);
+  cursor: pointer;
+  user-select: none;
+  background: var(--surface);
+  transition: border-color 0.15s, background 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+.ch-mtag input {
+  display: none;
+}
+.ch-mtag.on {
+  border-color: var(--acc);
+  background: color-mix(in oklab, var(--acc) 12%, transparent);
+  color: var(--acc);
+  font-weight: 600;
+}
+/* 特异性高于 theme.css 的 input[type="text"]{width:100%}，否则数值框被撑满整行 */
+.ch-multi .inp.ch-multi-val {
+  width: 130px;
+  flex: none;
+  text-align: right;
+  padding: 6px 8px;
+  height: auto;
+}
+.ch-multi-del {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--sub);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: border-color 0.15s, color 0.15s;
+}
+.ch-multi-del:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+.ch-multi-del svg {
+  width: 13px;
+  height: 13px;
+}
+.ch-multi-add {
+  margin-top: 8px;
+}
+/* 卡片侧块发帖人头像（有图 cover 圆形；无图首字白字，底色沿用板块渐变） */
+.ch-card-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  object-fit: cover;
+  display: block;
+}
+.ch-card-avatar-txt {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+}
+.ch-chip-carrier {
+  color: #fff;
+}
+.ch-chip-carrier.cc-cmcc {
+  background: oklch(58% 0.13 245);
+}
+.ch-chip-carrier.cc-unicom {
+  background: oklch(60% 0.17 30);
+}
+.ch-chip-carrier.cc-telecom {
+  background: oklch(55% 0.13 290);
+}
+.ch-chip-carrier.cc-cbn {
+  background: oklch(58% 0.14 150);
+}
+.ch-policy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.ch-policy-chip svg {
+  width: 12px;
+  height: 12px;
+}
+.pc-public {
+  color: var(--green);
+  background: color-mix(in oklab, var(--green) 12%, transparent);
+  border-color: color-mix(in oklab, var(--green) 25%, transparent);
+}
+.pc-users {
+  color: var(--acc);
+  background: color-mix(in oklab, var(--acc) 10%, transparent);
+  border-color: color-mix(in oklab, var(--acc) 25%, transparent);
+}
+.pc-relay_online {
+  color: var(--purple);
+  background: color-mix(in oklab, var(--purple) 10%, transparent);
+  border-color: color-mix(in oklab, var(--purple) 25%, transparent);
+}
+.pc-relay_owner {
+  color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 12%, transparent);
+  border-color: color-mix(in oklab, var(--amber) 28%, transparent);
+}
+.ch-price {
+  font-size: 12.5px;
+  color: var(--sub);
+}
+.ch-price b {
+  font-size: 15.5px;
+  color: var(--txt);
+  font-variant-numeric: tabular-nums;
+}
+.ch-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--sub);
+  white-space: nowrap;
+}
+.ch-time svg {
+  width: 12px;
+  height: 12px;
+}
+.ch-card-arrow {
+  flex: none;
+  color: var(--sub);
+  opacity: 0.55;
+  transition: transform 0.25s var(--ease), opacity 0.25s var(--ease);
+}
+.ch-card-arrow svg {
+  width: 15px;
+  height: 15px;
+}
+.ch-card:hover .ch-card-arrow {
+  transform: translateX(4px);
+  opacity: 1;
+  color: var(--acc);
+}
+
+/* ─────────────── 空态 ─────────────── */
+.ch-empty {
+  text-align: center;
+  padding: 52px 20px;
+  border: 1.5px dashed color-mix(in oklab, var(--line) 90%, transparent);
+  border-radius: var(--r-lg);
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+.ch-empty-ic {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  color: var(--sub);
+  margin-bottom: 6px;
+}
+.ch-empty-ic svg {
+  width: 24px;
+  height: 24px;
+}
+.ch-empty-t {
+  font-size: 15px;
+  font-weight: 700;
+}
+.ch-empty-s {
+  font-size: 12.5px;
+  color: var(--sub);
+}
+.ch-empty-s code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--surface-2);
+  padding: 1px 7px;
+  border-radius: 6px;
+}
+.ch-mt {
+  margin-top: 14px;
+}
+
+/* ─────────────── 详情 ─────────────── */
+.ch-back {
+  margin-bottom: 14px;
+}
+/* 管理员看他人帖：返回 + 管理下架同行工具条（替代孤立按钮行） */
+.ch-detail-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.ch-detail-top .ch-back { margin-bottom: 0; }
+/* 收藏按钮（详情工具条右端）：已收藏态琥珀色高亮 */
+.ch-detail-top .ch-fav { margin-left: auto; }
+.ch-fav.on { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 40%, transparent); }
+/* 列表卡「精华」徽章 */
+.ch-chip-pin { background: color-mix(in oklab, var(--amber) 14%, transparent); color: var(--amber); font-weight: 700; }
+.ch-chip-pin svg { width: 11px; height: 11px; }
+/* 列表卡「板块」徽章（跨板块混排场景，如资费页跳蚤市集 tab） */
+.ch-chip-board { background: color-mix(in oklab, var(--acc) 12%, transparent); color: var(--acc); font-weight: 700; }
+/* 资费页跳蚤市集 tab：列表底部导流 */
+.ch-more { display: flex; justify-content: center; margin-top: 16px; }
+/* 收藏列表：失效帖计数弱化 */
+.ch-conv-count.dim { color: var(--sub); font-weight: 600; }
+.ch-self-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 16px;
+  border-radius: var(--r-md);
+  margin-bottom: 12px;
+  border: 1px solid transparent;
+}
+.ch-self-bar svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.sb-open {
+  color: var(--green);
+  background: color-mix(in oklab, var(--green) 10%, transparent);
+  border-color: color-mix(in oklab, var(--green) 25%, transparent);
+}
+.sb-pending {
+  color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 10%, transparent);
+  border-color: color-mix(in oklab, var(--amber) 28%, transparent);
+}
+.sb-rejected {
+  color: var(--red);
+  background: color-mix(in oklab, var(--red) 8%, transparent);
+  border-color: color-mix(in oklab, var(--red) 25%, transparent);
+}
+.ch-detail {
+  padding: 24px 26px;
+}
+.ch-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 18px;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 75%, transparent);
+}
+.ch-detail-side {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+.ch-detail-side svg {
+  width: 24px;
+  height: 24px;
+}
+.ch-detail-headmain {
+  flex: 1;
+  min-width: 240px;
+  display: grid;
+  gap: 9px;
+}
+.ch-detail-title {
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+.ch-detail-price {
+  text-align: right;
+  font-size: 12.5px;
+  color: var(--sub);
+  white-space: nowrap;
+}
+.ch-detail-price b {
+  display: block;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--acc);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+/* ── 车队风险声明横幅（详情页置顶；琥珀警示色，发布者声明的掉包/扣款等风险） ── */
+.ch-risk-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--amber) 9%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--amber) 38%, transparent);
+}
+.ch-risk-banner svg { flex: none; width: 16px; height: 16px; margin-top: 2px; color: var(--amber); }
+.ch-risk-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ch-risk-main b { font-size: 12.5px; color: var(--txt); }
+.ch-risk-main span { font-size: 12.5px; line-height: 1.7; color: var(--sub); overflow-wrap: anywhere; }
+.ch-dt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px 22px;
+  padding: 16px 0 4px;
+}
+
+/* ── 作者资料行（详情页）：点头像/昵称弹公开资料卡 ── */
+.ch-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 8px 14px 8px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface-2) 60%, transparent);
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease), transform 0.15s var(--spring);
+}
+.ch-author:hover {
+  border-color: var(--acc);
+  transform: translateY(-1px);
+}
+.ch-author-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+}
+.ch-author-txt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+.ch-author-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--txt);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-author-ct {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--sub);
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-author-ct.dim { color: color-mix(in oklab, var(--sub) 70%, transparent); }
+.ch-author-ct svg { width: 13px; height: 13px; flex: none; }
+/* 详情页发布人头衔徽章 */
+.ch-author-title {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--acc);
+  background: color-mix(in oklab, var(--acc) 10%, transparent);
+  border: 1px solid color-mix(in oklab, var(--acc) 30%, transparent);
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  white-space: nowrap;
+}
+.ch-dt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13.5px;
+  padding: 4px 0;
+  border-bottom: 1px dashed color-mix(in oklab, var(--line) 55%, transparent);
+}
+.ch-dt-k {
+  color: var(--sub);
+  flex: none;
+}
+.ch-dt-v {
+  font-weight: 600;
+  text-align: right;
+  word-break: break-all;
+}
+.ch-descr {
+  padding: 16px 0 6px;
+}
+.ch-sec-t {
+  font-size: 14.5px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ch-descr p {
+  font-size: 14px;
+  line-height: 1.85;
+  color: var(--txt);
+  white-space: pre-wrap;
+}
+
+/* 联系区 */
+.ch-contact {
+  margin-top: 16px;
+  padding: 18px;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--acc) 4%, var(--surface-2));
+  border: 1px solid color-mix(in oklab, var(--acc) 14%, transparent);
+}
+.ch-contact-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+}
+.ch-contact-item + .ch-contact-item {
+  margin-top: 8px;
+}
+.ch-contact-ch {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--acc);
+  flex: none;
+  width: 38px;
+}
+.ch-contact-val {
+  font-family: var(--mono);
+  font-size: 14px;
+  flex: 1;
+  word-break: break-all;
+}
+/* 渠道/锁定块统一卡片化：多渠道共存时区块间有呼吸感 */
+.ch-contact-lock,
+.ch-contact-online,
+.ch-contact-block {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+  border-radius: 12px;
+}
+.ch-contact-block {
+  display: grid;
+  gap: 8px;
+}
+/* 互动渠道栅格 + 小节分隔（直联方式与渠道卡之间） */
+.ch-contact-channels { display: grid; gap: 10px; margin-top: 10px; }
+.ch-contact-channels-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--sub);
+}
+.ch-contact-channels-head::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in oklab, var(--line) 75%, transparent);
+}
+.ch-contact-lock > svg,
+.ch-contact-online > svg,
+.ch-contact-owner > svg {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  color: var(--acc);
+}
+.ch-contact-lock > div,
+.ch-contact-online > div,
+.ch-contact-owner > div {
+  flex: 1;
+  min-width: 200px;
+  display: grid;
+  gap: 2px;
+}
+.ch-contact-lock b,
+.ch-contact-online b,
+.ch-contact-owner b {
+  font-size: 14.5px;
+}
+.ch-contact-lock span,
+.ch-contact-online span,
+.ch-contact-owner span {
+  font-size: 12.5px;
+  color: var(--sub);
+}
+.ch-contact-owner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.ch-contact-owner-alt {
+  margin-top: 0;
+  font-size: 13px;
+  color: var(--sub);
+}
+.ch-contact-owner-alt code {
+  font-family: var(--mono);
+  background: var(--surface);
+  padding: 2px 9px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+}
+/* 访客注册引导条（联系方式区内） */
+.ch-contact-guide {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px dashed color-mix(in oklab, var(--acc) 40%, transparent);
+  border-radius: 10px;
+  color: var(--sub);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ch-contact-guide>svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--acc);
+}
+.ch-contact-guide span {
+  flex: 1;
+}
+.ch-contact-guide .btn {
+  flex: none;
+}
+
+/* ─────────────── 发布表单 ─────────────── */
+.ch-form {
+  padding: 24px 26px 26px;
+}
+.ch-fg {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.ch-fg > label {
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ch-fg .hint {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--sub);
+}
+.ch-req {
+  color: var(--red);
+  font-weight: 800;
+}
+.ch-f-row {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+.ch-f-row.ch-f-2 {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.ch-f-row.ch-f-3 {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.ch-form-sep {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--txt);
+  margin: 22px 0 14px;
+  padding-top: 18px;
+  border-top: 1px solid color-mix(in oklab, var(--line) 75%, transparent);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ch-form-sep .hint {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--sub);
+}
+.ch-form-seg {
+  width: fit-content;
+}
+.ch-price-input {
+  font-family: var(--mono);
+}
+.ch-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.ch-policy-card {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px 12px 38px;
+  border-radius: var(--r-md);
+  border: 1.5px solid color-mix(in oklab, var(--line) 85%, transparent);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.25s var(--ease), background 0.25s var(--ease),
+    box-shadow 0.25s var(--ease);
+}
+.ch-policy-card:hover {
+  border-color: color-mix(in oklab, var(--acc) 40%, transparent);
+}
+.ch-policy-card input[type="radio"] {
+  position: absolute;
+  left: 13px;
+  top: 16px;
+  margin: 0;
+}
+.ch-policy-name {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.ch-policy-desc {
+  font-size: 11.5px;
+  color: var(--sub);
+  line-height: 1.5;
+}
+.ch-policy-card.active {
+  border-color: var(--acc);
+  background: color-mix(in oklab, var(--acc) 7%, var(--surface));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--acc) 15%, transparent);
+}
+.ch-policy-card.active .ch-policy-name {
+  color: var(--acc);
+}
+/* 「站长中转」未满足前置条件（交易方式含站点担保）时的锁定态 */
+.ch-policy-card.locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ch-policy-card.locked:hover {
+  border-color: color-mix(in oklab, var(--line) 85%, transparent);
+}
+
+/* ── 交易方式（多选，选填） ── */
+.ch-trade-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.ch-trade-card {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px 12px 38px;
+  border-radius: var(--r-md);
+  border: 1.5px solid color-mix(in oklab, var(--line) 85%, transparent);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.25s var(--ease), background 0.25s var(--ease),
+    box-shadow 0.25s var(--ease);
+}
+.ch-trade-card:hover {
+  border-color: color-mix(in oklab, var(--acc) 40%, transparent);
+}
+.ch-trade-card input[type="checkbox"] {
+  position: absolute;
+  left: 13px;
+  top: 16px;
+  margin: 0;
+}
+.ch-trade-name {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.ch-trade-desc {
+  font-size: 11.5px;
+  color: var(--sub);
+  line-height: 1.5;
+}
+.ch-trade-desc.warn {
+  color: var(--red);
+  font-weight: 600;
+}
+.ch-trade-card.active {
+  border-color: var(--acc);
+  background: color-mix(in oklab, var(--acc) 7%, var(--surface));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--acc) 15%, transparent);
+}
+.ch-trade-card.active .ch-trade-name {
+  color: var(--acc);
+}
+.ch-trade-note {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--sub);
+}
+.ch-trade-note svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+/* ── 详情页交易方式区块 ── */
+.ch-trade-box {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--surface-2) 55%, transparent);
+  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
+}
+.ch-trade-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ch-trade-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  background: color-mix(in oklab, var(--acc) 10%, transparent);
+  color: var(--acc);
+}
+.ch-trade-chip.warn {
+  background: color-mix(in oklab, var(--red) 10%, transparent);
+  color: var(--red);
+}
+.ch-trade-warnline,
+.ch-trade-hintline {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 8px;
+}
+.ch-trade-warnline {
+  color: var(--red);
+  font-weight: 600;
+}
+.ch-trade-hintline {
+  color: var(--sub);
+}
+.ch-trade-warnline svg,
+.ch-trade-hintline svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  margin-top: 3px;
+}
+.ch-merchants {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ch-merchants-t {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--sub);
+}
+.ch-merchant-item {
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+/* tags 类型字段（号码特征等）：chips 行 */
+.ch-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+/* 发布表单联系方式多行列表 */
+.ch-contacts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ch-contact-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ch-contact-row .ch-contact-ch {
+  width: 110px;
+  flex: none;
+}
+.ch-contact-row .ch-contact-val {
+  flex: 1;
+  min-width: 0;
+}
+.ch-contacts-empty {
+  font-size: 12px;
+  color: var(--sub);
+  padding: 6px 0;
+}
+#chChatRow.dim {
+  opacity: 0.45;
+  transition: opacity 0.25s var(--ease);
+}
+#chChatRow.dim:focus-within {
+  opacity: 1;
+}
+#chChatRow.error .ch-contacts-empty {
+  color: var(--red);
+}
+/* 证明材料（发布表单 + 详情页） */
+.ch-proof-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ch-proof-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ch-proof-thumb {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.ch-proof-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ch-proof-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.ch-proof-del svg {
+  width: 12px;
+  height: 12px;
+}
+.ch-proof-pub {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--sub);
+  cursor: pointer;
+}
+#chProofRow.error .ch-proof-list:empty::after,
+#chProofRow.error .ch-contacts-empty {
+  color: var(--red);
+}
+#chProofRow.error {
+  outline: 1px dashed color-mix(in oklab, var(--red) 55%, transparent);
+  outline-offset: 4px;
+  border-radius: var(--r-sm);
+}
+.ch-proof-box {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--surface-2) 55%, transparent);
+  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
+}
+.ch-proof-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.ch-proof-a {
+  width: 120px;
+  height: 120px;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  display: block;
+  cursor: zoom-in;
+}
+.ch-proof-a img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ch-proof-a.dead {
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--sub);
+}
+.ch-proof-a.dead::after {
+  content: "加载失败";
+}
+/* 详情页帖子编号徽章（点击复制） */
+.ch-post-no {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--acc);
+  background: color-mix(in oklab, var(--acc) 10%, transparent);
+  border: 1px solid color-mix(in oklab, var(--acc) 28%, transparent);
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  vertical-align: 2px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+#chChatRow.dim {
+  opacity: 0.45;
+  transition: opacity 0.25s var(--ease);
+}
+#chChatRow.dim:focus-within {
+  opacity: 1;
+}
+.ch-form-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--sub);
+  margin: 18px 0 4px;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--amber) 8%, var(--surface-2));
+  border: 1px solid color-mix(in oklab, var(--amber) 22%, transparent);
+}
+.ch-form-note svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--amber);
+}
+.ch-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+/* ─────────────── 我的发布 / 模拟审核 ─────────────── */
+.ch-me-bucket {
+  padding: 18px 20px;
+}
+.ch-me-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 4px;
+  border-bottom: 1px dashed color-mix(in oklab, var(--line) 60%, transparent);
+}
+.ch-me-row:last-child {
+  border-bottom: none;
+}
+.ch-me-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.ch-me-main b {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-me-meta {
+  font-size: 12px;
+  color: var(--sub);
+}
+.ch-me-reason {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--red);
+}
+.ch-me-reason svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.ch-me-ops {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.ch-me-empty {
+  font-size: 12.5px;
+  color: color-mix(in oklab, var(--sub) 80%, transparent);
+  padding: 6px 2px;
+}
+.ch-dev-badge {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 15%, transparent);
+  border: 1px solid color-mix(in oklab, var(--amber) 30%, transparent);
+  vertical-align: 3px;
+}
+.ch-review-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 16px;
+  padding: 13px 4px;
+  border-bottom: 1px dashed color-mix(in oklab, var(--line) 60%, transparent);
+}
+.ch-review-row:last-child {
+  border-bottom: none;
+}
+.ch-review-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.ch-review-title b {
+  font-size: 14px;
+}
+.ch-review-descr {
+  font-size: 12.5px;
+  color: var(--sub);
+  line-height: 1.6;
+  margin-top: 3px;
+}
+.ch-review-ops {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: none;
+}
+.ch-reject-input {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ─────────────── toast ─────────────── */
+.ch-toast {
+  position: fixed;
+  right: 22px;
+  bottom: 26px;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 18px;
+  border-radius: var(--r-md);
+  font-size: 13.5px;
+  font-weight: 600;
+  background: var(--glass-strong);
+  backdrop-filter: blur(14px) saturate(1.3);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  border: 1px solid color-mix(in oklab, var(--green) 35%, transparent);
+  color: var(--txt);
+  box-shadow: var(--shadow-2);
+  opacity: 0;
+  transform: translateY(14px) scale(0.96);
+  pointer-events: none;
+  transition: opacity 0.3s var(--ease), transform 0.35s var(--spring);
+}
+.ch-toast.show {
+  opacity: 1;
+  transform: none;
+}
+.ch-toast svg {
+  width: 16px;
+  height: 16px;
+  color: var(--green);
+}
+
+/* ─────────────── 响应式 ─────────────── */
+@media (max-width: 900px) {
+  .ch-hamburger {
+    display: inline-flex;
+  }
+  .ch-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    height: 100vh;
+    z-index: 120;
+    width: 250px;
+    background: color-mix(in oklab, var(--surface) 80%, transparent);
+    transform: translateX(-102%);
+    transition: transform 0.35s var(--ease);
+  }
+  .ch-sidebar.open {
+    transform: none;
+    background: var(--glass-strong);
+    backdrop-filter: blur(14px) saturate(1.3);
+    -webkit-backdrop-filter: blur(14px) saturate(1.3);
+    box-shadow: var(--shadow-2);
+  }
+  .ch-sidebar-head {
+    display: flex;
+  }
+  .ch-sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 110;
+    background: oklch(10% 0.03 262 / 0.45);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s var(--ease);
+  }
+  .ch-sidebar-overlay.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .ch-content {
+    padding: 20px 16px 50px;
+  }
+  .ch-topbar {
+    padding: 0 14px;
+    gap: 10px;
+  }
+  .ch-topbar-status .status-pill:first-child:not(.ch-dev-pill) {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .ch-brand-text {
+    display: none;
+  }
+  .ch-topbar-status {
+    display: none;
+  }
+  /* 状态胶囊隐藏后失去 margin-left:auto 推力，操作组（功能/登录/日夜）显式靠右 */
+  .ch-topbar-actions {
+    margin-left: auto;
+  }
+  /* 窄屏实底化（对齐 ≤820px 全局降级约定），防止部分设备模糊失效后顶栏透字 */
+  .ch-topbar {
+    background: var(--surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .ch-filter-sel {
+    width: calc(50% - 5px);
+    flex: 1 1 40%;
+  }
+  .ch-card {
+    padding: 9px 12px;
+    gap: 10px;
+  }
+  .ch-card-arrow {
+    display: none;
+  }
+  .ch-detail {
+    padding: 18px 16px;
+  }
+  .ch-form {
+    padding: 18px 16px 20px;
+  }
+  .ch-me-row {
+    flex-wrap: wrap;
+  }
+  .ch-review-row {
+    grid-template-columns: 1fr;
+  }
+  .ch-review-ops {
+    justify-content: flex-end;
+  }
+  .ch-toast {
+    left: 16px;
+    right: 16px;
+    bottom: 18px;
+  }
+}
+
+/* ───── 用户芯片 & 登录弹窗 ───── */
+.ch-user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+.ch-user-chip span {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, .45);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  backdrop-filter: blur(4px);
+}
+.ch-modal-overlay[hidden] { display: none; }
+.ch-modal {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 20px 60px rgba(0,0,0,.25);
+  overflow: hidden;
+}
+.ch-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.ch-modal-head h3 { margin: 0; font-size: 16px; }
+.ch-modal-body { padding: 20px; }
+.ch-modal-body .ch-fg { margin-bottom: 14px; }
+.ch-modal-body .ch-fg label {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: var(--sub);
+}
+.ch-static {
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 14px;
+}
+.ch-form-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+.ch-turnstile {
+  display: flex;
+  justify-content: center;
+  min-height: 65px;
+}
+
+/* 小屏性能降级（对齐全站 ≤820px 约定） */
+@media (max-width: 820px) {
+  .ch-toast {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--surface);
+  }
+}
+
+/* ── 图标尺寸兜底：mountIcons 替换后的裸 svg 无固有尺寸，会撑满容器 ── */
+#cardhubRoot .panel-title svg {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+#cardhubRoot .btn svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+/* ── 窄屏 multi 规格行优化：chips 独占整行，数值框+删除按钮固定同行 ── */
+@media (max-width: 640px) {
+  .ch-mgroup-label {
+    display: none;
+  }
+  /* chips 区占满 100% 基准，把数值框/删除挤到下一行同排 */
+  .ch-multi-tags {
+    flex-basis: 100%;
+  }
+  .ch-multi .inp.ch-multi-val {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+  .ch-mtag {
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+}
+
+/* ─────────────── 我的帖子管理：确认弹窗 / 本人操作条 / 编辑模式 ─────────────── */
+.ch-confirm-mask {
+  position: fixed; inset: 0; z-index: 1000;
+  background: color-mix(in oklch, var(--txt) 32%, transparent);
+  backdrop-filter: blur(4px);
+  display: grid; place-items: center; padding: 20px;
+  animation: chFadeIn 0.18s ease;
+}
+.ch-confirm {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+  padding: 22px; width: min(400px, 100%);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+  animation: chPopIn 0.2s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+.ch-confirm-msg { font-size: 14px; line-height: 1.65; color: var(--txt); }
+.ch-confirm-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+.ch-self-ops {
+  display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px;
+}
+.ch-edit-banner {
+  display: flex; gap: 8px; align-items: flex-start;
+  background: color-mix(in oklch, var(--amber) 10%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--amber) 32%, transparent);
+  border-radius: 12px; padding: 10px 14px; margin: 2px 0 14px;
+  font-size: 12.5px; line-height: 1.6; color: var(--txt);
+}
+.ch-edit-banner svg { flex: none; margin-top: 2px; color: var(--amber); }
+.ch-lock {
+  background: var(--surface-3) !important; color: var(--sub);
+  cursor: not-allowed;
+}
+@keyframes chFadeIn { from { opacity: 0; } }
+@keyframes chPopIn { from { opacity: 0; transform: scale(0.94) translateY(8px); } }
+
+/* ─────────────── 轻量表单弹窗（发起沟通 / 中转意向） ─────────────── */
+.ch-form-modal { width: min(440px, 100%); text-align: left; }
+.ch-form-modal .ch-fm-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
+.ch-fm-field { display: block; margin-bottom: 12px; }
+.ch-fm-field > span { display: block; font-size: 12px; color: var(--sub); margin-bottom: 5px; }
+.ch-fm-field .inp { width: 100%; }
+.ch-fm-field .inp.error { border-color: #e5484d; }
+.ch-fm-field textarea.inp { resize: vertical; min-height: 72px; }
+
+/* ─────────────── 市集弹窗（market 板块图文详情） ─────────────── */
+.mk-mask { z-index: 1010; }
+.mk-modal {
+  width: min(680px, 100%); max-height: 82vh; overflow-y: auto;
+  text-align: left; display: block;
+}
+.mk-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.mk-badge {
+  font-size: 12px; padding: 2px 10px; border-radius: 999px;
+  background: var(--surface-3); color: var(--sub); border: 1px solid var(--line);
+}
+.mk-badge.mk-all { color: var(--acc); border-color: color-mix(in oklab, var(--acc) 45%, transparent); }
+.mk-title { font-size: 17px; font-weight: 800; margin: 0 0 12px; color: var(--txt); }
+.mk-md { font-size: 14px; line-height: 1.75; color: var(--txt); word-break: break-word; }
+.mk-md img { max-width: 100%; border-radius: 10px; margin: 8px 0; display: block; }
+.mk-md a { color: var(--acc); text-decoration: underline; }
+.mk-md h1, .mk-md h2, .mk-md h3, .mk-md h4 { font-size: 15px; font-weight: 700; margin: 14px 0 6px; }
+.mk-md p { margin: 6px 0; }
+.mk-md ul, .mk-md ol { padding-left: 20px; margin: 6px 0; }
+.mk-md blockquote { margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--line); color: var(--sub); }
+.mk-md code { background: var(--surface-3); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.mk-meta { margin-top: 14px; font-size: 12px; color: var(--sub); }
+.mk-actions { margin-top: 10px; display: flex; gap: 8px; justify-content: flex-end; }
+.mk-fav.on { color: var(--amber); }
+
+/* ─────────────── 会话收件箱（卖家视角） ─────────────── */
+.ch-conv-list { display: flex; flex-direction: column; gap: 12px; }
+.ch-conv-item {
+  display: flex; align-items: center; gap: 14px; text-align: left; width: 100%;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+  padding: 14px 16px; cursor: pointer; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.ch-conv-item:hover {
+  border-color: color-mix(in oklab, var(--acc) 42%, transparent);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px color-mix(in oklab, var(--acc) 12%, transparent);
+}
+.ch-conv-ava {
+  flex: none; width: 44px; height: 44px; border-radius: 14px;
+  display: grid; place-items: center; color: #fff;
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+  box-shadow: 0 4px 12px color-mix(in oklab, var(--acc) 28%, transparent);
+}
+.ch-conv-ava svg { width: 20px; height: 20px; }
+.ch-conv-item.is-closed .ch-conv-ava { background: var(--surface-3); color: var(--sub); box-shadow: none; }
+.ch-conv-item.is-closed .ch-conv-title { color: var(--sub); }
+.ch-conv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ch-conv-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 650; font-size: 14px; color: var(--txt); min-width: 0; }
+.ch-conv-title > b, .ch-conv-title { overflow-wrap: anywhere; }
+.ch-conv-status { flex: none; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.ch-conv-status.st-open { background: color-mix(in oklab, var(--green) 14%, transparent); color: var(--green); }
+.ch-conv-status.st-closed { background: var(--surface-3); color: var(--sub); }
+.ch-conv-status.st-role { background: color-mix(in oklab, var(--acc) 12%, transparent); color: var(--acc); }
+.ch-conv-sub { font-size: 12.5px; color: var(--sub); }
+/* 额度进度条（双方合计 20 条，剩 5 条起转琥珀） */
+.ch-conv-meter { margin-top: 3px; height: 4px; max-width: 260px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.ch-conv-meter i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--acc), var(--acc-deep)); transition: width 0.3s; }
+.ch-conv-meter i.near { background: linear-gradient(90deg, var(--amber), #e8890c); }
+.ch-conv-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.ch-conv-count { font-size: 15px; font-weight: 800; color: var(--txt); font-variant-numeric: tabular-nums; }
+.ch-conv-count i { font-style: normal; font-weight: 600; color: var(--sub); margin: 0 1px; }
+.ch-conv-count.near { color: var(--amber); }
+.ch-conv-side-hint { font-size: 11px; color: var(--sub); }
+.ch-conv-item .ch-card-arrow { color: var(--sub); }
+.ch-conv-item .ch-card-arrow svg { width: 16px; height: 16px; }
+.ch-conv-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+.ch-conv-headinfo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ch-conv-headinfo b { font-size: 15px; color: var(--txt); overflow-wrap: anywhere; }
+.ch-conv-headinfo span { font-size: 12.5px; color: var(--sub); }
+.ch-msgs { display: flex; flex-direction: column; gap: 12px; padding: 18px; max-height: 52vh; overflow-y: auto; }
+.ch-msg-row { display: flex; justify-content: flex-start; }
+.ch-msg-row.mine { justify-content: flex-end; }
+.ch-msg-bubble {
+  max-width: min(78%, 520px); background: var(--surface-3); border-radius: 14px 14px 14px 4px;
+  padding: 9px 13px;
+}
+.ch-msg-row.mine .ch-msg-bubble {
+  background: color-mix(in oklab, var(--acc) 14%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--acc) 26%, transparent);
+  border-radius: 14px 14px 4px 14px;
+}
+.ch-msg-meta { font-size: 11px; color: var(--sub); margin-bottom: 4px; }
+.ch-msg-body { font-size: 13.5px; line-height: 1.6; color: var(--txt); overflow-wrap: anywhere; white-space: pre-wrap; }
+/* 回复输入条：图片按钮 / 输入框 / 发送按钮等高一体（stretch），视觉同一组控件 */
+.ch-conv-reply { display: flex; gap: 10px; align-items: stretch; margin-top: 10px; }
+.ch-conv-reply .inp { flex: 1; min-width: 0; resize: none; min-height: 60px; }
+.ch-conv-imgbtn {
+  flex: none; width: 48px; padding: 0;
+  display: grid; place-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--sub);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.ch-conv-imgbtn:hover {
+  color: var(--acc);
+  border-color: color-mix(in oklab, var(--acc) 45%, transparent);
+  background: color-mix(in oklab, var(--acc) 7%, var(--surface));
+}
+.ch-conv-imgbtn svg { width: 20px; height: 20px; }
+.ch-conv-reply .btn { flex: none; padding-top: 0; padding-bottom: 0; }
+.ch-conv-closed {
+  display: flex; align-items: center; gap: 8px; margin-top: 12px;
+  background: var(--surface-3); border: 1px dashed var(--line); border-radius: 12px;
+  padding: 10px 14px; font-size: 12.5px; color: var(--sub);
+}
+.ch-conv-closed svg { flex: none; width: 15px; height: 15px; }
+.ch-conv-retain {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  background: color-mix(in oklab, var(--amber) 8%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--amber) 28%, transparent);
+  border-radius: 12px; padding: 8px 14px; font-size: 12.5px; color: var(--sub);
+}
+.ch-conv-retain b { color: var(--amber); }
+.ch-conv-retain svg { flex: none; width: 15px; height: 15px; color: var(--amber); }
+.ch-conv-retain > span { flex: 1; min-width: 0; }
+/* 额度提醒条：常驻展示双方合计 20 条；剩 5 条起琥珀高亮 */
+.ch-conv-quota {
+  display: flex; gap: 8px; align-items: flex-start;
+  margin-top: 10px; padding: 8px 14px; border-radius: 12px;
+  background: color-mix(in oklab, var(--acc) 7%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--acc) 26%, transparent);
+  font-size: 12.5px; line-height: 1.6; color: var(--sub);
+}
+.ch-conv-quota b { color: var(--acc); }
+.ch-conv-quota svg { flex: none; width: 15px; height: 15px; margin-top: 2px; color: var(--acc); }
+.ch-conv-quota > span { flex: 1; min-width: 0; } /* 文字包单一 flex 项，防裸文本被压缩成竖排 */
+.ch-conv-quota.warn {
+  background: color-mix(in oklab, var(--amber) 10%, var(--surface));
+  border-color: color-mix(in oklab, var(--amber) 34%, transparent);
+  color: var(--txt);
+}
+.ch-conv-quota.warn b, .ch-conv-quota.warn svg { color: var(--amber); }
+.ch-msg-imgs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.ch-msg-imgs a { display: block; }
+.ch-msg-imgs img {
+  width: 132px; height: 132px; object-fit: cover; border-radius: 10px;
+  border: 1px solid var(--line); display: block;
+  transition: transform 0.15s;
+}
+.ch-msg-imgs img:hover { transform: scale(1.03); }
+
+/* ─────────────── 发送图片引导弹窗（外链图床方案） ─────────────── */
+.ch-img-guide { width: min(460px, 100%); }
+.ch-img-guide .ch-confirm-btns { margin-top: 20px; }
+.ch-ig-desc { font-size: 13px; line-height: 1.75; color: var(--sub); margin: 12px 0 0; }
+.ch-ig-steps {
+  list-style: none; counter-reset: igstep;
+  margin: 0; padding: 14px 0 2px;
+  display: grid; gap: 12px;
+}
+.ch-ig-steps li {
+  counter-increment: igstep;
+  position: relative; padding-left: 34px;
+  font-size: 13.5px; line-height: 1.7; color: var(--txt);
+}
+.ch-ig-steps li::before {
+  content: counter(igstep);
+  position: absolute; left: 0; top: 1px;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: color-mix(in oklab, var(--acc) 14%, transparent);
+  color: var(--acc); font-size: 11.5px; font-weight: 800;
+}
+.ch-ig-steps li b { color: var(--acc); }
+.ch-ig-warn {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin-top: 16px; padding: 12px 14px; border-radius: 12px;
+  background: color-mix(in oklab, var(--amber) 10%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--amber) 34%, transparent);
+  font-size: 12.5px; line-height: 1.75; color: var(--txt);
+}
+.ch-ig-warn svg { flex: none; width: 16px; height: 16px; margin-top: 2px; color: var(--amber); }
+.ch-ig-warn > span { flex: 1; min-width: 0; }
+.ch-ig-warn > span > b { color: var(--amber); }
+
+/* ─────────────── 总览（默认视图） ─────────────── */
+.ch-ov {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.ch-ov-hero {
+  padding: 22px 24px;
+  border-radius: 16px;
+  background:
+    radial-gradient(1200px 200px at 85% -40%, color-mix(in oklab, var(--acc) 22%, transparent), transparent),
+    color-mix(in oklab, var(--acc) 7%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--acc) 22%, transparent);
+}
+.ch-ov-hero-t {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+.ch-ov-hero-t svg {
+  width: 21px;
+  height: 21px;
+  color: var(--acc);
+}
+.ch-ov-hero-s {
+  margin-top: 7px;
+  font-size: 13px;
+  color: var(--sub);
+  line-height: 1.7;
+}
+.ch-ov-hero-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.ch-ov-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.ch-ov-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.2s var(--ease);
+  font: inherit;
+  color: inherit;
+}
+.ch-ov-stat:hover {
+  border-color: color-mix(in oklab, var(--acc) 45%, transparent);
+  box-shadow: 0 6px 18px color-mix(in oklab, var(--acc) 10%, transparent);
+  transform: translateY(-1px);
+}
+.ch-ov-stat-n {
+  font-size: 24px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.ch-ov-stat-l {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--sub);
+}
+.ch-ov-stat-l svg {
+  width: 13px;
+  height: 13px;
+}
+.ch-ov-stat-go {
+  margin-left: auto;
+  opacity: 0.6;
+}
+.ch-ov-sec {
+  display: flex;
+  align-items: center;
+}
+.ch-ov-sec-t {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14.5px;
+  font-weight: 700;
+}
+.ch-ov-sec-t svg {
+  width: 15px;
+  height: 15px;
+  color: var(--acc);
+}
+@media (max-width: 640px) {
+  .ch-ov-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .ch-ov-hero {
+    padding: 18px 16px;
+  }
+  .ch-ov-hero-t {
+    font-size: 17px;
+  }
+}

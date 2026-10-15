@@ -12,8 +12,11 @@
    ═══════════════════════════════════════════════════════════════ */
 "use strict";
 
-import { Shell, esc, theme } from "../../shell/shell.js";
+import { Shell, esc, theme, ensureStylesheet } from "../../shell/shell.js";
 import { icon, mountIcons, Tabs, initFX } from "../../shell/ui.js";
+import { mountAppsMenu } from "../../shell/apps-menu.js";
+import { Auth, mountAuth } from "../../shell/auth.js";
+import { api } from "../../shell/api.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -130,6 +133,7 @@ function getDefaultCarrierState(carrierKey) {
   const p = CARRIER_PRESETS[carrierKey];
   return {
     enabled: p.enabled,
+    annEnabled: true,
     provinces: [],
     categoryMode: 'dynamic',
     defaultProvince: 'hun',
@@ -220,7 +224,8 @@ const PROVINCES = getProvincesForCarrier('cbn');
 const PROVINCE_CODE_MAP = {};
 PROVINCES.forEach(p => { PROVINCE_CODE_MAP[p.name] = p.code; });
 
-let storageType = 'cloudflare';
+let storageType = 'cloudflare';       // primary 主线（容灾第一优先 + 基线读取来源）
+let storageEnabled = { cloudflare: true, edgeone: false, github: false };   // 各线启用开关
 let catMode = 'dynamic';
 let pagMode = 'auto';
 let selectedProvs = new Set();
@@ -293,6 +298,7 @@ function saveCurrentCarrierState() {
   const carrier = cfgCurrentCarrier;
   const s = carrierStates[carrier];
   s.enabled = document.getElementById('carrierEnabled').checked;
+  s.annEnabled = document.getElementById('carrierAnnEnabled').checked;
   s.provinces = filterProvsForCarrier(carrier, [...selectedProvs]).sort();
   s.categoryMode = catMode;
   s.defaultProvince = filterDefaultProvForCarrier(carrier, document.getElementById('defaultProvince').value);
@@ -327,6 +333,7 @@ function saveCurrentCarrierState() {
 function loadCarrierState(carrier) {
   const s = carrierStates[carrier];
   document.getElementById('carrierEnabled').checked = s.enabled;
+  document.getElementById('carrierAnnEnabled').checked = s.annEnabled !== false;
 
   renderProvGrids(carrier);
 
@@ -541,17 +548,43 @@ function clearAllNotifyProvs() {
 
 /* ─────────────── 分段切换 ─────────────── */
 function switchStorage(type) {
-  storageType = type;
+  /* 仅切换编辑面板，不改主线；主线由 setPrimary 单独管理 */
   document.querySelectorAll('#storageTabs .seg-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.val === type);
   });
   document.querySelectorAll('.storage-panels .sub-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + type).classList.add('active');
 
-  const typeLabels = { cloudflare: 'Cloudflare', github: 'GitHub' };
+  const typeLabels = { cloudflare: 'Cloudflare', edgeone: 'EdgeOne', github: 'GitHub' };
   const typeLabel = document.getElementById('dataBrowseTypeLabel');
   if (typeLabel) typeLabel.textContent = '[' + (typeLabels[type] || type) + ']';
+}
 
+/* 主线选择：必须是已启用线路，否则自动勾选该线 */
+function setPrimary(type) {
+  storageType = type;
+  if (!storageEnabled[type]) {
+    storageEnabled[type] = true;
+    const cb = document.getElementById('backendEnabled' + type.charAt(0).toUpperCase() + type.slice(1));
+    if (cb) cb.checked = true;
+    showToast('已自动启用 ' + type + ' 线（主线必须处于启用状态）');
+  }
+  document.querySelectorAll('#primaryTabs .seg-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.val === type);
+  });
+  onFieldChange();
+}
+
+/* 线路启用开关：主线不可关闭（先切主线） */
+function toggleBackend(type) {
+  const cb = document.getElementById('backendEnabled' + type.charAt(0).toUpperCase() + type.slice(1));
+  const on = !!(cb && cb.checked);
+  if (!on && storageType === type) {
+    cb.checked = true;
+    showToast('主线不可关闭，请先将主线切换到其他已启用线路');
+    return;
+  }
+  storageEnabled[type] = on;
   onFieldChange();
 }
 
@@ -638,6 +671,7 @@ function buildConfig() {
     const s = carrierStates[k];
     const carrier = {
       enabled: s.enabled,
+      announce_enabled: s.annEnabled !== false,
       default_province: filterDefaultProvForCarrier(k, s.defaultProvince),
       provinces: filterProvsForCarrier(k, [...s.provinces]).sort(),
       category_mode: s.categoryMode,
@@ -686,7 +720,13 @@ function buildConfig() {
 
   const config = {
     storage: {
-      type: storageType,
+      // 多通道部署：primary + backends（采集端 normalize 兼容旧单 type 格式）
+      primary: storageType,
+      backends: {
+        cloudflare: { enabled: storageEnabled.cloudflare },
+        edgeone: { enabled: storageEnabled.edgeone },
+        github: { enabled: storageEnabled.github },
+      },
     },
     crawl: {
       pagination_mode: 'auto',
@@ -732,6 +772,19 @@ function buildConfig() {
       },
       structure_upgrade_detect: document.getElementById('structureUpgradeDetect').checked,
     },
+    announce: {
+      enabled: true,
+      retention_days: parseInt(document.getElementById('annRetentionDays').value) || 90,
+      per_source_fetch: parseInt(document.getElementById('annPerSourceFetch').value) || 15,
+      national_threshold: parseInt(document.getElementById('annNationalThreshold').value) || 5,
+      sources: (function() {
+        const src = {};
+        CARRIER_KEYS.forEach(k => {
+          src[k] = { enabled: (carrierStates[k] || {}).annEnabled !== false };
+        });
+        return src;
+      })(),
+    },
     changelog: {
       retention_days: parseInt(document.getElementById('retentionDays').value) || 30,
     },
@@ -748,26 +801,37 @@ function buildConfig() {
     schema_version: document.getElementById('schemaVersion').value,
   };
 
-  if (storageType === 'cloudflare') {
-    config.storage.cloudflare = {
+  if (storageEnabled.cloudflare) {
+    config.storage.backends.cloudflare = Object.assign(config.storage.backends.cloudflare, {
       account_id: document.getElementById('cfAccountId').value,
       project_name: document.getElementById('cfProjectName').value,
       api_token: document.getElementById('cfApiToken').value,
       domain: document.getElementById('cfDomain').value.trim(),
       path: document.getElementById('cfPath').value || 'data',
       include_frontend: document.getElementById('cfIncludeFrontend').checked,
-      frontend_dir: document.getElementById('cfFrontendDir').value || './pages-dist',
-    };
-  } else if (storageType === 'github') {
-    config.storage.github = {
+    });
+  }
+  if (storageEnabled.edgeone) {
+    config.storage.backends.edgeone = Object.assign(config.storage.backends.edgeone, {
+      project_name: document.getElementById('eoProjectName').value,
+      api_token: document.getElementById('eoApiToken').value,
+      domain: document.getElementById('eoDomain').value.trim(),
+      cli: document.getElementById('eoCli').value.trim() || 'edgeone',
+      deploy_timeout: parseInt(document.getElementById('eoDeployTimeout').value) || 600,
+      path: document.getElementById('eoPath').value || 'data',
+      include_frontend: document.getElementById('eoIncludeFrontend').checked,
+    });
+  }
+  if (storageEnabled.github) {
+    config.storage.backends.github = Object.assign(config.storage.backends.github, {
       token: document.getElementById('ghToken').value,
       repo: document.getElementById('ghRepo').value,
       branch: document.getElementById('ghBranch').value || 'main',
       domain: document.getElementById('ghDomain').value.trim(),
+      cname_file: document.getElementById('ghCnameFile').checked,
       path: document.getElementById('ghPath').value || 'data',
       include_frontend: document.getElementById('ghIncludeFrontend').checked,
-      frontend_dir: document.getElementById('ghFrontendDir').value || './pages-dist',
-    };
+    });
   }
   config.storage.cache = {
     ttl_minutes: (() => { const t = parseInt(document.getElementById('cacheTtlMinutes').value); return isNaN(t) ? 30 : Math.max(0, t); })(),
@@ -779,6 +843,20 @@ function buildConfig() {
   config.storage.manifest_cache = {
     enabled: document.getElementById('manifestCacheEnabled').checked,
   };
+  config.storage.frontend_source = {
+    mode: document.getElementById('fsMode').value || 'local_only',
+    frontend_dir: document.getElementById('fsFrontendDir').value.trim() || './pages-dist',
+    repo: document.getElementById('fsRepo').value.trim(),
+    branch: document.getElementById('fsBranch').value.trim() || 'main',
+    subdir: document.getElementById('fsSubdir').value.trim() || 'pages-dist',
+    mirror_prefix: document.getElementById('fsMirror').value.trim(),
+    token: document.getElementById('fsToken').value,
+    timeout_sec: (() => { const t = parseInt(document.getElementById('fsTimeout').value); return isNaN(t) ? 60 : Math.max(10, t); })(),
+  };
+  /* 前端目录已全局化（storage.frontend_source.frontend_dir）：清除各线历史遗留键，避免双源歧义 */
+  ['cloudflare', 'edgeone', 'github'].forEach((b) => {
+    if (config.storage.backends[b]) delete config.storage.backends[b].frontend_dir;
+  });
 
   const dc = document.getElementById('defaultCarrier').value;
   if (dc) config.default_carrier = dc;
@@ -837,19 +915,35 @@ function validateConfig(config) {
   }
 
   const st = config.storage || {};
-  if (st.type !== 'cloudflare' && st.type !== 'github') {
-    errors.push('storage.type 需为 cloudflare 或 github');
+  const backs = st.backends || {};
+  const enabledLines = Object.keys(backs).filter(k => backs[k] && backs[k].enabled);
+  if (enabledLines.length === 0) {
+    errors.push('至少需要启用一条存储线路 (storage.backends.*.enabled)');
   }
-  if (st.type === 'cloudflare') {
-    const cf = st.cloudflare || {};
+  if (!enabledLines.includes(st.primary)) {
+    errors.push('storage.primary 需为已启用线路（当前: ' + (st.primary || '未设置') + '，启用: ' + (enabledLines.join(', ') || '无') + '）');
+  }
+  if (backs.cloudflare && backs.cloudflare.enabled) {
+    const cf = backs.cloudflare;
     if (!cf.account_id) errors.push('cloudflare account_id 不能为空');
     if (!cf.project_name) errors.push('cloudflare project_name 不能为空');
     if (!cf.api_token) errors.push('cloudflare api_token 不能为空');
-    if (!cf.domain) warnings.push('cloudflare domain 未设置，将无法读取旧数据做变更对比');
-  } else if (st.type === 'github') {
-    const gh = st.github || {};
+    if (!cf.domain) errors.push('cloudflare domain 不能为空（读取旧数据对比 + 容灾清单来源）');
+  }
+  if (backs.edgeone && backs.edgeone.enabled) {
+    const eo = backs.edgeone;
+    if (!eo.project_name) errors.push('edgeone project_name 不能为空');
+    if (!eo.api_token) errors.push('edgeone api_token 不能为空（Pages 控制台 Settings → API Token 创建）');
+    if (!eo.domain) errors.push('edgeone domain 不能为空（读取基线 + 容灾清单来源）');
+  }
+  if (backs.github && backs.github.enabled) {
+    const gh = backs.github;
     if (!gh.token) errors.push('github token 不能为空');
     if (!gh.repo) errors.push('github repo 不能为空');
+    if (!gh.domain) {
+      if (st.primary === 'github') errors.push('github domain 不能为空（github 为主线时必填：读取基线通道）');
+      else warnings.push('github domain 未设置（多线下建议填写，容灾清单需各线域名）');
+    }
   }
 
   const sched = config.schedule || {};
@@ -863,27 +957,51 @@ function validateConfig(config) {
 
 function applyConfig(config) {
   const st = config.storage || {};
-  switchStorage(st.type || 'cloudflare');
+  // 兼容两种格式：新（primary + backends）与旧单 type（type + 顶层键）
+  const isLegacy = !st.backends;
+  const primary = st.primary || st.type || 'cloudflare';
+  const backs = isLegacy
+    ? { cloudflare: st.cloudflare, edgeone: null, github: st.github }
+    : st.backends;
+  const enabledMap = {
+    cloudflare: isLegacy ? (primary === 'cloudflare') : !!(backs.cloudflare && backs.cloudflare.enabled),
+    edgeone: isLegacy ? false : !!(backs.edgeone && backs.edgeone.enabled),
+    github: isLegacy ? (primary === 'github') : !!(backs.github && backs.github.enabled),
+  };
+  storageType = primary;
+  storageEnabled = enabledMap;
+  document.querySelectorAll('#primaryTabs .seg-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.val === primary);
+  });
 
-  if (st.type === 'cloudflare') {
-    const cf = st.cloudflare || {};
-    document.getElementById('cfAccountId').value = cf.account_id || '';
-    document.getElementById('cfProjectName').value = cf.project_name || '';
-    document.getElementById('cfApiToken').value = cf.api_token || '';
-    document.getElementById('cfDomain').value = cf.domain || '';
-    document.getElementById('cfPath').value = cf.path || 'data';
-    document.getElementById('cfFrontendDir').value = cf.frontend_dir || './pages-dist';
-    document.getElementById('cfIncludeFrontend').checked = cf.include_frontend !== false;
-  } else if (st.type === 'github') {
-    const gh = st.github || {};
-    document.getElementById('ghToken').value = gh.token || '';
-    document.getElementById('ghRepo').value = gh.repo || '';
-    document.getElementById('ghBranch').value = gh.branch || 'main';
-    document.getElementById('ghDomain').value = gh.domain || '';
-    document.getElementById('ghPath').value = gh.path || 'data';
-    document.getElementById('ghFrontendDir').value = gh.frontend_dir || './pages-dist';
-    document.getElementById('ghIncludeFrontend').checked = gh.include_frontend !== false;
-  }
+  const cf = (isLegacy ? st.cloudflare : backs.cloudflare) || {};
+  document.getElementById('backendEnabledCloudflare').checked = enabledMap.cloudflare;
+  document.getElementById('cfAccountId').value = cf.account_id || '';
+  document.getElementById('cfProjectName').value = cf.project_name || '';
+  document.getElementById('cfApiToken').value = cf.api_token || '';
+  document.getElementById('cfDomain').value = cf.domain || '';
+  document.getElementById('cfPath').value = cf.path || 'data';
+  document.getElementById('cfIncludeFrontend').checked = cf.include_frontend !== false;
+
+  const eo = (isLegacy ? null : backs.edgeone) || {};
+  document.getElementById('backendEnabledEdgeone').checked = enabledMap.edgeone;
+  document.getElementById('eoProjectName').value = eo.project_name || '';
+  document.getElementById('eoApiToken').value = eo.api_token || '';
+  document.getElementById('eoDomain').value = eo.domain || '';
+  document.getElementById('eoCli').value = eo.cli || 'edgeone';
+  document.getElementById('eoDeployTimeout').value = eo.deploy_timeout || 600;
+  document.getElementById('eoPath').value = eo.path || 'data';
+  document.getElementById('eoIncludeFrontend').checked = eo.include_frontend !== false;
+
+  const gh = (isLegacy ? st.github : backs.github) || {};
+  document.getElementById('backendEnabledGithub').checked = enabledMap.github;
+  document.getElementById('ghToken').value = gh.token || '';
+  document.getElementById('ghRepo').value = gh.repo || '';
+  document.getElementById('ghBranch').value = gh.branch || 'main';
+  document.getElementById('ghDomain').value = gh.domain || '';
+  document.getElementById('ghCnameFile').checked = !!gh.cname_file;
+  document.getElementById('ghPath').value = gh.path || 'data';
+  document.getElementById('ghIncludeFrontend').checked = gh.include_frontend !== false;
 
   const cache = st.cache || {};
   document.getElementById('cacheTtlMinutes').value = cache.ttl_minutes != null ? cache.ttl_minutes : 30;
@@ -894,6 +1012,17 @@ function applyConfig(config) {
 
   const mc = st.manifest_cache || {};
   document.getElementById('manifestCacheEnabled').checked = mc.enabled !== false;
+
+  const fs = st.frontend_source || {};
+  document.getElementById('fsMode').value = fs.mode || 'github_prefer';
+  document.getElementById('fsFrontendDir').value = fs.frontend_dir || './pages-dist';
+  document.getElementById('fsRepo').value = fs.repo || '';
+  document.getElementById('fsBranch').value = fs.branch || 'main';
+  document.getElementById('fsSubdir').value = fs.subdir || 'pages-dist';
+  document.getElementById('fsMirror').value = fs.mirror_prefix || '';
+  document.getElementById('fsToken').value = fs.token || '';
+  document.getElementById('fsTimeout').value = fs.timeout_sec != null ? fs.timeout_sec : 60;
+  toggleFsFields();
 
   document.getElementById('defaultCarrier').value = config.default_carrier || 'cmcc';
 
@@ -923,6 +1052,11 @@ function applyConfig(config) {
   const cl = config.changelog || {};
   document.getElementById('retentionDays').value = cl.retention_days || 30;
 
+  const annCfg = config.announce || {};
+  document.getElementById('annRetentionDays').value = annCfg.retention_days || 90;
+  document.getElementById('annPerSourceFetch').value = annCfg.per_source_fetch || 15;
+  document.getElementById('annNationalThreshold').value = annCfg.national_threshold || 5;
+
   const notify = config.notification || {};
   const types = notify.types || {};
   document.getElementById('notifyChange').checked = types.change !== false;
@@ -944,6 +1078,11 @@ function applyConfig(config) {
 
     carrierStates[k] = {
       enabled: c.enabled !== undefined ? c.enabled : p.enabled,
+      annEnabled: (function() {
+        if (c.announce_enabled !== undefined) return !!c.announce_enabled;
+        const src = (annCfg.sources || {})[k];
+        return src ? src.enabled !== false : true;
+      })(),
       provinces: filterProvsForCarrier(k, Array.isArray(c.provinces) ? c.provinces : []),
       categoryMode: c.category_mode || 'dynamic',
       defaultProvince: filterDefaultProvForCarrier(k, c.default_province || 'hun'),
@@ -1034,8 +1173,16 @@ function resetToDefault() {
   document.getElementById('cfApiToken').value = '';
   document.getElementById('cfDomain').value = '';
   document.getElementById('cfPath').value = 'data';
-  document.getElementById('cfFrontendDir').value = './pages-dist';
   document.getElementById('cfIncludeFrontend').checked = true;
+  document.getElementById('fsMode').value = 'github_prefer';
+  document.getElementById('fsFrontendDir').value = './pages-dist';
+  document.getElementById('fsRepo').value = '';
+  document.getElementById('fsBranch').value = 'main';
+  document.getElementById('fsSubdir').value = 'pages-dist';
+  document.getElementById('fsMirror').value = '';
+  document.getElementById('fsToken').value = '';
+  document.getElementById('fsTimeout').value = 60;
+  toggleFsFields();
   document.getElementById('cronExpr').value = '0 8 * * *';
   document.getElementById('intervalHours').value = 24;
   document.getElementById('concurrentCarriers').checked = false;
@@ -1194,12 +1341,9 @@ async function fetchData() {
   contentEl.innerHTML = '<div class="Dodata-loading">正在获取数据…</div>';
 
   let domain = '';
-  const st = storageType;
-  if (st === 'cloudflare') {
-    domain = document.getElementById('cfDomain').value.trim();
-  } else {
-    domain = document.getElementById('ghDomain').value.trim();
-  }
+  const st = storageType;   // primary 主线的域名作为数据浏览源
+  const domainInputIds = { cloudflare: 'cfDomain', edgeone: 'eoDomain', github: 'ghDomain' };
+  domain = (document.getElementById(domainInputIds[st] || 'cfDomain').value || '').trim();
   if (!domain) {
     dotEl.className = 'status-dot dot-err';
     statusEl.textContent = '域名未设置';
@@ -1359,9 +1503,11 @@ function onRootClick(e) {
   const actEl = t.closest("[data-act]");
   if (actEl && root.contains(actEl)) {
     const act = actEl.dataset.act;
-    if (act === "goBack") { Shell.navigate("/"); return; }
+    if (act === "goBack") { Shell.navigate("/admin"); return; }
     if (act === "toggleTheme") { initCfgTheme(true); return; }
     if (act === "switch-storage") { switchStorage(actEl.dataset.val); return; }
+    if (act === "set-primary") { setPrimary(actEl.dataset.val); return; }
+    if (act === "toggle-backend") { toggleBackend(actEl.dataset.val); return; }
     if (act === "switch-catmode") { switchCatMode(actEl.dataset.val); return; }
     if (act === "switch-pagmode") { switchPagMode(actEl.dataset.val); return; }
     if (act === "prov-all") { selectAllProvs(); return; }
@@ -1408,7 +1554,15 @@ function onRootChange(e) {
   if (t.id === "carrierEnabled") { toggleCarrierEnabled(); return; }
   if (t.id === "DoDataCarrier") { onCarrierChange(); return; }
   if (t.id === "DoDataProvince") { onProvinceChange(); return; }
+  if (t.id === "fsMode") { toggleFsFields(); return; }
   onFieldChange();
+}
+
+/* 前端文件来源=仅本地时隐藏 GitHub 相关字段（高级折叠区无碍，仅影响感知复杂度） */
+function toggleFsFields() {
+  const mode = document.getElementById("fsMode").value;
+  const box = document.getElementById("fsGithubFields");
+  if (box) box.style.display = mode === "local_only" ? "none" : "";
 }
 
 function onRootInput() {
@@ -1450,20 +1604,20 @@ function bindEvents() {
 Shell.registerPage({
   id: "config",
   route: "/config",
-  onEnter: function (root) {
-    if (!document.querySelector('link[data-module="config"]')) {
-      var link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = Shell.config.base + "modules/config/style.css";
-      link.setAttribute("data-module", "config");
-      document.head.appendChild(link);
+  onEnter: async function (root) {
+    /* 运维工具门槛：本页用于生成 TARIFF_CONFIG 环境变量与采集配置，仅管理员可用 */
+    if (!Auth.isAdmin()) {
+      root.innerHTML = '<div style="padding:80px 20px;text-align:center"><h2 style="color:var(--red)">无权访问</h2><p style="color:var(--muted);margin:8px 0 24px">配置生成工具仅管理员可使用</p><button class="btn primary" onclick="Shell.navigate(\'/\')">返回首页</button></div>';
+      return;
     }
+    await ensureStylesheet(Shell.config.base + "modules/config/style.css");
 
     /* 重置模块状态（等价于原版每次进入重新执行脚本） */
     CARRIER_KEYS.forEach(k => { carrierStates[k] = getDefaultCarrierState(k); });
     cfgCurrentCarrier = "cmcc";
     currentTopTab = "global";
     storageType = "cloudflare";
+    storageEnabled = { cloudflare: true, edgeone: false, github: false };
     catMode = "dynamic";
     pagMode = "auto";
     selectedProvs = new Set();
@@ -1476,7 +1630,7 @@ Shell.registerPage({
 <header class="cfg-topbar">
   <div class="cfg-brand">
     <button class="icon-btn cfg-hamburger" id="cfgHamburger" aria-label="菜单"><i data-icon="menu"></i></button>
-    <button class="icon-btn" data-act="goBack" title="返回监控面板"><i data-icon="back"></i></button>
+    <button class="icon-btn" data-act="goBack" title="返回管理中心"><i data-icon="back"></i></button>
     <div class="cfg-brand-logo"><i data-icon="sliders"></i></div>
     <div class="cfg-brand-text">配置生成工具</div>
   </div>
@@ -1487,6 +1641,8 @@ Shell.registerPage({
     <div class="status-pill"><span class="status-dot dot-ok" id="dotSecurity"></span>安全</div>
   </div>
   <div class="cfg-topbar-actions">
+    <div id="cfgAppsMenuSlot"></div>
+    <div id="cfgAuthSlot"></div>
     <button class="icon-btn" id="cfgThemeBtn" data-act="toggleTheme" title="切换主题"></button>
   </div>
 </header>
@@ -1524,29 +1680,51 @@ Shell.registerPage({
     </div>
 
     <div class="panel rise" style="--i:1">
-      <h2 class="panel-title"><span class="p-icon storage"><i data-icon="database"></i></span>存储配置</h2>
+      <h2 class="panel-title"><span class="p-icon storage"><i data-icon="database"></i></span>存储配置 <span class="panel-sub">(多通道部署：启用线任意组合，commit 逐线推送，单线失败仅告警)</span></h2>
       <div class="fg">
-        <label>存储类型</label>
+        <label>主线 primary <span class="hint">(容灾第一优先 + 旧数据基线读取来源；必须是已启用线路)</span></label>
+        <div class="seg" id="primaryTabs">
+          <button type="button" class="seg-btn active" data-act="set-primary" data-val="cloudflare">Cloudflare</button>
+          <button type="button" class="seg-btn" data-act="set-primary" data-val="edgeone">EdgeOne</button>
+          <button type="button" class="seg-btn" data-act="set-primary" data-val="github">GitHub</button>
+        </div>
+      </div>
+      <div class="fg">
+        <label>存储线路 <span class="hint">(点击切换下方编辑面板；启用开关在各线面板内)</span></label>
         <div class="seg" id="storageTabs">
           <button type="button" class="seg-btn active" data-act="switch-storage" data-val="cloudflare">Cloudflare Pages</button>
+          <button type="button" class="seg-btn" data-act="switch-storage" data-val="edgeone">EdgeOne Pages</button>
           <button type="button" class="seg-btn" data-act="switch-storage" data-val="github">GitHub Pages</button>
         </div>
       </div>
       <div class="storage-panels">
         <div class="sub-panel active" id="panel-cloudflare">
+          <label class="ck-row"><input type="checkbox" class="switch" id="backendEnabledCloudflare" data-act="toggle-backend" data-val="cloudflare" checked><span>启用 Cloudflare 线 <span class="hint">(关闭后 commit 不再推送该线；未启用线的域名仍保留在 Worker CORS 白名单，无攻击面)</span></span></label>
           <div class="fg"><label>Account ID <span class="hint">(Cloudflare 账户ID，Dashboard 右侧栏可见)</span></label><input type="text" id="cfAccountId" placeholder="32位十六进制字符串"></div>
           <div class="fg"><label>Pages 项目名 <span class="hint">(不存在时脚本自动创建)</span></label><input type="text" id="cfProjectName" placeholder="如 cmcc-tariff-monitor"></div>
           <div class="fg"><label>API Token <span class="hint">(需 Cloudflare Pages 编辑权限)</span></label>
             <div class="pw-wrap"><input type="password" id="cfApiToken"><button type="button" class="icon-btn pw-eye" data-act="toggle-visibility" data-target="cfApiToken" title="显示/隐藏"><i data-icon="eye"></i></button></div>
           </div>
-          <div class="fg"><label>自定义域名 <span class="hint">(必填，如 https://tariff.example.com；用于读取已部署旧数据做变更对比)</span></label><input type="text" id="cfDomain" placeholder="https://tariff.example.com"></div>
-          <div class="f-row">
-            <div class="fg"><label>数据路径 <span class="hint">(站点内目录)</span></label><input type="text" id="cfPath" value="data"></div>
-            <div class="fg"><label>前端目录 <span class="hint">(本地 pages-dist 路径)</span></label><input type="text" id="cfFrontendDir" value="./pages-dist"></div>
+          <div class="fg"><label>自定义域名 <span class="hint">(必填，如 https://chinamnos.example.com；用于读取已部署旧数据做变更对比 + 容灾线路清单)</span></label><input type="text" id="cfDomain" placeholder="https://chinamnos-cf.example.com"></div>
+          <div class="fg"><label>数据路径 <span class="hint">(站点内目录)</span></label><input type="text" id="cfPath" value="data"></div>
+          <label class="ck-row"><input type="checkbox" class="switch" id="cfIncludeFrontend" checked><span>联合部署前端 <span class="hint">(每次采集时把前端文件一并部署到 Pages，全量替换；文件来源见下方「前端文件来源」)</span></span></label>
+        </div>
+        <div class="sub-panel" id="panel-edgeone">
+          <label class="ck-row"><input type="checkbox" class="switch" id="backendEnabledEdgeone" data-act="toggle-backend" data-val="edgeone"><span>启用 EdgeOne 线 <span class="hint">(腾讯 EdgeOne Pages 主线；CLI 直传部署，运行环境需 node + npm i -g edgeone)</span></span></label>
+          <div class="fg"><label>Pages 项目名 <span class="hint">(不存在时 CLI 自动创建；注意项目加速区域需为「全球可用区（不含中国大陆）」——未备案域名唯一可选项)</span></label><input type="text" id="eoProjectName" placeholder="如 chinamnos"></div>
+          <div class="fg"><label>API Token <span class="hint">(Pages 控制台 Settings → API Token 创建；账号级权限，只入青龙环境变量，严禁入库)</span></label>
+            <div class="pw-wrap"><input type="password" id="eoApiToken"><button type="button" class="icon-btn pw-eye" data-act="toggle-visibility" data-target="eoApiToken" title="显示/隐藏"><i data-icon="eye"></i></button></div>
           </div>
-          <label class="ck-row"><input type="checkbox" class="switch" id="cfIncludeFrontend" checked><span>联合部署前端 <span class="hint">(每次采集时把前端文件一并部署到 Pages，全量替换)</span></span></label>
+          <div class="fg"><label>自定义域名 <span class="hint">(必填，如 https://chinamnos.example.com；用于读取基线数据 + 容灾线路清单。CNAME 需为 DNS only 灰云)</span></label><input type="text" id="eoDomain" placeholder="https://chinamnos.example.com"></div>
+          <div class="f-row">
+            <div class="fg"><label>CLI 可执行名 <span class="hint">(默认 edgeone，可填完整路径)</span></label><input type="text" id="eoCli" value="edgeone"></div>
+            <div class="fg"><label>部署超时(秒) <span class="hint">(CLI 单次部署上限)</span></label><input type="number" id="eoDeployTimeout" value="600" min="60"></div>
+          </div>
+          <div class="fg"><label>数据路径 <span class="hint">(站点内目录)</span></label><input type="text" id="eoPath" value="data"></div>
+          <label class="ck-row"><input type="checkbox" class="switch" id="eoIncludeFrontend" checked><span>联合部署前端 <span class="hint">(每次采集时把前端文件一并直传，整站替换；产物附 edgeone.json 承接缓存策略；文件来源见下方「前端文件来源」)</span></span></label>
         </div>
         <div class="sub-panel" id="panel-github">
+          <label class="ck-row"><input type="checkbox" class="switch" id="backendEnabledGithub" data-act="toggle-backend" data-val="github"><span>启用 GitHub 线 <span class="hint">(定位海外访客 + 极端兜底，国内基本不可达)</span></span></label>
           <div class="fg"><label>GitHub Token <span class="hint">(需 repo 权限)</span></label>
             <div class="pw-wrap"><input type="password" id="ghToken"><button type="button" class="icon-btn pw-eye" data-act="toggle-visibility" data-target="ghToken" title="显示/隐藏"><i data-icon="eye"></i></button></div>
           </div>
@@ -1554,13 +1732,43 @@ Shell.registerPage({
             <div class="fg"><label>仓库 <span class="hint">(owner/repo)</span></label><input type="text" id="ghRepo" placeholder="user/data-repo"></div>
             <div class="fg"><label>分支</label><input type="text" id="ghBranch" value="main"></div>
           </div>
-          <div class="fg"><label>GitHub Pages 域名 <span class="hint">(自定义域名，留空则用 https://owner.github.io/repo 读取旧数据)</span></label><input type="text" id="ghDomain" placeholder="https://user.github.io/repo"></div>
-          <div class="f-row">
-            <div class="fg"><label>数据路径 <span class="hint">(仓库内目录)</span></label><input type="text" id="ghPath" value="data"></div>
-            <div class="fg"><label>前端目录 <span class="hint">(本地 pages-dist 路径)</span></label><input type="text" id="ghFrontendDir" value="./pages-dist"></div>
-          </div>
-          <label class="ck-row"><input type="checkbox" class="switch" id="ghIncludeFrontend" checked><span>联合部署前端 <span class="hint">(每次采集时把前端文件一并提交到仓库，增量不删除)</span></span></label>
+          <div class="fg"><label>GitHub Pages 域名 <span class="hint">(启用 GH 线时必填；用于读取基线 + 容灾线路清单)</span></label><input type="text" id="ghDomain" placeholder="https://chinamnos-gh.example.com"></div>
+          <div class="fg"><label>数据路径 <span class="hint">(仓库内目录)</span></label><input type="text" id="ghPath" value="data"></div>
+          <label class="ck-row"><input type="checkbox" class="switch" id="ghCnameFile"><span>提交 CNAME 文件 <span class="hint">(使用 GitHub Pages 自定义域时勾选：随站点根提交 CNAME 文件做域名验证，需同时在仓库 Settings 开启 Pages 并添加 DNS 记录)</span></span></label>
+          <label class="ck-row"><input type="checkbox" class="switch" id="ghIncludeFrontend" checked><span>联合部署前端 <span class="hint">(每次采集时把前端文件一并提交到仓库，增量不删除；文件来源见下方「前端文件来源」)</span></span></label>
         </div>
+      </div>
+      <div class="cfg-hr"></div>
+      <div style="padding:16px;border-radius:var(--r-md);background:color-mix(in oklab, var(--surface-2) 50%, transparent);border:1px solid color-mix(in oklab, var(--line) 65%, transparent)">
+        <div class="fg" style="margin:0 0 10px">
+          <label style="font-weight:800">前端文件来源 <span class="hint">(全局，三条线路共用；各线「联合部署前端」开关决定要不要带前端)</span><span class="help" data-tip="决定「联合部署前端」时前端文件从哪里取，各线的部署开关不受影响。优先 GitHub（默认）=每次部署前拉取仓库最新前端，失败自动回落本地（青龙无需再手动同步前端文件）；仅本地=只读「前端目录」，不做拉取；优先本地=本地目录有内容用本地，为空才拉取；仅 GitHub=必须拉取成功，失败则本轮前端部署报错（防止发布过期缓存）。仓库结构：pages-dist/ 目录放全部前端文件（含 _headers/edgeone.json），index.html 保持 __ROUTES__ 占位符原样上传（线路清单由采集端部署时注入）。push 后在下一轮采集时生效（最长一个采集周期）。">?</span></label>
+          <select id="fsMode">
+            <option value="github_prefer" selected>优先 GitHub（默认，失败回落本地）</option>
+            <option value="local_only">仅本地目录（不做拉取）</option>
+            <option value="local_prefer">优先本地（本地为空才拉取）</option>
+            <option value="github_only">仅 GitHub（失败则本轮前端部署报错）</option>
+          </select>
+        </div>
+        <div class="f-row">
+          <div class="fg"><label>前端目录 <span class="hint">(本地文件夹：仅本地模式的读取源，GitHub 模式的缓存位置)</span></label><input type="text" id="fsFrontendDir" value="./pages-dist"></div>
+          <div class="fg"><label>仓库内前端目录 <span class="hint">(GitHub 仓库里放前端文件的目录)</span></label><input type="text" id="fsSubdir" value="pages-dist"></div>
+        </div>
+        <div id="fsGithubFields">
+          <div class="f-row">
+            <div class="fg"><label>仓库 <span class="hint">(owner/repo，非「仅本地」模式必填)</span></label><input type="text" id="fsRepo" placeholder="user/frontend-repo"></div>
+            <div class="fg"><label>分支</label><input type="text" id="fsBranch" value="main"></div>
+          </div>
+        </div>
+        <details style="margin:4px 0 0">
+          <summary style="cursor:pointer;font-size:12px;color:var(--muted)">高级选项（公开仓库一般无需改动）</summary>
+          <div class="f-row">
+            <div class="fg"><label>加速镜像前缀 <span class="hint">(大陆直连不稳时填；拼在完整 API 地址前)</span></label><input type="text" id="fsMirror" placeholder="留空 = 直连 api.github.com"></div>
+            <div class="fg"><label>访问令牌 <span class="hint">(仅私有库需要，公开库留空)</span></label>
+              <div class="pw-wrap"><input type="password" id="fsToken"><button type="button" class="icon-btn pw-eye" data-act="toggle-visibility" data-target="fsToken" title="显示/隐藏"><i data-icon="eye"></i></button></div>
+            </div>
+          </div>
+          <div class="fg"><label>拉取超时(秒)</label><input type="number" id="fsTimeout" value="60" min="10"></div>
+        </details>
       </div>
     </div>
 
@@ -1629,6 +1837,9 @@ Shell.registerPage({
       <h2 class="panel-title"><span class="p-icon other"><i data-icon="box"></i></span>其他配置</h2>
       <div class="f-row">
         <div class="fg"><label>变更日志保留天数<span class="help" data-tip="变更日志(changelog)的保留天数。超过此天数的日志条目将在每次采集时自动清理。值越大历史记录越全，但存储占用也越大。">?</span></label><input type="number" id="retentionDays" value="30" min="1" max="365"></div>
+        <div class="fg"><label>公告保留天数<span class="help" data-tip="运营商公告(announce)按日期保留的天数，过期条目写盘时丢弃。与变更日志同模式。">?</span></label><input type="number" id="annRetentionDays" value="90" min="7" max="365"></div>
+        <div class="fg"><label>公告每源抓取条数<span class="help" data-tip="每个省份源每次采集抓取的最新公告条数上限（按日期降序截取）。值越大单源覆盖越久，但采集耗时与 announce.json 体积相应增大；实际入库条数还受公告保留天数过滤。">?</span></label><input type="number" id="annPerSourceFetch" value="15" min="5" max="50"></div>
+        <div class="fg"><label>公告全国判定阈值<span class="help" data-tip="联通混合源：同一条公告出现在 ≥N 个省的列表中即判定为全国公告。">?</span></label><input type="number" id="annNationalThreshold" value="5" min="2" max="31"></div>
         <div class="fg"><label>Schema 版本</label><input type="text" id="schemaVersion" value="4"></div>
       </div>
       <div class="cfg-hr"></div>
@@ -1658,6 +1869,7 @@ Shell.registerPage({
     <div class="panel rise">
       <h2 class="panel-title"><span class="p-icon api"><i data-icon="link"></i></span>启用与 API</h2>
       <label class="ck-row"><input type="checkbox" class="switch" id="carrierEnabled" checked><span>启用该运营商 <span class="hint">(取消后该运营商不参与采集)</span></span></label>
+      <label class="ck-row"><input type="checkbox" class="switch" id="carrierAnnEnabled" checked><span>公告采集 <span class="hint">(各省公告参数已内置；广东走无头浏览器暂未启用)</span></span></label>
       <div class="f-row" style="margin-top:10px">
         <div class="fg"><label>基础URL</label><input type="text" id="apiBaseUrl" value=""></div>
         <div class="fg"><label>应用URL</label><input type="text" id="apiAppUrl" value=""></div>
@@ -1733,7 +1945,7 @@ Shell.registerPage({
         <div class="fg"><label>重试基础等待(ms) <span class="hint">(100-60000)</span><span class="help" data-tip="指数退避的基数。第N次重试等待 = 基础等待 × 2^N。例如1000ms：第1次等1s，第2次等2s，第3次等4s… 值越大重试间隔越长，给服务端更多恢复时间。">?</span></label><input type="number" id="retryBaseMs" value="1000" min="100" max="60000"></div>
       </div>
       <div class="f-row">
-        <div class="fg"><label>重试最大等待(ms)<span class="help" data-tip="单次重试等待的上限。指数退避算出的等待时间不会超过此值。防止基础等待×2^N增长过大。例如设30000ms，即使算出应等64s也只等30s。">?</span></label><input type="number" id="retryMaxMs" value="30000" min="1000" max="120000"></div>
+        <div class="fg"><label>重试最大等待(ms)<span class="help" data-tip="单次重试等待的上限。指数退避算出的等待时间不会超过此值。防止基础等待×2^N增长过大。例如设30000ms，即使算出应等64s也只等30s。长时运行的定时采集可设更大（如300000=5分钟）用于深度避风控退避。">?</span></label><input type="number" id="retryMaxMs" value="30000" min="1000" max="600000"></div>
         <div class="fg"><label>重试抖动比例 <span class="hint">(0-1)</span><span class="help" data-tip="在指数退避等待时间上叠加随机偏移，防止多个实例同时重试造成「惊群」。0=无抖动，0.3=±30%随机偏移。例如等待2s、抖动0.3，实际等1.4s~2.6s。">?</span></label><input type="number" id="retryJitter" value="0.3" min="0" max="1" step="0.1"></div>
       </div>
       <div class="cfg-hr"></div>
@@ -1835,6 +2047,8 @@ Shell.registerPage({
 
     mountIcons(document.getElementById("configRoot"));
     initFX(document.getElementById("configRoot"));
+    mountAuth(document.getElementById("cfgAuthSlot"));
+    mountAppsMenu(document.getElementById("cfgAppsMenuSlot"), "config");
     navTabs = new Tabs(document.getElementById("configNav"), onNavChange);
     navTabs.activate("global");
     bindEvents();
@@ -1842,8 +2056,8 @@ Shell.registerPage({
     init();
   },
   onExit: function (root) {
+    if (navTabs) { navTabs.destroy(); navTabs = null; }
     root.innerHTML = "";
-    navTabs = null;
     suppressNav = false;
     clearTimeout(toastTimer);
   },

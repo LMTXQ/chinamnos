@@ -1,0 +1,5 @@
+# 本地开发密钥：复制为 .dev.vars 并填入真实值（.dev.vars 已被 git 忽略，不进仓库）
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxx
+# 32 字节随机十六进制，PowerShell 生成：
+# -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
+CARDHUB_SECRET=

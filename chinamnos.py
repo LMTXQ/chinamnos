@@ -9,11 +9,11 @@ Python v2.1.0
 环境变量: TARIFF_CONFIG (JSON 格式完整配置)
 
 用法:
-  python CMCC.py                  # 正常采集
-  python CMCC.py --init           # 初始化基线（不通知）
-  python CMCC.py --test           # 测试模式（仅切换日志级别为 DEBUG，采集范围由配置决定）
-  python CMCC.py --rebuild-stats  # 从已有快照重建 stats（不采集，适合改了 stats 结构时）
-  python CMCC.py --deploy-frontend  # 仅部署前端文件（不采集、不重建 stats）
+  python chinamnos.py                  # 正常采集
+  python chinamnos.py --init           # 初始化基线（不通知）
+  python chinamnos.py --test           # 测试模式（仅切换日志级别为 DEBUG，采集范围由配置决定）
+  python chinamnos.py --rebuild-stats  # 从已有快照重建 stats（不采集，适合改了 stats 结构时）
+  python chinamnos.py --deploy-frontend  # 仅部署前端文件（不采集、不重建 stats）
 """
 
 import os
@@ -21,6 +21,8 @@ import sys
 import json
 import re
 import shutil
+import subprocess
+import tempfile
 import time
 import random
 import logging
@@ -29,10 +31,12 @@ import datetime
 import traceback
 import ssl
 import uuid
+import io
 import base64
 import hashlib
 import mimetypes
 import string
+import zipfile
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1235,24 +1239,43 @@ def carrier_display(carrier_key):
 
 DEFAULT_CONFIG = {
     'storage': {
-        'type': 'cloudflare',
-        'cloudflare': {
-            'account_id': '',
-            'project_name': '',
-            'api_token': '',
-            'domain': '',
-            'path': 'data',
-            'include_frontend': True,
-            'frontend_dir': './pages-dist',
-        },
-        'github': {
-            'token': '',
-            'repo': '',
-            'branch': 'main',
-            'path': 'data',
-            'domain': '',
-            'include_frontend': True,
-            'frontend_dir': './pages-dist',
+        # 多通道部署：primary = 容灾第一优先 + 旧数据基线读取来源；
+        # backends 各线 enabled 开关任意组合，commit 遍历启用线逐个推送（单线失败仅告警）。
+        # 兼容旧单 type 格式（type: 'cloudflare' + 顶层 cloudflare/github 键）。
+        'primary': 'cloudflare',
+        'backends': {
+            'cloudflare': {
+                'enabled': True,
+                'account_id': '',
+                'project_name': '',
+                'api_token': '',
+                'domain': '',
+                'path': 'data',
+                'include_frontend': True,
+                'frontend_dir': './pages-dist',
+            },
+            'edgeone': {
+                'enabled': False,
+                'project_name': '',
+                'api_token': '',   # Pages 控制台 Settings → API Token（账号级，入青龙环境变量，严禁入库）
+                'domain': '',      # 自定义域（必填：读取基线 + 容灾清单来源）
+                'cli': 'edgeone',  # CLI 可执行名（环境需 node + npm i -g edgeone，版本≥1.2.30）
+                'deploy_timeout': 600,
+                'path': 'data',
+                'include_frontend': True,
+                'frontend_dir': './pages-dist',
+            },
+            'github': {
+                'enabled': False,
+                'token': '',
+                'repo': '',
+                'branch': 'main',
+                'path': 'data',
+                'domain': '',        # 自定义域（多线下必填；同时用于容灾清单）
+                'cname_file': False, # 启用 GitHub Pages 自定义域时置 true：随站点根提交 CNAME 文件
+                'include_frontend': True,
+                'frontend_dir': './pages-dist',
+            },
         },
         'cache': {
             'ttl_minutes': 30,
@@ -1263,6 +1286,21 @@ DEFAULT_CONFIG = {
         },
         'manifest_cache': {
             'enabled': True,
+        },
+        'frontend_source': {
+            # 前端文件来源（三线共用）：github_prefer=优先 GitHub（默认；部署前拉取最新，失败回落本地，仅告警不中断）；
+            #   local_only=仅本地目录（不做任何拉取）；
+            #   local_prefer=优先本地（本地目录非空用本地，为空才拉取）；
+            #   github_only=仅 GitHub（必须拉取成功，失败则本轮前端部署报错终止，防发布过期缓存）。
+            # frontend_dir 为全局本地前端目录（读取源/缓存位置），优先级高于各线旧 frontend_dir 字段（历史遗留，仍兼容）。
+            'mode': 'github_prefer',
+            'frontend_dir': './pages-dist',
+            'repo': '',            # 如 'user/repo'（前端文件所在仓库；非 local_only 模式必填）
+            'branch': 'main',
+            'subdir': 'pages-dist',  # 仓库内前端文件所在目录（zip 包内相对路径）
+            'mirror_prefix': '',   # 可选 GitHub 加速镜像前缀（拼在完整 API URL 前），如 'https://ghfast.top/'
+            'token': '',           # 可选：私有库访问令牌（公开库留空即可）
+            'timeout_sec': 60,
         },
     },
     'crawl': {
@@ -1462,25 +1500,43 @@ def parse_and_validate_config():
         raise ValueError(f'配置 JSON 语法错误: {e}')
 
     config = _deep_merge(DEFAULT_CONFIG, user_config)
+    # 旧单 type 格式兼容：剔除 DEFAULT_CONFIG 注入的空模板 primary/backends，
+    # 避免归一化时误用空凭证模板覆盖用户真实单线配置
+    _user_sc = user_config.get('storage') or {}
+    if not (isinstance(_user_sc.get('backends'), dict) or 'primary' in _user_sc):
+        config['storage'].pop('backends', None)
+        config['storage'].pop('primary', None)
     errors = []
 
-    storage_type = config['storage']['type']
-    if storage_type not in ('cloudflare', 'github'):
-        errors.append(f'storage.type 无效: {storage_type}, 可选: cloudflare/github')
-
-    if storage_type == 'cloudflare':
-        cf = config['storage']['cloudflare']
-        for k in ('account_id', 'project_name', 'api_token'):
-            if not cf.get(k):
-                errors.append(f'storage.cloudflare.{k} 未配置')
-        if not cf.get('domain'):
-            errors.append('storage.cloudflare.domain 未配置（Cloudflare 方案必须配置域名，否则无法读取旧数据做对比）')
-    elif storage_type == 'github':
-        gh = config['storage']['github']
-        if not gh.get('token'):
-            errors.append('storage.github.token 未配置')
-        if not gh.get('repo'):
-            errors.append('storage.github.repo 未配置')
+    # 多通道 storage 校验：normalize 统一新格式（primary+backends）与旧单 type 格式，
+    # 并把各线配置提升到 config['storage'][name]（进程内），逐启用线校验必填项
+    try:
+        _norm = normalize_storage_config(config)
+    except ValueError as e:
+        errors.append(f'storage: {e}')
+        _norm = None
+    if _norm:
+        for _name in _norm['order']:
+            _b = config['storage'].get(_name) or {}
+            if _name == 'cloudflare':
+                for k in ('account_id', 'project_name', 'api_token'):
+                    if not _b.get(k):
+                        errors.append(f'storage.backends.cloudflare.{k} 未配置')
+                if not _b.get('domain'):
+                    errors.append('storage.backends.cloudflare.domain 未配置（必须配置域名，否则无法读取旧数据做对比）')
+            elif _name == 'github':
+                for k in ('token', 'repo'):
+                    if not _b.get(k):
+                        errors.append(f'storage.backends.github.{k} 未配置')
+                if not _b.get('domain'):
+                    errors.append('storage.backends.github.domain 未配置（多线下必填：读取基线 + 容灾清单来源）')
+            elif _name == 'edgeone':
+                for k in ('project_name',):
+                    if not _b.get(k):
+                        errors.append(f'storage.backends.edgeone.{k} 未配置')
+                if not _b.get('domain'):
+                    errors.append('storage.backends.edgeone.domain 未配置（必填：读取基线 + 容灾清单来源）')
+                # api_token 可空：本机 CLI 已登录时可用本地凭证；青龙等无浏览器环境必须填
 
     cache_ttl = config.get('storage', {}).get('cache', {}).get('ttl_minutes', 30)
     if not isinstance(cache_ttl, (int, float)) or cache_ttl < 0:
@@ -1500,7 +1556,7 @@ def parse_and_validate_config():
         ('category_interval_ms', 100, 30000),
         ('page_interval_ms', 50, 10000),
         ('retry_base_ms', 100, 60000),
-        ('retry_max_ms', 1000, 120000),
+        ('retry_max_ms', 1000, 600000),
     ]:
         v = crawl.get(key)
         if not isinstance(v, (int, float)) or v < lo or v > hi:
@@ -1595,7 +1651,7 @@ def parse_and_validate_config():
             ('category_interval_ms', 100, 30000),
             ('page_interval_ms', 50, 10000),
             ('retry_base_ms', 100, 60000),
-            ('retry_max_ms', 1000, 120000),
+            ('retry_max_ms', 1000, 600000),
         ]:
             v = carrier_crawl.get(key)
             if not isinstance(v, (int, float)) or v < lo or v > hi:
@@ -1899,7 +1955,9 @@ class CmccApi(_BaseCarrierApi):
             data = resp.json()
             body_hex = data.get('body') or ''
             if not body_hex:
-                return None
+                # 200但加密体为空：网关拥塞挂起/风控软拒的典型症状（挂起1-2分钟后返回空body）。
+                # 抛异常交由 _call_with_retry 指数退避重试——静默返回None会绕过重试机制直接判死。
+                raise RuntimeError('移动接口返回空body(疑似风控软拒), 已进入重试')
             plain = self.decrypt(body_hex)
             return json.loads(plain)
         return self._call_with_retry(do_request,
@@ -2171,6 +2229,52 @@ class CuccApi(_BaseCarrierApi):
         return {'data': {'beans': beans}}
 
 
+def _ctcc_stealth_script():
+    """电信浏览器反检测注入脚本（模块级，供资费与公告采集共用）。
+    伪造 WebGL 厂商/plugins/chrome 对象/硬件参数等深层指纹——
+    headless chromium 无 GPU 无插件，缺这套伪装会被瑞数判伪造（白屏+400）。"""
+    def _make_eval_str(fun_js, *args):
+        _args = ', '.join(json.dumps('undefined' if a is None else a) for a in args)
+        return f'({fun_js})({_args})'
+    _injections = [
+        ('utils.js',),
+        ('chrome.app.js',),
+        ('chrome.runtime.js', False),
+        ('iframe.contentWindow.js',),
+        ('media.codecs.js',),
+        ('navigator.languages.js', ['zh-CN', 'zh', 'en']),
+        ('navigator.permissions.js',),
+        ('navigator.plugins.js',),
+        ('navigator.vendor.js', 'Google Inc.'),
+        ('navigator.webdriver.js',),
+        ('webgl.vendor.js', 'Intel Inc.', 'Intel Iris OpenGL Engine'),
+        ('window.outerdimensions.js',),
+    ]
+    _parts = []
+    for _item in _injections:
+        _name = _item[0]
+        _js = _STEALTH_JS_FILES.get(_name)
+        if _js is None:
+            logger.warning(f'  内嵌 stealth JS 缺失: {_name}')
+            continue
+        _parts.append(_make_eval_str(_js, *_item[1:]))
+    _fix_js = r'''
+(() => {
+  try {
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+    if (window.chrome && !window.chrome.runtime) {
+      Object.defineProperty(window.chrome, 'runtime', { value: { connect: () => {}, sendMessage: () => {} } });
+    }
+  } catch(e) {}
+})();
+'''
+    _parts.append(_fix_js)
+    return '\n'.join(_parts)
+
+
 class CtccApi(_BaseCarrierApi):
     DIRECT_API_URL = 'https://www.189.cn/wapportalweb/wapportalweb/tariffSection.do'
     DIRECT_AES_KEY = b'telecom_wap_2018'
@@ -2185,46 +2289,7 @@ class CtccApi(_BaseCarrierApi):
         self._direct_aes_key = config.get('api', {}).get('direct_aes_key', '').encode('utf-8') if config.get('api', {}).get('direct_aes_key') else self.DIRECT_AES_KEY
 
     def _stealth_init_script(self):
-        def _make_eval_str(fun_js, *args):
-            _args = ', '.join(json.dumps('undefined' if a is None else a) for a in args)
-            return f'({fun_js})({_args})'
-        _injections = [
-            ('utils.js',),
-            ('chrome.app.js',),
-            ('chrome.runtime.js', False),
-            ('iframe.contentWindow.js',),
-            ('media.codecs.js',),
-            ('navigator.languages.js', ['zh-CN', 'zh', 'en']),
-            ('navigator.permissions.js',),
-            ('navigator.plugins.js',),
-            ('navigator.vendor.js', 'Google Inc.'),
-            ('navigator.webdriver.js',),
-            ('webgl.vendor.js', 'Intel Inc.', 'Intel Iris OpenGL Engine'),
-            ('window.outerdimensions.js',),
-        ]
-        _parts = []
-        for _item in _injections:
-            _name = _item[0]
-            _js = _STEALTH_JS_FILES.get(_name)
-            if _js is None:
-                logger.warning(f'  内嵌 stealth JS 缺失: {_name}')
-                continue
-            _parts.append(_make_eval_str(_js, *_item[1:]))
-        _fix_js = r'''
-(() => {
-  try {
-    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
-    if (window.chrome && !window.chrome.runtime) {
-      Object.defineProperty(window.chrome, 'runtime', { value: { connect: () => {}, sendMessage: () => {} } });
-    }
-  } catch(e) {}
-})();
-'''
-        _parts.append(_fix_js)
-        return '\n'.join(_parts)
+        return _ctcc_stealth_script()
 
     def _ensure_browser(self, force=False):
         if self._page is not None and not force:
@@ -2990,10 +3055,6 @@ def _nm_to_fields(nm, tariff_attr='1', t1='1', t2='1', carrier='cmcc'):
     f['移动高清'] = _s(nm.get('iptv'))
     _sms_raw = _s(nm.get('sms')) or _s(nm.get('SMS')) or _s(nm.get('shortMessage'))
     f['短信'] = f'{_strip_trailing(_sms_raw, ["条"])}条' if (_sms_raw and _sms_raw not in ('0', 'null')) else ''
-    if not f['短信']:
-        _m = re.search(r'短信\s*(\d+)\s*条', f.get('其他服务内容', '') or '')
-        if _m:
-            f['短信'] = f'{_m.group(1)}条'
     f['亲情网'] = _s(nm.get('familyNet'))
     f['权益'] = _s(nm.get('rights'))
     f['超出资费说明'] = _s(nm.get('extraFees'))
@@ -3001,6 +3062,12 @@ def _nm_to_fields(nm, tariff_attr='1', t1='1', t2='1', carrier='cmcc'):
     f['其他费用'] = _s(nm.get('otherFee'))
     f['资费说明'] = _s(nm.get('tariffDesc') or nm.get('feeDesc'))
     f['其他服务内容'] = _s(nm.get('otherContent'))
+    # 回退：短信字段为空时从服务内容提取（官网常把「含短信100条」写进 otherContent）。
+    # 原实现误放在 其他服务内容 赋值之前，永远读到空值（死代码），移到赋值之后并先洗标签
+    if not f['短信']:
+        _m = re.search(r'短信\s*(\d+)\s*条', _norm_txt(f['其他服务内容']))
+        if _m:
+            f['短信'] = f'{_m.group(1)}条'
     f['办理说明'] = _s(nm.get('handleDesc') or nm.get('transactDesc'))
     f['其他说明'] = _s(nm.get('otherDesc'))
     f['状态'] = _s(nm.get('status') or nm.get('state'))
@@ -3034,6 +3101,14 @@ def _nm_to_fields(nm, tariff_attr='1', t1='1', t2='1', carrier='cmcc'):
     for k, v in nm.items():
         if k not in mapped_keys and v is not None and v != '':
             extra_other[k] = _s(v)
+
+    # 存储层统一 HTML 清洗：官网 API 的描述类字段可能带 <p>/<br> 等标签，
+    # 此前只在变更对比（_diff_fields norm=True → _norm_txt）清洗，存储仅 _s 去空白，
+    # 造成「变更记录是纯文本、快照残留标签」的两张皮。此处让存储值与对比值同源清洗，
+    # 也避免标签属性变化（如 <p class>）在对比时被洗掉而快照反复变动的假 diff。
+    for d in (f, extra, extra_other):
+        for k in d:
+            d[k] = _norm_txt(d[k])
 
     return f, extra, extra_other
 
@@ -3532,6 +3607,8 @@ def build_stats(opts):
 
         carriers[carrier_key] = {
             'default_province': default_province,
+            # 全专区条目名并集去重计数（全网+31省）：挤掉跨省重复，反映真实套餐品种数
+            'total_unique': len(cdata.get('name_set') or set()),
             'last_crawl': last_crawl,
             'today': today,
             'category_maps': CARRIER_CATEGORY_MAPS.get(carrier_key, {
@@ -3558,7 +3635,98 @@ def build_stats(opts):
 #  存储后端: Cloudflare Pages / GitHub Pages（buffer + commit 模式）
 # ════════════════════════════════════════════════════════════
 
-def _collect_frontend_files(frontend_dir_path):
+# ── 前端文件源（可选）：GitHub 仓库拉取，本地目录兼任缓存与回落 ──
+_FRONTEND_SOURCE_DONE = False
+
+
+def _frontend_extract_zip(zip_bytes, subdir, target_dir):
+    """解包 GitHub zipball：提取 zip 根目录下 subdir/ 内的文件，原子替换写入 target_dir。
+    原子性：先写 .fetch_tmp 临时目录，全部成功后替换旧目录——中途失败不影响既有缓存。"""
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        names = zf.namelist()
+        top = ''
+        for n in names:   # zipball 顶层目录形如 {repo}-{短sha}/
+            cand = n.split('/', 1)[0] + '/'
+            if cand and n != cand:
+                top = cand
+                break
+        src_prefix = (top + subdir.strip('/') + '/')
+        picked = [n for n in names if n.startswith(src_prefix) and n != src_prefix]
+        if not picked:
+            raise ValueError(f'仓库 zip 中未找到前端目录 {subdir}/')
+        tmp = target_dir.rstrip('/\\') + '.fetch_tmp'
+        if os.path.isdir(tmp):
+            shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(tmp, exist_ok=True)
+        try:
+            for n in picked:
+                rel = n[len(src_prefix):].replace('\\', '/')
+                if not rel or rel.endswith('/'):
+                    continue
+                dest = os.path.join(tmp, *rel.split('/'))
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with zf.open(n) as fsrc, open(dest, 'wb') as fdst:
+                    shutil.copyfileobj(fsrc, fdst)
+            if os.path.isdir(target_dir):
+                shutil.rmtree(target_dir)
+            os.replace(tmp, target_dir)
+        except Exception:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+
+
+def _ensure_frontend_source(frontend_dir_path, source_cfg):
+    """前端文件来源。mode 四档（默认 github_prefer）：
+      github_prefer  优先 GitHub：每次部署前拉取最新，失败回落本地既有内容（仅告警不中断）
+      local_only     仅本地目录，不做任何拉取
+      local_prefer   优先本地：本地目录非空直接用，为空才拉取
+      github_only    仅 GitHub：必须拉取成功，失败抛错终止本轮前端部署（防发布过期缓存）
+    本地目录在 GitHub 模式下兼任缓存副本（原子覆盖写入）。进程内最多处理一次。"""
+    global _FRONTEND_SOURCE_DONE
+    if _FRONTEND_SOURCE_DONE:
+        return
+    _FRONTEND_SOURCE_DONE = True
+    fs = source_cfg or {}
+    mode = str(fs.get('mode') or '').strip() or 'github_prefer'
+    if mode not in ('github_prefer', 'local_only', 'local_prefer', 'github_only'):
+        mode = 'github_prefer'
+    if mode == 'local_only':
+        return
+    frontend_dir = os.path.abspath(frontend_dir_path)
+    has_local = False
+    if os.path.isdir(frontend_dir):
+        has_local = any(os.listdir(frontend_dir))
+    if mode == 'local_prefer' and has_local:
+        return
+    repo = str(fs.get('repo') or '').strip().strip('/')
+    if not repo:
+        if mode == 'github_only':
+            raise RuntimeError('前端源模式=github_only 且未配置 frontend_source.repo，无法获取前端文件')
+        logger.warning(f'前端源模式={mode} 但未配置 frontend_source.repo，回退本地前端目录')
+        return
+    branch = str(fs.get('branch') or 'main').strip()
+    subdir = str(fs.get('subdir') or 'pages-dist').strip('/')
+    url = f'https://api.github.com/repos/{repo}/zipball/{branch}'
+    mirror = str(fs.get('mirror_prefix') or '').strip()
+    if mirror:
+        url = mirror.rstrip('/') + '/' + url
+    headers = {'Authorization': f'Bearer {fs["token"]}'} if fs.get('token') else {}
+    timeout = int(fs.get('timeout_sec') or 60)
+    try:
+        logger.info(f'GitHub 前端源[{mode}]: 拉取 {repo}@{branch} (subdir={subdir}) ...')
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        if resp.status_code != 200:
+            raise RuntimeError(f'HTTP {resp.status_code}')
+        _frontend_extract_zip(resp.content, subdir, frontend_dir)
+        logger.info('GitHub 前端源: 拉取成功，本地前端目录已更新')
+    except Exception as e:
+        if mode == 'github_only':
+            raise RuntimeError(f'GitHub 前端源拉取失败(仅 GitHub 模式不回落本地): {str(e)[:120]}')
+        logger.warning(f'GitHub 前端源拉取失败: {str(e)[:120]}，回退本地前端目录（上次成功内容）')
+
+
+def _collect_frontend_files(frontend_dir_path, source_cfg=None):
+    _ensure_frontend_source(frontend_dir_path, source_cfg)
     files = {}
     frontend_dir = os.path.abspath(frontend_dir_path)
     if not os.path.isdir(frontend_dir):
@@ -3581,6 +3749,11 @@ class StorageBackend:
         self._local_cache_enabled = False
         self._local_cache_dir = ''
         self._manifest_cache_enabled = False
+        # 多通道部署：MultiStorage 在 commit 前写入线路清单，各线 commit 时注入 index.html；
+        # None = 不注入（本地开发/未启用多通道时占位符原样保留，前端守卫自动不动作）
+        self.route_manifest = None
+        # manifest 缓存文件名按线隔离（CF 保持原名兼容存量缓存，其他线带后缀）
+        self.manifest_cache_name = 'deploy_manifest.json'
 
     def set_carrier_key(self, carrier_key):
         self.carrier_key = carrier_key
@@ -3664,7 +3837,7 @@ class StorageBackend:
     def _read_manifest_cache(self):
         if not self._manifest_cache_enabled:
             return None
-        fpath = os.path.join(self._local_cache_dir, 'deploy_manifest.json')
+        fpath = os.path.join(self._local_cache_dir, self.manifest_cache_name)
         if not os.path.isfile(fpath):
             return None
         try:
@@ -3679,7 +3852,7 @@ class StorageBackend:
     def _write_manifest_cache(self, manifest):
         if not self._manifest_cache_enabled:
             return
-        fpath = os.path.join(self._local_cache_dir, 'deploy_manifest.json')
+        fpath = os.path.join(self._local_cache_dir, self.manifest_cache_name)
         os.makedirs(os.path.dirname(fpath), exist_ok=True)
         with open(fpath, 'w', encoding='utf-8') as f:
             json.dump({'version': 1, 'manifest': manifest}, f, ensure_ascii=False, indent=2)
@@ -3699,6 +3872,26 @@ class StorageBackend:
     def merge_buffer(self, other):
         raise NotImplementedError
 
+    # ── 多通道：线路清单注入（index.html 占位符替换）──
+    ROUTES_PLACEHOLDER = 'window.__ROUTES__=null'
+
+    def _inject_routes(self, files):
+        """commit 前调用：把 index.html 中的 __ROUTES__ 占位替换为本线携带的完整线路清单。
+        route_manifest 为 None（本地开发/单线未配置清单）时不注入，前端守卫读到 null 自动不动作。"""
+        if self.route_manifest is None:
+            return
+        html = files.get('index.html')
+        if html is None:
+            return
+        payload = 'window.__ROUTES__=' + json.dumps(
+            self.route_manifest, ensure_ascii=False, separators=(',', ':'))
+        text = html.decode('utf-8')
+        if self.ROUTES_PLACEHOLDER not in text:
+            logger.warning('存储层: index.html 未找到 __ROUTES__ 占位符，跳过线路清单注入')
+            return
+        files['index.html'] = text.replace(self.ROUTES_PLACEHOLDER, payload, 1).encode('utf-8')
+        logger.debug(f'存储层: __ROUTES__ 已注入 ({len(self.route_manifest.get("fallbacks") or [])} 条备线)')
+
 
 class CloudflareStorage(StorageBackend):
     def __init__(self, config):
@@ -3711,7 +3904,10 @@ class CloudflareStorage(StorageBackend):
         assert self.domain, 'storage.cloudflare.domain 不能为空，否则无法读取旧数据做对比'
         self.path_prefix = cf.get('path', 'data').strip('/')
         self.include_frontend = cf.get('include_frontend', True)
-        self.frontend_dir = cf.get('frontend_dir', './pages-dist')
+        fs_src = (config.get('storage') or {}).get('frontend_source') or {}
+        # 全局前端目录优先（storage.frontend_source.frontend_dir），各线历史遗留 frontend_dir 作回退
+        self.frontend_dir = str(fs_src.get('frontend_dir') or '').strip() or cf.get('frontend_dir') or './pages-dist'
+        self.frontend_source = fs_src
         self.api_base = 'https://api.cloudflare.com/client/v4'
         self.session = requests.Session()
         self.session.headers.update({'Authorization': f'Bearer {self.api_token}'})
@@ -3803,9 +3999,10 @@ class CloudflareStorage(StorageBackend):
 
         files = {}
         if self.include_frontend:
-            files.update(_collect_frontend_files(self.frontend_dir))
+            files.update(_collect_frontend_files(self.frontend_dir, self.frontend_source))
         for rel_path, content in self._buffer.items():
             files[rel_path] = content
+        self._inject_routes(files)
 
         cached_manifest = {}
         if skip_unchanged_download and self._manifest_cache_enabled:
@@ -3898,15 +4095,30 @@ class CloudflareStorage(StorageBackend):
         # 阶段2 创建部署：multipart 仅含 manifest（路径→MD5 映射）+ branch
 
         def _get_upload_jwt():
-            resp = self.session.get(
-                f'{self.api_base}/accounts/{self.account_id}/pages/projects/{self.project_name}/upload-token',
-                timeout=30,
-            )
-            resp.raise_for_status()
-            jwt = (resp.json().get('result') or {}).get('jwt')
-            if not jwt:
-                raise RuntimeError(f'Cloudflare: 获取 upload-token 失败: {resp.text}')
-            return jwt
+            last_err = None
+            for attempt in range(3):
+                try:
+                    resp = self.session.get(
+                        f'{self.api_base}/accounts/{self.account_id}/pages/projects/{self.project_name}/upload-token',
+                        timeout=30,
+                    )
+                    resp.raise_for_status()
+                    jwt = (resp.json().get('result') or {}).get('jwt')
+                    if not jwt:
+                        raise RuntimeError(f'Cloudflare: 获取 upload-token 失败: {resp.text}')
+                    return jwt
+                except Exception as e:
+                    last_err = str(e)
+                    if isinstance(e, (requests.exceptions.SSLError, requests.exceptions.ConnectionError)):
+                        try:
+                            self.session.close()
+                        except Exception:
+                            pass
+                        self.session = requests.Session()
+                        self.session.headers.update({'Authorization': f'Bearer {self.api_token}'})
+                if attempt < 2:
+                    time.sleep(1 + attempt)
+            raise RuntimeError(f'Cloudflare: 获取 upload-token 失败（重试3次）: {last_err}')
 
         jwt = _get_upload_jwt()
 
@@ -4026,7 +4238,12 @@ class GitHubStorage(StorageBackend):
         self.path_prefix = gh.get('path', 'data').strip('/')
         self.domain = gh.get('domain', '').rstrip('/')
         self.include_frontend = gh.get('include_frontend', True)
-        self.frontend_dir = gh.get('frontend_dir', './pages-dist')
+        fs_src = (config.get('storage') or {}).get('frontend_source') or {}
+        # 全局前端目录优先（storage.frontend_source.frontend_dir），各线历史遗留 frontend_dir 作回退
+        self.frontend_dir = str(fs_src.get('frontend_dir') or '').strip() or gh.get('frontend_dir') or './pages-dist'
+        self.frontend_source = fs_src
+        # 启用 GitHub Pages 自定义域时置 true：commit 随站点根提交 CNAME 文件
+        self.cname_file = bool(gh.get('cname_file', False))
         self.api_base = 'https://api.github.com'
         self.session = requests.Session()
         self.session.headers.update({
@@ -4086,9 +4303,14 @@ class GitHubStorage(StorageBackend):
     def commit(self, message='auto update', skip_unchanged_download=False):
         files = {}
         if self.include_frontend:
-            files.update(_collect_frontend_files(self.frontend_dir))
+            files.update(_collect_frontend_files(self.frontend_dir, self.frontend_source))
         for rel_path, content in self._buffer.items():
             files[rel_path] = content
+        self._inject_routes(files)
+        # GitHub Pages 自定义域：需在站点根提交 CNAME 文件（域名验证），启用 GH 线时由配置开启
+        if self.include_frontend and self.cname_file and self.domain:
+            cname_host = self.domain.replace('https://', '').replace('http://', '')
+            files['CNAME'] = (cname_host + '\n').encode('utf-8')
 
         # 兜底补全：仅对仍在采集目标中的省份保留旧数据。
         # 未配置的省份不在 files 中，并在后续 tree_items 中标记删除。
@@ -4223,14 +4445,386 @@ class GitHubStorage(StorageBackend):
             return []
 
 
-def create_storage(config):
-    storage_type = config['storage']['type']
-    if storage_type == 'cloudflare':
+# ════════════════════════════════════════════════════════════
+#  EdgeOne Pages（Makers）直传通道 + 多通道编排（MultiStorage）
+# ──────────────────────────────────────────────────────────────
+#  ▸ EdgeOne 线：读取基线走自定义域 HTTP，推送走 edgeone CLI 免浏览器 token 部署
+#    （`edgeone pages deploy <dir> -n <项目名> -t <token>`，CLI≥1.2.30，环境需 node + npm i -g edgeone）
+#  ▸ CLI 直传为整站替换语义：本次不写入的路径 = 线上删除（与 CF 全量替换一致）
+#  ▸ MultiStorage：基线读写走 primary 线，commit 遍历全部 enabled 线逐个推送，单线失败仅告警
+#  ▸ 缓存策略：edgeone.json 为 pages-dist 中的实体文件（与 CF 的 _headers 并排、互相独立），
+#    随前端收集自动带上，无需部署端动态生成
+# ════════════════════════════════════════════════════════════
+
+
+class EdgeOneStorage(StorageBackend):
+    manifest_cache_name = 'deploy_manifest_edgeone.json'  # 全量直传不依赖 manifest，命名隔离防呆
+
+    def __init__(self, config):
+        super().__init__()
+        eo = config['storage']['edgeone']
+        self.project_name = eo['project_name']
+        # api_token 可空：本机已 edgeone login 时走 CLI 本地凭证；青龙等无浏览器环境必须填 API Token
+        self.api_token = (eo.get('api_token') or '').strip()
+        self.domain = (eo.get('domain') or '').rstrip('/')
+        assert self.domain, 'storage edgeone.domain 不能为空（读取基线通道）'
+        self.path_prefix = eo.get('path', 'data').strip('/')
+        self.include_frontend = eo.get('include_frontend', True)
+        fs_src = (config.get('storage') or {}).get('frontend_source') or {}
+        # 全局前端目录优先（storage.frontend_source.frontend_dir），各线历史遗留 frontend_dir 作回退
+        self.frontend_dir = str(fs_src.get('frontend_dir') or '').strip() or eo.get('frontend_dir') or './pages-dist'
+        self.frontend_source = fs_src
+        self.cli = (eo.get('cli') or 'edgeone').strip()
+        self.deploy_timeout = int(eo.get('deploy_timeout', 600))
+        self.session = requests.Session()
+        self._buffer = {}
+        self._init_local_cache(config)
+        logger.info(f'EdgeOne 存储初始化: project={self.project_name}, domain={self.domain}')
+
+    def merge_buffer(self, other):
+        self._buffer.update(other._buffer)
+
+    def read_json(self, key):
+        buf_key = f'{self.path_prefix}/{key}'
+        if buf_key in self._buffer:
+            return json.loads(self._buffer[buf_key].decode('utf-8'))
+        local_data = self._local_read(key)
+        if local_data is not None:
+            return local_data
+        url = f'{self.domain}/{self.path_prefix}/{key}'
+        try:
+            resp = self.session.get(url, timeout=30)
+            if resp.status_code == 200:
+                try:
+                    return resp.json()
+                except (json.JSONDecodeError, ValueError):
+                    logger.debug(f'EdgeOne: {key} 响应非JSON内容（SPA回退），视为不存在')
+                    return None
+            if resp.status_code == 404:
+                return None
+            logger.warning(f'EdgeOne: 读取 {key} 异常 HTTP {resp.status_code}')
+            return None
+        except Exception as e:
+            logger.warning(f'EdgeOne: 读取 {key} 失败: {e}')
+            return None
+
+    def write_json(self, key, data):
+        body = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+        self._buffer[f'{self.path_prefix}/{key}'] = body
+        self._local_write(key, data)
+        logger.debug(f'EdgeOne buffer 写入: {self.path_prefix}/{key} ({len(body)} bytes)')
+
+    def _cli_deploy(self, src_dir):
+        # Windows 下 npm 全局命令是 .cmd shim，subprocess 不解析 PATH 中的扩展名，需 shutil.which 解析完整路径
+        cli_path = shutil.which(self.cli) or self.cli
+        cmd = [cli_path, 'pages', 'deploy', src_dir, '-n', self.project_name]
+        if self.api_token:
+            cmd += ['-t', self.api_token]
+        cmd += ['-e', 'production']
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.deploy_timeout,
+                encoding='utf-8', errors='replace',
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                f'EdgeOne CLI 不可用（{self.cli}）。运行环境需安装 node 并执行 npm i -g edgeone（版本≥1.2.30）')
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f'EdgeOne CLI 部署超时（>{self.deploy_timeout}s）')
+        tail = ((proc.stdout or '') + (proc.stderr or '')).strip()[-500:]
+        if proc.returncode != 0:
+            raise RuntimeError(f'EdgeOne CLI 部署失败 (exit {proc.returncode}): {tail}')
+        return tail
+
+    def commit(self, message='auto update', skip_unchanged_download=False):
+        files = {}
+        if self.include_frontend:
+            files.update(_collect_frontend_files(self.frontend_dir, self.frontend_source))
+        for rel_path, content in self._buffer.items():
+            files[rel_path] = content
+        self._inject_routes(files)
+        # edgeone.json（缓存策略）已是 pages-dist 实体文件，随前端收集自动带上
+
+        # 兜底补全（与 CloudflareStorage 同语义 + announce）：EdgeOne 为直传整站替换制、
+        # 无 CF 的 manifest 缓存继承，未写入的路径即线上删除——
+        # 需自行补全全部应保留的键：活跃省 snapshot/changelog + 各已配置运营商 announce + stats；
+        # 已禁用运营商/未启用省份不写入 → 线上删除（对齐 CF 语义）
+        filled = 0
+        for carrier_key in self.all_carrier_keys:
+            if carrier_key not in self.all_active_provinces:
+                continue
+            ann_rel = f'{self.path_prefix}/{carrier_key}/announce.json'
+            if ann_rel not in files:
+                try:
+                    old_ann = self.read_json(f'{carrier_key}/announce.json')
+                except Exception as e:
+                    logger.warning(f'EdgeOne: 补全旧公告失败 ({carrier_key}): {e}')
+                    old_ann = None
+                if old_ann is not None:
+                    files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, indent=2).encode('utf-8')
+                    filled += 1
+            for prov in PROVINCES:
+                if prov['code'] not in self._get_active_province_codes(carrier_key):
+                    continue
+                for key in (f'{carrier_key}/snapshots/snapshot_{prov["code"]}.json',
+                            f'{carrier_key}/changelogs/changelog_{prov["code"]}.json'):
+                    rel = f'{self.path_prefix}/{key}'
+                    if rel not in files:
+                        try:
+                            old_data = self.read_json(key)
+                        except Exception as e:
+                            logger.warning(f'EdgeOne: 补全旧数据失败 ({key}): {e}')
+                            old_data = None
+                        if old_data is not None:
+                            files[rel] = json.dumps(old_data, ensure_ascii=False, indent=2).encode('utf-8')
+                            filled += 1
+        stats_rel = f'{self.path_prefix}/stats.json'
+        if stats_rel not in files:
+            try:
+                old_stats = self.read_json('stats.json')
+            except Exception as e:
+                logger.warning(f'EdgeOne: 补全旧 stats 失败: {e}')
+                old_stats = None
+            if old_stats is not None:
+                files[stats_rel] = json.dumps(old_stats, ensure_ascii=False, indent=2).encode('utf-8')
+                filled += 1
+
+        logger.info(f'EdgeOne: 准备直传 {len(files)} 个文件（基线补全 {filled}）...')
+        src_dir = tempfile.mkdtemp(prefix='edgeone_deploy_')
+        try:
+            for rel_path, content in files.items():
+                fp = os.path.join(src_dir, rel_path.replace('/', os.sep))
+                os.makedirs(os.path.dirname(fp), exist_ok=True)
+                with open(fp, 'wb') as f:
+                    f.write(content)
+            tail = self._cli_deploy(src_dir)
+        finally:
+            shutil.rmtree(src_dir, ignore_errors=True)
+        self._buffer.clear()
+        self._cleanup_local_cache()
+        logger.info(f'EdgeOne: 部署成功, {len(files)} 个文件, 项目: {self.project_name}, 域名: {self.domain}')
+
+    def list_keys(self, prefix=''):
+        return []
+
+
+def normalize_storage_config(config):
+    """storage 配置归一化：新格式（primary + backends）与旧单 type 格式统一为
+    {primary, backends(仅 enabled，primary 排首位), order}。
+    同时把各线配置合并提升写回 config['storage'][name]（进程内，不落盘），
+    保证 CloudflareStorage/GitHubStorage 原有读取路径不变。"""
+    sc = config['storage']
+    if isinstance(sc.get('backends'), dict):
+        declared = sc['backends']
+    else:  # 旧单 type 格式兼容
+        t = sc.get('type', 'cloudflare')
+        declared = {t: dict(sc.get(t) or {})}
+        declared[t]['enabled'] = True
+    enabled = {k: dict(v) for k, v in declared.items() if v.get('enabled')}
+    if not enabled:
+        raise ValueError('storage.backends 无任何 enabled 线路')
+    primary = sc.get('primary') or next(iter(enabled))
+    if primary not in enabled:
+        raise ValueError(f'storage.primary={primary} 不在已启用线路 {list(enabled)} 中')
+    order = [primary] + [k for k in enabled if k != primary]
+    for name, bcfg in declared.items():
+        merged = dict(sc.get(name) or {})
+        merged.update(bcfg)
+        merged['enabled'] = bool(bcfg.get('enabled', name in enabled))
+        sc[name] = merged
+    return {'primary': primary, 'backends': {k: enabled[k] for k in order}, 'order': order}
+
+
+def _create_backend(name, config):
+    if name == 'cloudflare':
         return CloudflareStorage(config)
-    elif storage_type == 'github':
+    if name == 'github':
         return GitHubStorage(config)
-    else:
-        raise ValueError(f'不支持的存储类型: {storage_type}, 可选: cloudflare/github')
+    if name == 'edgeone':
+        return EdgeOneStorage(config)
+    raise ValueError(f'不支持的存储通道: {name}, 可选: cloudflare/github/edgeone')
+
+
+def _iter_seed_keys(carrier_keys):
+    """新线种子同步键集合（已知键全量；_diag.json 等诊断文件不搬运）"""
+    yield 'stats.json'
+    yield 'public-config.json'
+    for ck in carrier_keys:
+        yield f'{ck}/announce.json'
+        for prov in PROVINCES:
+            yield f'{ck}/snapshots/snapshot_{prov["code"]}.json'
+            yield f'{ck}/changelogs/changelog_{prov["code"]}.json'
+
+
+class MultiStorage:
+    """多通道存储编排：对外接口与 StorageBackend 一致，主流程零改动。
+    - 读写基线走 primary 线（read_json/write_json/local_cache 全在 primary）
+    - commit 遍历全部 enabled 线逐个推送（merge primary buffer → 各线 commit），单线失败仅告警
+    - 新线（线上无 stats.json）首次 commit 前自动从 primary 种子同步，保证历史连续
+    - commit 前为各线写入 __ROUTES__ 线路清单（前端容灾跳转数据源）"""
+
+    def __init__(self, config, norm=None):
+        self.norm = norm or normalize_storage_config(config)
+        self.primary_name = self.norm['primary']
+        self.pushers = {name: _create_backend(name, config) for name in self.norm['order']}
+        self.primary = self.pushers[self.primary_name]
+        self.route_manifest = {
+            'primary': self.primary.domain,
+            'fallbacks': [self.pushers[k].domain for k in self.norm['order'] if k != self.primary_name],
+        }
+        for p in self.pushers.values():
+            p.route_manifest = self.route_manifest
+        self._seeded = set()
+        logger.info(f'多通道存储: primary={self.primary_name}, 线路={list(self.pushers)}, '
+                    f'routes={json.dumps(self.route_manifest, ensure_ascii=False)}')
+
+    # ── 接口代理（基线走 primary；运营商/省份状态同步到全部线——各线 commit 的兜底补全依赖）──
+    def set_carrier_key(self, carrier_key):
+        for p in self.pushers.values():
+            p.set_carrier_key(carrier_key)
+
+    def set_all_carrier_keys(self, keys):
+        for p in self.pushers.values():
+            p.set_all_carrier_keys(keys)
+
+    def set_active_provinces(self, carrier_key, province_codes):
+        for p in self.pushers.values():
+            p.set_active_provinces(carrier_key, province_codes)
+
+    @property
+    def all_active_provinces(self):
+        # 读代理：set_active_provinces 已把名册同步到全部线，读 primary 即全量状态；
+        # 省内并发/多运营商编排合并回主存储时按此读取（与 StorageBackend 同名属性对齐）
+        return self.primary.all_active_provinces
+
+    def read_json(self, key):
+        return self.primary.read_json(key)
+
+    def write_json(self, key, data):
+        self.primary.write_json(key, data)
+
+    def list_keys(self, prefix=''):
+        return self.primary.list_keys(prefix)
+
+    def merge_buffer(self, other):
+        src = other.primary if isinstance(other, MultiStorage) else other
+        self.primary.merge_buffer(src)
+
+    # ── 种子同步：新线首次部署前从 primary 全量搬运已知键 ──
+    def _seed_if_new(self, name, pusher):
+        if name in self._seeded:
+            return
+        marker = os.path.join(self.primary._local_cache_dir, f'seed_done_{name}.flag')
+        if os.path.isfile(marker):
+            self._seeded.add(name)
+            return
+        try:
+            online = pusher.read_json('stats.json')
+        except Exception:
+            online = None
+        if online is not None:
+            self._seeded.add(name)
+            return  # 线上已有数据，非新线
+        logger.info(f'[{name}] 检测为新线，开始从 {self.primary_name} 种子同步...')
+        count = 0
+        for key in _iter_seed_keys(self.primary.all_carrier_keys):
+            try:
+                data = self.primary.read_json(key)
+            except Exception as e:
+                logger.warning(f'[{name}] 种子读取失败 ({key}): {e}')
+                continue
+            if data is not None:
+                pusher.write_json(key, data)
+                count += 1
+        logger.info(f'[{name}] 种子同步完成: {count} 个文件')
+        self._seeded.add(name)
+
+    def commit(self, message='auto update', skip_unchanged_download=False):
+        results = {}
+        # 本轮数据快照：每线注入独立副本。不能直接 merge primary 的活 buffer——
+        # primary 线先 commit 时会清空自身 buffer，后续线将 merge 到空数据（丢本轮数据）
+        snapshot = dict(self.primary._buffer)
+        for name, pusher in self.pushers.items():
+            try:
+                self._seed_if_new(name, pusher)
+                pusher._buffer.update(snapshot)
+                pusher.commit(message, skip_unchanged_download)
+                results[name] = True
+            except Exception as e:
+                results[name] = False
+                logger.error(f'[{name}] 部署失败（不影响其他线）: {e}')
+        # 各线 commit 内部只清各自注入的副本；primary 的活 buffer 在此统一清空，
+        # 否则下轮 read_json 会优先命中过期 buffer 值
+        self.primary._buffer.clear()
+        failed = [k for k, ok in results.items() if not ok]
+        if failed:
+            logger.warning(f'本轮部署结果: 成功 {[k for k, ok in results.items() if ok]} / 失败 {failed}')
+        return results
+
+
+# ════════════════════════════════════════════════════════════
+#  公共配置快照（data/public-config.json）
+#  每轮部署前，从 Worker 公开只读接口搬运「人人一样、不怕逆向」的配置，
+#  前端改读 Pages 静态 JSON（配置类请求零 Worker 消耗）；Worker 接口保留为快照缺失时的回落。
+#  权威源仍是管理端 settings（D1）：变更生效链 = 管理端保存 → Worker 即时 →
+#  下一轮采集搬运 → Pages 部署 → 前端（约一个采集周期）。
+# ════════════════════════════════════════════════════════════
+PUBLIC_CONFIG_API_BASE = 'https://api.ftac.dpdns.org'  # 与前端 shell/api.js 的 API_BASE 硬编码约定一致
+
+# (快照键, Worker 接口, 合并方式)：about 由两个接口拼合；nav_links 按 collection 归档
+_PUBLIC_CONFIG_SOURCES = [
+    ('modules',      '/api/meta',                          'direct'),
+    ('notices',      '/api/notices',                       'direct'),
+    ('email_policy', '/api/auth/email-policy',             'direct'),
+    ('schema',       '/api/cardhub/schema',                'direct'),
+    ('about',        '/api/about/timeline',                'timeline'),
+    ('about',        '/api/about/thanks',                  'thanks'),
+    ('about',        '/api/about/links',                   'links'),
+    ('nav_links',    '/api/nav/links?collection=toolbox',  'nav'),
+]
+
+
+def refresh_public_config(storage):
+    """拉取公共配置快照写入待部署 buffer；单项失败跳过（前端该项回落 Worker 接口），整体失败不阻塞部署"""
+    s = requests.Session()
+    cfg = {'generated_at': now_iso()}
+    ok_cnt = 0
+    for key, path, mode in _PUBLIC_CONFIG_SOURCES:
+        try:
+            r = s.get(PUBLIC_CONFIG_API_BASE + path, timeout=15)
+            r.raise_for_status()
+            j = r.json()
+            if j.get('code') != 0:   # Worker 统一信封 {code, message, data}
+                raise RuntimeError(f'envelope code={j.get("code")}')
+            data = j.get('data') or {}
+            if mode == 'timeline':
+                cfg.setdefault('about', {})['timeline'] = data.get('timeline') or []
+            elif mode == 'thanks':
+                cfg.setdefault('about', {})['thanks'] = data.get('groups') or {}
+            elif mode == 'links':
+                cfg.setdefault('about', {})['links'] = data.get('links') or []
+            elif mode == 'nav':
+                cfg['nav_links'] = {'toolbox': data}   # 保留 {items:[...]} 形状，前端与接口响应同构消费
+            else:
+                cfg[key] = data
+            ok_cnt += 1
+        except Exception as e:
+            logger.warning(f'[public-config] {path} 搬运失败(前端该项将回落接口): {str(e)[:100]}')
+    if ok_cnt == 0:
+        logger.warning('[public-config] 全部接口失败，本轮不生成快照')
+        return
+    try:
+        storage.write_json('public-config.json', cfg)
+        logger.info(f'[public-config] 快照已生成（{ok_cnt}/{len(_PUBLIC_CONFIG_SOURCES)} 项）')
+    except Exception as e:
+        logger.warning(f'[public-config] 快照写入失败(不影响本次部署): {str(e)[:100]}')
+
+
+def create_storage(config):
+    """多通道工厂：返回 MultiStorage 编排（单 enabled 线时行为与原单后端完全一致）。
+    兼容旧单 type 配置（normalize_storage_config 自动归一化）。"""
+    norm = normalize_storage_config(config)
+    return MultiStorage(config, norm)
 
 
 # ════════════════════════════════════════════════════════════
@@ -4616,10 +5210,15 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
         target_provinces = get_target_provinces(carrier_cfg, carrier_key)
 
         province_data = []
+        carrier_name_set = set()   # 全专区条目名并集（全网+31省，供「全网资费总量(去重)」统计）
         for prov in target_provinces:
             result = crawl_results.get(prov['name'])
             if result and result.get('items') is not None:
                 items = result['items']
+                for it in items:
+                    n = (it.get('name') or '').strip()
+                    if n:
+                        carrier_name_set.add(n)
                 changes = result.get('changes', {})
                 crawl_status = result.get('crawl_status', 'success')
                 data_crawl_time = result.get('data_crawl_time', crawl_time)
@@ -4687,6 +5286,7 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
         carriers_data[carrier_key] = {
             'default_province': default_province,
             'province_data': province_data,
+            'name_set': carrier_name_set,   # 内存传递，不落盘（stats 只写入去重计数）
         }
 
     cache_ttl = config.get('storage', {}).get('cache', {}).get('ttl_minutes', 30)
@@ -4769,6 +5369,9 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
         prov_start = time.time()
         prov_short = prov['code']
         prov_name = prov['name']
+        # 省份并发子线程需显式设置运营商标识（threading.local 不跨线程继承，
+        # 否则该线程内的所有日志都显示 [系统]）
+        _carrier_ctx.carrier = CARRIER_DISPLAY_NAMES.get(carrier_key, carrier_key)
         if prov_index is not None:
             logger.info(f'采集 {prov_name} ({prov_short}) [{prov_index + 1}/{len(target_provinces)}]...')
         else:
@@ -5233,6 +5836,7 @@ def rebuild_stats_from_history(config, storage):
 
     crawl_duration_ms = int((time.time() - crawl_start) * 1000)
     _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_duration_ms, all_success_count, all_fail_count, old_stats)
+    refresh_public_config(storage)
     storage.commit(message=f'stats rebuild {crawl_time[:10]}', skip_unchanged_download=True)
     logger.info(f'stats 重建完成，耗时 {crawl_duration_ms / 1000:.2f}s')
 
@@ -5248,6 +5852,7 @@ def run():
         all_prov_codes = [p['code'] for p in PROVINCES]
         for ck in carriers:
             storage.set_active_provinces(ck, all_prov_codes)
+        refresh_public_config(storage)
         storage.commit(message='frontend deploy', skip_unchanged_download=True)
         logger.info('前端文件部署完成')
         return
@@ -5260,6 +5865,18 @@ def run():
     carriers = config.get('carriers', {})
     enabled_carriers = [k for k, v in carriers.items() if v.get('enabled', True)]
     if not enabled_carriers:
+        # 资费源全关时不再直接退出：公告采集与资费解耦，支持「仅公告」运行
+        if (config.get('announce') or {}).get('enabled', True):
+            logger.warning('资费源全部未启用，本次仅执行公告采集')
+            _ann_only_storage = create_storage(config)
+            _ann_only_storage.set_all_carrier_keys(carriers.keys())
+            try:
+                fetch_announcements(config, _ann_only_storage)
+            except Exception as _ann_e:
+                logger.warning('[announce] 公告采集异常: %s' % str(_ann_e)[:120])
+            refresh_public_config(_ann_only_storage)
+            _ann_only_storage.commit(message='announce only %s' % now_iso()[:10])
+            return
         logger.error('没有启用任何运营商 (carriers.*.enabled 全为 false)')
         sys.exit(1)
 
@@ -5355,6 +5972,13 @@ def run():
     logger.info(f'全部采集完成: 成功={total_success}, 失败={total_fail}, 耗时={crawl_duration_ms / 1000:.2f}s')
 
     _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_duration_ms, all_success_count, all_fail_count, old_stats)
+    # ── 公告监测（与资费采集隔离：失败仅记日志，不影响资费上传）──
+    try:
+        fetch_announcements(config, storage)
+    except Exception as _ann_e:
+        logger.warning('[announce] 公告采集异常(已忽略，不影响资费): %s' % str(_ann_e)[:120])
+
+    refresh_public_config(storage)
     storage.commit(message=f'tariff update {crawl_time[:10]}')
 
     for _api in _active_apis:
@@ -5426,6 +6050,893 @@ def run():
                 send_notification(f'{carrier_label}资费监控-变更通知', summary)
     if not has_any_change and not all_skipped_flat and not all_degraded_flat and not all_vol_flat and not all_partial_flat and should_notify('no_change', config):
         send_notification('资费监控-无变化', build_nochange_message())
+
+
+# ======================================================================
+# 公告监测（announce monitoring）
+#   - 与资费采集物理隔离：全部函数以 _ann/ANN_ 前缀，不触碰资费类与函数
+#   - 任一源失败仅记日志跳过，不影响其他源与资费管线
+#   - 产出 data/{carrier}/announce.json，经 storage.write_json 自动进上传批次
+#   - 接口协议/省份参数均已逐源实测核对（docs/announce-monitoring-spec.md）
+# ======================================================================
+
+_ANN_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+
+# 移动 30 省公告栏目（统一栏目文件名，仅 abbr/code 不同；广东走 gd_pw 二期）
+ANN_CMCC_PROVINCES = {
+    "北京": "bj/100", "天津": "tj/220", "河北": "he/311", "山西": "sx/351",
+    "内蒙古": "nm/471", "辽宁": "ln/240", "吉林": "jl/431", "黑龙江": "hl/451",
+    "上海": "sh/210", "江苏": "js/250", "浙江": "zj/571", "安徽": "ah/551",
+    "福建": "fj/591", "江西": "jx/791", "山东": "sd/531", "河南": "ha/371",
+    "湖北": "hb/270", "湖南": "hn/731", "广西": "gx/771", "海南": "hi/898",
+    "重庆": "cq/230", "四川": "sc/280", "贵州": "gz/851", "云南": "yn/871",
+    "西藏": "xz/891", "陕西": "sn/290", "甘肃": "gs/931", "青海": "qh/971",
+    "宁夏": "nx/951", "新疆": "xj/991",
+}
+ANN_CMCC_LIST_TPL = "https://www.10086.cn/aboutus/news/pannounce/%s/5004505_873_2361.json"
+
+# 联通 31 省 code → 省名（2026-10-10 creatorProvinceName 直读钉死；031=上海 非湖南）
+ANN_CUCC_CODES = {
+    "010": "内蒙古", "011": "北京", "013": "天津", "017": "山东", "018": "河北",
+    "019": "山西", "030": "安徽", "031": "上海", "034": "江苏", "036": "浙江",
+    "038": "福建", "050": "海南", "051": "广东", "059": "广西", "070": "青海",
+    "071": "湖北", "074": "湖南", "075": "江西", "076": "河南", "079": "西藏",
+    "081": "四川", "083": "重庆", "084": "陕西", "085": "贵州", "086": "云南",
+    "087": "甘肃", "088": "宁夏", "089": "新疆", "090": "吉林", "091": "辽宁",
+    "097": "黑龙江",
+}
+ANN_CUCC_LIST_URL = "https://www.10010.com/mall/service/query/announcementquery"
+ANN_CUCC_DETAIL_URL = "https://www.10010.com/mall/service/query/announcementquerydetail"
+ANN_CUCC_PAGE_URL = ("https://www.10010.com/wt_links/index.html#/announcementDetail"
+                     "?announcementId={id}&pageSize=12&pageNo=1")
+ANN_CUCC_IMG_HOST = "https://m1.img.10010.com"
+ANN_CUCC_HDRS = {
+    "User-Agent": _ANN_UA,
+    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    "Referer": "https://www.10010.com/wt_links/index.html",
+    "Origin": "https://www.10010.com",
+    "X-Requested-With": "XMLHttpRequest",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+}
+
+# 电信 31 省 provCode（2026-10-10 逐省实测：接口严格按省返回不同内容）
+ANN_CTCC_PROVINCES = {
+    "北京": "609001", "天津": "609902", "河北": "609906", "山西": "609907",
+    "内蒙古": "609908", "辽宁": "609905", "吉林": "609909", "黑龙江": "609910",
+    "上海": "600102", "江苏": "600103", "浙江": "600104", "安徽": "600301",
+    "福建": "600105", "江西": "600305", "山东": "609903", "河南": "609904",
+    "湖北": "600202", "湖南": "600203", "广东": "600101", "广西": "600302",
+    "海南": "600403", "重庆": "600304", "四川": "600201", "贵州": "600402",
+    "云南": "600205", "西藏": "600406", "陕西": "600204", "甘肃": "600401",
+    "青海": "600405", "宁夏": "600404", "新疆": "600303",
+}
+ANN_CTCC_REC_URL = "https://www.189.cn/wtBusiness/wtservice/nc/recPos/getRecPosInfo.do"
+ANN_CTCC_DETAIL_URL = "https://www.189.cn/wtBusiness/wtservice/nc/announcement/getAnnouncementDetail.do"
+ANN_CTCC_SITE = "https://www.189.cn"
+ANN_CTCC_SHOP_ID = "20001"
+ANN_CTCC_BASE_TYPE = "wt_sy_bzzx"   # 详情必须用条目自身 type（部分条目挂集团位 wt_sy_jtgg）
+ANN_CTCC_FCODE = "Y121043001"
+ANN_CTCC_PAGE_URL = "https://www.189.cn/web/notice"
+ANN_CTCC_PUBKEY_B64 = (
+    "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmUa6oMSBZrhfOjXCaYYIE9Lvj+r8nBIv"
+    "CpydQmeG5CbeK5Qlwor+kFCrrPtcoYSowuUCB7YYsLYF6HVvf3Utw9FdLq7T8uNnfz2wxvp3N3Mi"
+    "f5Rbhs7skrMvfy83zl7g9a1Xgz4OxmYbrm70E08F4Hu5K+86x9Qo+k8hSnJ4mkfb/fFL1/Im1n+i"
+    "p2dBJ+vZt6mq8GykuAxQm4pb1UZw37HtdSR3WnU9Li0gDvXdJ87DAP0r7xF2DfTAQiAKP+3mdwlb"
+    "KZ8hM0W7Do/7w+fBaOi+GCFJKvNDNVuH7G1OaEUuQH1xr3hoYAgqMdKOZWlZH+wbNqyAOxPL9V5K"
+    "LF/30wIDAQAB"
+)
+
+# 广电（全网单源 ZZZZ；服务端忽略省份/类型参数，实测 8 组同结果）
+ANN_CBN_URL = "https://m.10099.com.cn/contact-web/api/busi/queryAnnouncementInfoList"
+ANN_CBN_PAGE_URL = "https://m.10099.com.cn/noticeList/"
+ANN_CBN_PUBKEY_B64 = (
+    "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4QJmWsYFtBbd/yoySbBAy7pBbfrgHr2SGSOGoBukd65IUqQ9uWhvzCN9r0nWESIXWW6FR2A5adHUFFeETucXGjU61BZxbLLf0ARL4F1NkkFMUF/D3GMY401+6TK8jVMxy4vLb6EKzlyZaI8jKBJ9jh0HMli6U7JHydsXstGRUnyx8Mu11bJ3+ZMUcKe51Zi+85Ez756EdZhGTXSY7pUAvh8/0Fea6mtsOs9OLMHbGMKAOE0alN1QdfqE3QMKgB58MVwlPY7uljelSocjNxCIS58CLvu1iWFrLvsCp8t3DavyA1OD/PPcXRrNLYZgzG5304/LAqfurOpU35AaB5tOnwIDAQAB"
+)
+
+# 广电必须用移动端 UA（桌面 UA + 裸 Referer 会被 H5 网关判"请求参数异常"）
+_ANN_CBN_UA = ("Mozilla/5.0 (Linux; Android 9) AppleWebKit/537.36 "
+               "Chrome/91 Mobile Safari/537.36;CBN")
+
+ANN_LIMITS_DEFAULT = {
+    "retention_days": 90,        # 按日期保留（与变更日志同模式），过期条目写盘前丢弃
+    "per_source_fetch": 15,      # 每源保留的最新条数
+    "content_max": 20 * 1024,    # 单条正文 ≤20KB
+    "file_max_bytes": 512 * 1024,  # 单文件兜底
+    "national_threshold": 5,     # 联通混合源：出现在 ≥N 省判为全国
+    "timeout_s": 20,
+    "retries": 2,
+    "sleep_s": 0.4,              # 源内限速
+}
+
+ANN_KEEP_TAGS_RE = (r"(?!/?(p|br|div|a|img|strong|b|em|i|u|ul|ol|li|table|tr|td|th|"
+                    r"tbody|thead|h\d|blockquote)(\s|/|>))")
+
+
+def _ann_ssl_ctx():
+    """移动源站 TLS 为旧版重协商，新版 OpenSSL 默认拒绝——显式开启兼容（参考项目同款，实测可直连，
+    无需 curl 子进程）"""
+    import ssl
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+        except Exception:
+            pass
+        return ctx
+    except Exception:
+        return None
+
+
+_ANN_SSL_CTX = _ann_ssl_ctx()
+
+
+def _ann_http_get(url, headers=None, timeout=20, retries=2):
+    import urllib.request
+    last = None
+    for attempt in range(max(1, retries + 1)):
+        try:
+            req = urllib.request.Request(url, headers=headers or {"User-Agent": _ANN_UA})
+            try:
+                with urllib.request.urlopen(req, timeout=timeout, context=_ANN_SSL_CTX) as r:
+                    raw = r.read()
+                    if r.headers.get("Content-Encoding") == "gzip":
+                        import gzip
+                        raw = gzip.decompress(raw)
+                    return raw.decode("utf-8", "replace")
+            except TypeError:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    return r.read().decode("utf-8", "replace")
+        except Exception as e:
+            last = e
+            time.sleep(1.5 * (attempt + 1))
+    raise last
+
+
+def _ann_http_post(url, payload, headers=None, timeout=20, retries=2, is_json=False):
+    import urllib.request, urllib.parse
+    data = (payload if isinstance(payload, bytes) else
+            (json.dumps(payload, separators=(",", ":")).encode()
+             if is_json else urllib.parse.urlencode(payload).encode()))
+    hdrs = {"User-Agent": _ANN_UA}
+    hdrs.update(headers or {})
+    last = None
+    for attempt in range(max(1, retries + 1)):
+        try:
+            req = urllib.request.Request(url, data=data, method="POST", headers=hdrs)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read()
+                if r.headers.get("Content-Encoding") == "gzip":
+                    import gzip
+                    raw = gzip.decompress(raw)
+                return raw.decode("utf-8", "replace")
+        except Exception as e:
+            last = e
+            time.sleep(1.5 * (attempt + 1))
+    raise last
+
+
+def _ann_strip_style(html):
+    """去 mso-*/font-* 内联样式，保留 color/background/排版值"""
+    def _fix(m):
+        keep = []
+        for kv in re.findall(r'([\w-]+)\s*:\s*([^;]+);?', m.group(1)):
+            k, v = kv[0].strip().lower(), kv[1].strip()
+            if not k or not v:
+                continue
+            if k in ("color", "vertical-align", "text-align", "background-color"):
+                keep.append("%s:%s" % (k, v))
+            elif k.startswith("background") and len(v) > 4:
+                keep.append("%s:%s" % (k, v))
+        return ' style="%s"' % ";".join(keep) if keep else ""
+    return re.sub(r'\sstyle="([^"]*)"', _fix, html)
+
+
+def _ann_safe_proto(url):
+    """协议白名单：http/https/mailto/相对链接，其余（javascript:/data: 等）置空"""
+    if not url:
+        return ""
+    u = str(url).strip()
+    if u.startswith(("/", "#", "./", "../")):
+        return u
+    low = u.lower()
+    for ok in ("http://", "https://", "mailto:"):
+        if low.startswith(ok):
+            return u
+    return ""
+
+
+def _ann_abs_link(path, base):
+    if not path or path.startswith(("http://", "https://", "data:")):
+        return path
+    if path.startswith("/"):
+        return base + path
+    return path
+
+
+def _ann_clean_html(raw, base):
+    """清洗公告富文本：剥脚本/样式/事件属性，白名单标签，协议白名单，相对链接补全"""
+    import html as _htmlmod
+    if not raw:
+        return ""
+    h = raw
+    h = re.sub(r"<\?xml.*?\?>", "", h, flags=re.S)
+    h = re.sub(r"<style.*?</style>", "", h, flags=re.S | re.I)
+    h = re.sub(r"<script.*?</script>", "", h, flags=re.S | re.I)
+    h = re.sub(r"<!--.*?-->", "", h, flags=re.S)
+    h = re.sub(r"<" + ANN_KEEP_TAGS_RE + r"[^>]*>", "", h, flags=re.I)
+    h = _ann_strip_style(h)
+    h = re.sub(r'\s+(class|id|lang|dir|colspan|rowspan|border|width|height|align|'
+               r'cellpadding|cellspacing|onclick|onload|onmouseover)="[^"]*"', "", h, flags=re.I)
+    h = re.sub(r'(<img[^>]*?src=)["\'](?!https?://|data:)([^"\']*)["\']',
+               lambda m: m.group(1) + '"' + _ann_abs_link(m.group(2), base) + '"', h, flags=re.I)
+    h = re.sub(r'(<a[^>]*?href=)["\'](?!https?://|#|mailto:)([^"\']*)["\']',
+               lambda m: m.group(1) + '"' + _ann_abs_link(m.group(2), base) + '"', h, flags=re.I)
+    h = h.replace("</p>", "</p>\n").replace("<br>", "<br>\n")
+    h = h.replace("<br/>", "<br>\n").replace("<br />", "<br>\n")
+    h = re.sub(r"\n{3,}", "\n\n", h)
+    h = re.sub(r'(<a[^>]*?href=)["\']([^"\']*)["\']',
+               lambda m: m.group(1) + '"' + _ann_safe_proto(m.group(2)) + '"', h, flags=re.I)
+    h = re.sub(r'(<img[^>]*?src=)["\']([^"\']*)["\']',
+               lambda m: m.group(1) + '"' + _ann_safe_proto(m.group(2)) + '"', h, flags=re.I)
+    return h.strip()
+
+
+def _ann_html_to_text(h):
+    import html as _htmlmod
+    t = re.sub(r"<br\s*/?>", "\n", h, flags=re.I)
+    t = re.sub(r"</(p|div|tr|li|h\d)>", "\n", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", "", t)
+    t = _htmlmod.unescape(t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _ann_find_attachments(content_html, site):
+    """从正文提取附件链接"""
+    out = []
+    for m in re.finditer(r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', content_html, flags=re.S | re.I):
+        href, name_raw = m.group(1), m.group(2)
+        if "/uploadBaseDir/" in href or re.search(
+                r"\.(xlsx?|pdf|docx?|zip|rar|png|jpg|jpeg)(\?|$)", href, flags=re.I):
+            name = _ann_html_to_text(name_raw).strip() or os.path.basename(href.split("?")[0]) or "附件"
+            link = href if href.startswith("http") else (site + href)
+            if link not in [a["url"] for a in out]:
+                out.append({"name": name[:60], "url": link})
+    return out
+
+
+def _ann_date(s):
+    """20260918145157 / 2026-09-18 12:00 / 2026年9月18日 → 2026-09-18（尽力归一）"""
+    t = str(s or "").strip()
+    m = re.search(r"(\d{4})[年\-/\.]?(\d{1,2})[月\-/\.]?(\d{1,2})", t)
+    if m:
+        return "%s-%02d-%02d" % (m.group(1), int(m.group(2)), int(m.group(3)))
+    return t[:10]
+
+
+def _ann_mkitem(carrier, src, iid, title, date, province, scope, page_url,
+                content="", base="", seen=None):
+    """构造统一条目（含清洗/摘要/附件/20KB 截断）"""
+    lim = ANN_LIMITS_DEFAULT
+    content = (content or "")[: lim["content_max"]]
+    if content and len(content) >= lim["content_max"]:
+        content += "…"
+    return {
+        "id": "%s:%s:%s" % (carrier, src, iid),
+        "scope": scope,
+        "province": "" if scope == "national" else (province or ""),
+        "title": (title or "").strip(),
+        "date": _ann_date(date),
+        "pageUrl": page_url or "",
+        "summary": _ann_html_to_text(content)[:200],
+        "content": content,
+        "attachments": _ann_find_attachments(content, base) if content else [],
+        "seenIn": sorted(seen) if seen else None,
+    }
+
+
+def _ann_load_config(config):
+    """TARIFF_CONFIG.announce 覆盖内置默认值；缺省/缺键 → 全内置默认（前向兼容）"""
+    ann = {}
+    try:
+        ann = dict((config or {}).get("announce") or {})
+    except Exception:
+        ann = {}
+    limits = dict(ANN_LIMITS_DEFAULT)
+    for k in limits:
+        if k in ann:
+            try:
+                limits[k] = type(limits[k])(ann[k])
+            except Exception:
+                pass
+    sources_cfg = ann.get("sources")
+    if not isinstance(sources_cfg, dict):
+        sources_cfg = {}
+    return {
+        "enabled": bool(ann.get("enabled", True)),
+        "limits": limits,
+        "sources": {k: dict(v or {}) for k, v in sources_cfg.items()},
+    }
+
+
+def _ann_src_enabled(ann_cfg, key, default=True):
+    src = ann_cfg["sources"].get(key)
+    if src is None:
+        return default
+    return bool(src.get("enabled", default))
+
+
+# ---------------- 移动（30 省，静态 JSON；广东走 gd_pw 二期） ----------------
+def _ann_cmcc(ann_cfg):
+    lim = ann_cfg["limits"]
+    sources, items = {}, []
+    for prov, path in ANN_CMCC_PROVINCES.items():
+        list_url = ANN_CMCC_LIST_TPL % path
+        try:
+            j = json.loads(_ann_http_get(list_url, timeout=lim["timeout_s"],
+                                         retries=lim["retries"]))
+            lst = (j.get("cData") or {}).get("list") or []
+        except Exception as e:
+            sources[prov] = {"ok": False, "err": str(e)[:80]}
+            logger.warning("[announce][cmcc] %s 列表失败: %s" % (prov, str(e)[:80]))
+            continue
+        rows = []
+        for row in lst:
+            m = re.search(r"_detail_(\d+)\.", row.get("detail_href") or "")
+            if m:
+                rows.append({"id": m.group(1), "title": row.get("noticeTitle") or "",
+                             "date": row.get("publishTime") or ""})
+        rows.sort(key=lambda x: x["date"], reverse=True)
+        rows = rows[: lim["per_source_fetch"]]
+        # 详情 URL = list 同目录 + 文件名干 + _detail_{id}.json
+        dir_url = list_url.rsplit("/", 1)[0]
+        stem = list_url.rsplit("/", 1)[1][:-5]
+        ok_cnt = 0
+        for row in rows:
+            try:
+                dj = json.loads(_ann_http_get(
+                    "%s/%s_detail_%s.json" % (dir_url, stem, row["id"]),
+                    timeout=lim["timeout_s"], retries=lim["retries"]))
+                c = (dj.get("cData") or {}).get("content") or {}
+                content = _ann_clean_html(c.get("text") or "", "https://www.10086.cn")
+            except Exception as e:
+                content = ""
+            items.append(_ann_mkitem("cmcc", path.replace("/", "_"), row["id"],
+                                     row["title"], row["date"], prov, "provincial",
+                                     "https://www.10086.cn/aboutus/news/pannounce/%s/index_%s_%s_detail_%s.html"
+                                     % (path.split("/")[0], path.split("/")[1],
+                                        path.split("/")[1], row["id"]),
+                                     content=content, base="https://www.10086.cn"))
+            ok_cnt += 1
+            time.sleep(lim["sleep_s"])
+        sources[prov] = {"ok": True, "count": len(rows), "fetched": ok_cnt}
+        logger.info("[announce][cmcc] %s %d 条" % (prov, len(rows)))
+    return items, sources
+
+
+# ---------------- 联通（31 省 POST 混合源，creatorProvinceName 直读 + 频次法） ----------------
+def _ann_cucc_clean_prov(name, fallback):
+    t = str(name or "").strip()
+    t = re.sub(r"^中国联通", "", t)
+    t = re.sub(r"(省|市)?分公司$", "", t)
+    return t if t in set(ANN_CUCC_CODES.values()) else fallback
+
+
+def _ann_cucc(ann_cfg):
+    lim = ann_cfg["limits"]
+    sources, merged = {}, {}   # dedupe键 → {"item":…, "codes": set()}
+    for code, prov in ANN_CUCC_CODES.items():
+        try:
+            raw = _ann_http_post(ANN_CUCC_LIST_URL,
+                                 {"pageNo": "1", "pageSize": str(lim["per_source_fetch"]),
+                                  "province": code, "condition": "0", "title": ""},
+                                 headers=ANN_CUCC_HDRS, timeout=lim["timeout_s"],
+                                 retries=lim["retries"])
+            rows = json.loads(raw).get("result") or []
+        except Exception as e:
+            sources[code] = {"ok": False, "err": str(e)[:80]}
+            logger.warning("[announce][cucc] %s(%s) 列表失败: %s" % (prov, code, str(e)[:80]))
+            continue
+        sources[code] = {"ok": True, "count": len(rows)}
+        for row in rows:
+            rid = str(row.get("id") or "")
+            if not rid:
+                continue
+            title = (row.get("title") or "").strip()
+            date = (row.get("publishTime") or "")[:10]
+            # 跨省去重键：同公告各省 id 可能不同，用 title+date 归一
+            key = hashlib.md5(("%s|%s" % (title, date)).encode()).hexdigest()[:12]
+            real_prov = _ann_cucc_clean_prov(row.get("creatorProvinceName"), prov)
+            ent = merged.get(key)
+            if ent is None:
+                merged[key] = {
+                    "item": _ann_mkitem("cucc", code, rid, title, date, real_prov,
+                                        "provincial", ANN_CUCC_PAGE_URL.format(id=rid),
+                                        seen=[code]),
+                    "codes": {code}, "rid": rid, "row": row,
+                }
+            else:
+                ent["codes"].add(code)
+        time.sleep(lim["sleep_s"])
+    # 频次法：出现在 ≥N 省 → 全国；否则 provincial（province 直读 creatorProvinceName）
+    items = []
+    for ent in merged.values():
+        it = ent["item"]
+        it["seenIn"] = sorted(ent["codes"])
+        if len(ent["codes"]) >= lim["national_threshold"]:
+            it["scope"] = "national"
+            it["province"] = ""
+        items.append(it)
+    items.sort(key=lambda x: x["date"], reverse=True)
+    items = items[: lim["per_source_fetch"]]
+    # 详情正文（仅保留的条目；code 必须与 rid 同源——首个命中省，而非字典序最小省）
+    for it in items:
+        code = (it["id"].split(":")[1] if len((it["id"] or "").split(":")) > 2 else "074")
+        try:
+            dj = json.loads(_ann_http_post(
+                ANN_CUCC_DETAIL_URL,
+                {"announcementId": ent_rid(it), "pageSize": "12", "pageNo": "1",
+                 "province": code},
+                headers=ANN_CUCC_HDRS, timeout=lim["timeout_s"], retries=lim["retries"]))
+            n = dj.get("tNoticeDto") or {}
+            content = _ann_clean_html(n.get("noticeDetails") or "", ANN_CUCC_IMG_HOST)
+            content = re.sub(r'(<img[^>]*?src=)["\'](?!https?://)([^"\']*)["\']',
+                             lambda m: m.group(1) + '"' + ANN_CUCC_IMG_HOST + m.group(2) + '"',
+                             content, flags=re.I)
+            if n.get("title"):
+                it["title"] = n["title"].strip()
+            if n.get("noticeTime"):
+                it["date"] = n["noticeTime"][:10]
+            it["content"] = content[: lim["content_max"]]
+            it["summary"] = _ann_html_to_text(content)[:200]
+            it["attachments"] = _ann_find_attachments(content, ANN_CUCC_IMG_HOST)
+        except Exception as e:
+            logger.warning("[announce][cucc] 详情 %s 失败: %s" % (it["id"], str(e)[:60]))
+        time.sleep(lim["sleep_s"])
+    return items, sources
+
+
+def ent_rid(item):
+    """从统一 id 反查联通原始公告 id（cucc:code:rid）"""
+    parts = (item.get("id") or "").split(":")
+    return parts[2] if len(parts) > 2 else ""
+
+
+# ---------------- 电信（31 省 AES-CBC+RSA 信封；详情走 Playwright 通道） ----------------
+def _ann_crypto():
+    """兼容 pycryptodome(Crypto) / pycryptodomex(Cryptodome) 两种安装布局（本文件资费段用后者）"""
+    try:
+        from Cryptodome.Cipher import AES, PKCS1_v1_5
+        from Cryptodome.PublicKey import RSA
+        from Cryptodome.Util.Padding import pad
+    except ImportError:
+        from Crypto.Cipher import AES, PKCS1_v1_5
+        from Crypto.PublicKey import RSA
+        from Crypto.Util.Padding import pad
+    return AES, PKCS1_v1_5, RSA, pad
+
+
+def _ann_opener():
+    """公告专用 opener：独立 CookieJar（与资费 requests 会话隔离）"""
+    import http.cookiejar
+    import urllib.request
+    global _ANN_OPENER
+    if _ANN_OPENER is None:
+        _ANN_OPENER = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    return _ANN_OPENER
+
+
+_ANN_OPENER = None
+
+
+def _ann_ctcc_envelope(obj):
+    """业务对象 → {param, key} 信封（AES-128-CBC 随机 key/iv + RSA 包装），返回 (payload, tid)"""
+    import base64, random
+    AES, PKCS1_v1_5, RSA, pad = _ann_crypto()
+    pub = RSA.import_key(base64.b64decode(ANN_CTCC_PUBKEY_B64))
+    key, iv = os.urandom(16), os.urandom(16)
+    ct = AES.new(key, AES.MODE_CBC, iv).encrypt(
+        pad(json.dumps(obj, ensure_ascii=False).encode(), 16))
+    inner = json.dumps({"key": base64.b64encode(key).decode(),
+                        "iv": base64.b64encode(iv).decode()}, separators=(",", ":"))
+    payload = {"param": base64.b64encode(ct).decode(),
+               "key": base64.b64encode(PKCS1_v1_5.new(pub).encrypt(inner.encode())).decode()}
+    tid = "".join("%x" % random.randint(0, 15) for _ in range(32))
+    return payload, tid
+
+
+def _ann_ctcc_pw_details(tasks, page_wait_s=4):
+    """电信详情 Playwright 通道（2026-10-11 实测：tariffZone 过盾 + 页面内同域 fetch）。
+
+    tasks: [{key, offer, type, prov, prov_name, row}]
+    打开资费专区 /tariffZone/ 一次（该入口瑞数挑战对自动化放行，与资费采集同款；
+    公告页/静态详情页入口均被瑞数指纹拒绝），会话就绪后在**页面上下文内**逐条
+    POST 详情接口（同域可信会话放行，单条约 0.5s）。
+    返回 {key: 响应文本 or 'HTTP xxx' or 'ERR ...'}；启动失败抛异常，由调用方降级。
+    """
+    from playwright.sync_api import sync_playwright
+    pw = browser = context = page = None
+    out = {}
+    try:
+        pw = sync_playwright().start()
+        launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox',
+                       '--disable-dev-shm-usage']
+        # 系统级 chromium 优先（与资费 CtccApi._ensure_browser 同款扫描）；
+        # 再扫 playwright 缓存目录——包升级后当前版本要求的 build 可能缺失，
+        # 但历史安装的旧 build 二进制仍可直接 executable_path 指定使用
+        import glob as _glob
+        system_bins = []
+        for _bin in (shutil.which('chromium'), shutil.which('chromium-browser'),
+                     shutil.which('google-chrome'),
+                     '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'):
+            if _bin and os.path.exists(_bin) and _bin not in system_bins:
+                system_bins.append(_bin)
+        _pw_cache = os.path.expanduser('~/.cache/ms-playwright')
+        for _pat in (os.path.join(_pw_cache, 'chromium-*', 'chrome-linux', 'chrome'),
+                     os.path.join(_pw_cache, 'chromium_headless_shell-*', 'chrome-linux',
+                                  'headless_shell')):
+            for _p in sorted(_glob.glob(_pat), reverse=True):
+                if os.path.exists(_p) and _p not in system_bins:
+                    system_bins.append(_p)
+        opts_list = [{'executable_path': b, 'headless': True, 'args': launch_args}
+                     for b in system_bins]
+        opts_list += [{'channel': 'msedge', 'headless': True, 'args': launch_args},
+                      {'channel': 'chrome', 'headless': True, 'args': launch_args},
+                      {'headless': True, 'args': launch_args}]
+        browser = None
+        last_err = None
+        for opts in opts_list:
+            try:
+                browser = pw.chromium.launch(**opts)
+                break
+            except Exception as e:
+                last_err = e
+        if browser is None:
+            raise RuntimeError('无法启动浏览器: %s' % last_err)
+        # 与资费通道完全同款的伪装组合：UA(WinEdge153) + 全套 stealth 伪造
+        # （WebGL/插件/chrome对象/Win32平台——headless 裸奔会被瑞数深层指纹识别，
+        # 表现为白屏+全 400；资费实例带全套伪装所以能过）+ 时区对齐
+        context = browser.new_context(
+            user_agent=('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                        '(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 '
+                        'Edg/153.0.4234.32'),
+            locale='zh-CN', timezone_id='Asia/Shanghai',
+            viewport={'width': 1280, 'height': 800})
+        context.add_init_script(_ctcc_stealth_script())
+        page = context.new_page()
+        # 入口=资费专区（实测瑞数挑战对自动化放行；公告页/静态页入口均被指纹拒绝）
+        page.goto(ANN_CTCC_SITE + '/tariffZone/',
+                  timeout=60000, wait_until='domcontentloaded')
+        # 等瑞数动态 cookie（EYg4* 前缀，与资费采集同判定）
+        for _ in range(10):
+            time.sleep(3)
+            if any(c['name'].startswith('EYg4') for c in context.cookies()):
+                break
+        _diag = page.evaluate(
+            "({ua: navigator.userAgent, tl: (document.body ? document.body.innerText.length : -1)})")
+        logger.info('[announce][ctcc] tariffZone 会话就绪，页面内 fetch 详情 %d 条'
+                    '（页面文本=%s, 内核=%s, UA=%s）'
+                    % (len(tasks), _diag.get("tl"), browser.version, _diag.get("ua")))
+        # 过盾会话内同域 fetch 详情接口（瑞数为会话级校验，同域可信会话放行；
+        # 加密信封与裸 HTTP 列表同款）。单条失败记录继续，不中断整批。
+        detail_url = (ANN_CTCC_SITE +
+                      '/wtBusiness/wtservice/nc/announcement/getAnnouncementDetail.do')
+        for i, t in enumerate(tasks, 1):
+            try:
+                payload, _tid = _ann_ctcc_envelope({
+                    "offerCode": t["offer"], "type": t["type"],
+                    "provinceCode": t["prov"], "cityCode": "",
+                })
+                res = page.evaluate(
+                    '''async (args) => {
+                        const r = await fetch(args.url, {method: 'POST', body: args.body,
+                            headers: {'Content-Type': 'application/json;charset=UTF-8',
+                                      'Fcode': args.fcode}});
+                        return {status: r.status, text: await r.text()};
+                    }''',
+                    {"url": detail_url,
+                     "body": json.dumps(payload, separators=(",", ":")),
+                     "fcode": ANN_CTCC_FCODE})
+                if res.get("status") == 200:
+                    out[t["key"]] = res.get("text") or ""
+                else:
+                    out[t["key"]] = ("HTTP %s %s"
+                                     % (res.get("status"), (res.get("text") or "")[:150]))
+            except Exception as e:
+                out[t["key"]] = "ERR " + str(e)[:80]
+            if i % 25 == 0:
+                logger.info('[announce][ctcc] 详情进度 %d/%d' % (i, len(tasks)))
+            time.sleep(0.3)
+        return out
+    finally:
+        for obj in (page, context, browser):
+            if obj is not None:
+                try:
+                    obj.close()
+                except Exception:
+                    pass
+        if pw is not None:
+            try:
+                pw.stop()
+            except Exception:
+                pass
+
+
+def _ann_ctcc_post(obj, url=None, timeout=20, retries=2):
+    import base64, gzip, random
+    import urllib.request
+    payload, tid = _ann_ctcc_envelope(obj)
+    req = urllib.request.Request(
+        url or ANN_CTCC_REC_URL, data=json.dumps(payload, separators=(",", ":")).encode(),
+        method="POST",
+        headers={"User-Agent": _ANN_UA, "Content-Type": "application/json;charset=UTF-8",
+                 "Accept": "application/json, text/plain, */*",
+                 "Origin": ANN_CTCC_SITE,
+                 "Referer": ANN_CTCC_SITE + "/web/notice/index.html",
+                 "Fcode": ANN_CTCC_FCODE, "TransactionId": tid,
+                 "Accept-Language": "zh-CN,zh;q=0.9"})
+    last = None
+    for a in range(max(1, retries + 1)):
+        try:
+            # 列表+详情必须同一会话通道（同一 opener/cookie jar，混用 → 瑞数判会话不一致 → 412）
+            with _ann_opener().open(req, timeout=timeout) as r:
+                raw = r.read()
+                if r.headers.get("Content-Encoding") == "gzip":
+                    raw = gzip.decompress(raw)
+                return json.loads(raw.decode("utf-8", "replace"))
+        except Exception as e:
+            last = e
+            time.sleep(2 * (a + 1))
+    raise last
+
+
+def _ann_ctcc(ann_cfg):
+    lim = ann_cfg["limits"]
+    sources, items, per_prov = {}, [], {}
+    # ── 阶段1：列表（裸 HTTP 信封，稳定可用） ──
+    for prov, prov_code in ANN_CTCC_PROVINCES.items():
+        try:
+            r = _ann_ctcc_post({"shopId": ANN_CTCC_SHOP_ID, "type": ANN_CTCC_BASE_TYPE,
+                                "order": 1, "provinceCode": prov_code, "cityCode": ""},
+                               timeout=lim["timeout_s"], retries=lim["retries"])
+            raw = []
+            for d in (r.get("data") or []):
+                for x in (d.get("floorItems") or []):
+                    raw.append(x)
+        except Exception as e:
+            sources[prov] = {"ok": False, "err": str(e)[:80]}
+            logger.warning("[announce][ctcc] %s(%s) 列表失败: %s" % (prov, prov_code, str(e)[:80]))
+            continue
+        if not raw:
+            sources[prov] = {"ok": True, "count": 0}
+            continue
+        rows = []
+        for x in raw:
+            title = (x.get("title") or "").strip()
+            if not title:
+                continue
+            rows.append({
+                "id": str(x.get("externalOfferCode") or x.get("offerCode") or x.get("id") or ""),
+                "title": title,
+                "date": _ann_date(x.get("liveStartTime") or x.get("publishTime")
+                                  or x.get("createTime") or ""),
+                "_type": (x.get("type") or ANN_CTCC_BASE_TYPE),
+            })
+        rows.sort(key=lambda x: (x["date"], x["id"]), reverse=True)
+        rows = rows[: lim["per_source_fetch"]]
+        per_prov[prov] = (prov_code, rows)
+        sources[prov] = {"ok": True, "count": len(rows), "fetched": 0}
+        logger.info("[announce][ctcc] %s 列表 %d 条" % (prov, len(rows)))
+    if not per_prov:
+        return items, sources
+    # ── 阶段2：详情（导航 SPA 详情页，捕获页面自身的 API 响应；失败降级空正文） ──
+    tasks = []
+    for prov, (prov_code, rows) in per_prov.items():
+        for row in rows:
+            tasks.append({"key": "%s|%s" % (prov, row["id"]), "offer": row["id"],
+                          "type": row["_type"], "prov": prov_code,
+                          "prov_name": prov, "row": row})
+    resp_map = {}
+    try:
+        resp_map = _ann_ctcc_pw_details(tasks)
+    except Exception as e:
+        logger.warning("[announce][ctcc] PW 详情通道失败，全部降级为无正文: %s" % str(e)[:120])
+    # ── 阶段3：解析详情响应 → 统一条目 ──
+    for t in tasks:
+        key, prov, row = t["key"], t["prov_name"], t["row"]
+        content = ""
+        resp = resp_map.get(key) or ""
+        if resp.startswith("{"):
+            try:
+                d = json.loads(resp)
+                node = (d.get("data") or {}) if isinstance(d, dict) else {}
+                raw_html = (node.get("content") or "").strip()
+                if raw_html:
+                    raw_html = re.sub(r'(<img[^>]*?src=)["\'](?!https?://|data:)([^"\']*)["\']',
+                                      lambda m: m.group(1) + '"' + ANN_CTCC_SITE + m.group(2) + '"',
+                                      raw_html, flags=re.I)
+                    raw_html = re.sub(r'(<a[^>]*?href=)["\'](?!https?://|#|mailto:)([^"\']*)["\']',
+                                      lambda m: m.group(1) + '"' + ANN_CTCC_SITE + m.group(2) + '"',
+                                      raw_html, flags=re.I)
+                    content = _ann_clean_html(raw_html, ANN_CTCC_SITE)
+                    if node.get("title"):
+                        row["title"] = node["title"].strip()
+            except Exception as e:
+                logger.warning("[announce][ctcc] %s 详情解析失败 %s: %s"
+                               % (prov, row["id"], str(e)[:60]))
+        elif resp:
+            logger.warning("[announce][ctcc] %s 详情 %s: %s" % (prov, row["id"], resp[:40]))
+        items.append(_ann_mkitem("ctcc", "prov", row["id"], row["title"], row["date"],
+                                 prov, "provincial", ANN_CTCC_PAGE_URL,
+                                 content=content, base=ANN_CTCC_SITE))
+        if content:
+            sources[prov]["fetched"] = sources[prov].get("fetched", 0) + 1
+    return items, sources
+
+
+# ---------------- 广电（全网单源；MD5 签名 + 244 字节分块 RSA 信封） ----------------
+def _ann_cbn_post(obj, timeout=20, retries=2):
+    import base64, gzip
+    import urllib.request, urllib.parse, hashlib
+    _, PKCS1_v1_5, RSA, _ = _ann_crypto()
+    pub = RSA.import_key(base64.b64decode(ANN_CBN_PUBKEY_B64))
+    # Access = MD5(键排序后 k=v 串，对象值 JSON 序列化，& 连接) hex 小写
+    parts = []
+    for k in sorted(obj.keys()):
+        v = obj[k]
+        parts.append("%s=%s" % (k, json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+                                if isinstance(v, (dict, list)) else v))
+    access = hashlib.md5("&".join(parts).encode()).hexdigest()
+    plain = urllib.parse.quote(json.dumps(obj, ensure_ascii=False), safe="").encode()
+    hexed = "".join(PKCS1_v1_5.new(pub).encrypt(plain[i:i + 244]).hex()
+                    for i in range(0, len(plain), 244))
+    # 关键：hex 先还原成二进制再 base64（对齐官网 encryptLong——此前对 hex 字符串
+    # 直接 base64，服务端解出 ASCII 文本致 RSA 解密失败 → "请求参数异常"）
+    payload = {"data": base64.b64encode(bytes.fromhex(hexed)).decode()}
+    req = urllib.request.Request(
+        ANN_CBN_URL, data=json.dumps(payload, separators=(",", ":")).encode(), method="POST",
+        headers={"User-Agent": _ANN_CBN_UA, "Access": access,
+                 "Content-Type": "application/json",
+                 "Origin": "https://m.10099.com.cn",
+                 "Referer": "https://m.10099.com.cn/noticeList/pages/extensions/noticeList/index"})
+    last = None
+    for a in range(max(1, retries + 1)):
+        try:
+            with _ann_opener().open(req, timeout=timeout) as r:
+                raw = r.read()
+                if r.headers.get("Content-Encoding") == "gzip":
+                    raw = gzip.decompress(raw)
+                return json.loads(raw.decode("utf-8", "replace"))
+        except Exception as e:
+            last = e
+            time.sleep(2 * (a + 1))
+    raise last
+
+
+def _ann_cbn(ann_cfg):
+    lim = ann_cfg["limits"]
+    items = []
+    # 成功组合（2026-10-10 PC 实测）：provinceCode=ZZZZ + 移动端 UA + SPA 完整 Referer
+    # 三者缺一会被 H5 网关判"请求参数异常"（000001）
+    r = _ann_cbn_post({"provinceCode": "ZZZZ"}, timeout=lim["timeout_s"],
+                      retries=lim["retries"])
+    rows = r.get("data") or []
+    if not rows:
+        # 诊断：响应结构与预期不符时打印关键信息，便于定位（信封错/风控页/字段变更）
+        logger.warning("[announce][cbn] 响应 0 条：status=%s keys=%s body=%s"
+                       % (r.get("status"), list(r.keys())[:6],
+                          json.dumps(r, ensure_ascii=False)[:200]))
+    rows.sort(key=lambda x: str(x.get("startTime") or x.get("publishTime") or ""),
+              reverse=True)
+    rows = rows[: lim["per_source_fetch"]]
+    for x in rows:
+        iid = str(x.get("id") or x.get("infoId") or "")
+        title = (x.get("title") or "").strip()
+        if not title:
+            continue
+        content = _ann_clean_html(x.get("messageInfo") or "", "https://m.10099.com.cn")
+        items.append(_ann_mkitem("cbn", "all", iid or _ann_date(x.get("startTime")),
+                                 title, x.get("startTime") or x.get("publishTime") or "",
+                                 "", "national",
+                                 x.get("url") or x.get("link") or ANN_CBN_PAGE_URL,
+                                 content=content, base="https://m.10099.com.cn"))
+        time.sleep(lim["sleep_s"])
+    return items, {"ZZZZ": {"ok": True, "count": len(items)}}
+
+
+# ---------------- 广东（独立省站 + WAF，复用电信资费 Playwright 基建） ----------------
+def _ann_cmcc_gd(ann_cfg):
+    """二期灰度：无头浏览器过盾 → 解析 /whatsnew/notice/list/2_{city}.shtml + detail SSR。
+    详见 spec §3.2；enabled=false 时直接跳过。"""
+    return [], {"gd": {"ok": True, "skipped": "二期灰度（spec §3.2）"}}
+
+
+# ---------------- 调度器 ----------------
+def fetch_announcements(config, storage):
+    """主流程尾部调用：四源独立 try，产出 4 × data/{carrier}/announce.json。
+    抓空且全源失败 → 跳过该 carrier 写盘（防源站抖动清空线上公告）。"""
+    ann_cfg = _ann_load_config(config)
+    if not ann_cfg["enabled"]:
+        logger.info("[announce] 公告采集未启用（TARIFF_CONFIG.announce.enabled=false），跳过")
+        return
+    lim = ann_cfg["limits"]
+    jobs = [
+        ("cmcc", _ann_cmcc, True),
+        ("cucc", _ann_cucc, True),
+        ("ctcc", _ann_ctcc, True),
+        ("cbn", _ann_cbn, True),
+    ]
+    t0 = time.time()
+    total = 0
+    # 开关键名必须传运营商键 c（此前误传布尔 on → sources 配置永远查不到 → 四源全开）
+    active_jobs = [(c, fn) for c, fn, on in jobs if _ann_src_enabled(ann_cfg, c)]
+    skipped = [c for c, fn, on in jobs if not _ann_src_enabled(ann_cfg, c)]
+    for c in skipped:
+        logger.info("[announce] %s 源未启用，跳过" % c)
+
+    def _ann_worker(carrier, fn):
+        # 线程内设置日志运营商标识（threading.local 不跨线程）
+        _carrier_ctx.carrier = CARRIER_DISPLAY_NAMES.get(carrier, carrier)
+        try:
+            items, sources = fn(ann_cfg)
+            return (carrier, items, sources, None)
+        except Exception as e:
+            logger.warning("[announce] %s 源整体失败(不影响其他源): %s" % (carrier, str(e)[:100]))
+            return (carrier, [], {}, e)
+
+    # 四源并行抓取（各自独立 HTTP/PW 会话；storage 写盘留在主线程，规避并发写）
+    results = {}
+    if active_jobs:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(4, len(active_jobs))) as executor:
+            futs = {executor.submit(_ann_worker, c, fn): c for c, fn in active_jobs}
+            for f in as_completed(futs):
+                carrier, items, sources, err = f.result()
+                results[carrier] = (items, sources, err)
+
+    for carrier, fn, default_on in jobs:
+        if carrier not in results:
+            continue
+        items, sources, err = results[carrier]
+        if err is not None:
+            continue
+        _carrier_ctx.carrier = CARRIER_DISPLAY_NAMES.get(carrier, carrier)
+        ok_sources = [k for k, v in sources.items() if v.get("ok")]
+        if not items:
+            # 「0 条绝不落盘」：源站改版/抖动返回空列表时不覆盖线上旧公告
+            logger.warning("[announce] %s 本轮 0 条（源 ok=%d/%d），跳过写盘保持线上不变"
+                           % (carrier, len(ok_sources), len(sources)))
+            continue
+        # retention：按日期保留（date YYYY-MM-DD 字符串比较）
+        cutoff = (datetime.date.today() - datetime.timedelta(days=lim["retention_days"])).isoformat()
+        kept = [it for it in items if (it.get("date") or "") >= cutoff]
+        kept.sort(key=lambda x: (x.get("date") or ""), reverse=True)
+        payload = {
+            "v": 1,
+            "carrier": carrier,
+            "updated": int(time.time() * 1000),
+            "ok": True,
+            "sources": sources,
+            "items": kept,
+        }
+        # 文件兜底 ≤512KB：超限丢最旧
+        while len(json.dumps(payload, ensure_ascii=False).encode()) > lim["file_max_bytes"] and kept:
+            kept.pop()
+            payload["items"] = kept
+        try:
+            storage.write_json("%s/announce.json" % carrier, payload)
+            total += len(kept)
+            logger.info("[announce] %s 写盘 %d 条（源 %d/%d ok，耗时 %.0fs）"
+                        % (carrier, len(kept), len(ok_sources), len(sources),
+                           time.time() - t0))
+        except Exception as e:
+            logger.warning("[announce] %s 写盘失败: %s" % (carrier, str(e)[:80]))
+    logger.info("[announce] 公告采集完成，共 %d 条，总耗时 %.0fs" % (total, time.time() - t0))
+    _carrier_ctx.carrier = '系统'   # 清理上下文，避免后续部署日志误挂运营商名
 
 
 if __name__ == '__main__':

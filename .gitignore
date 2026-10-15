@@ -11,3 +11,22 @@ pages-dist/data/
 # 调研/验证用途，不入库
 参考项目/
 _verify_*.py
+Temp/
+
+# 运行产物（本地缓存 / 日志，运行时自动重建）
+local_cache/
+logs
+
+# wrangler files
+.wrangler
+worker/wrangler.toml
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
+
+# Tencent Cloud EdgeOne
+.env
+.edgeone/*
+.tef_dist/*
+  
