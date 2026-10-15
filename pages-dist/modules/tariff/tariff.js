@@ -27,7 +27,7 @@ const cache = {};
 
 /* 前端版本号：与 frontend-config.js 中 tariff 的 ?v= 同步 bump；
    文件内自包含，关于页展示用——显示值即文件真实版本，判断缓存是否更新零歧义 */
-const TARIFF_VER = "20261015e";
+const TARIFF_VER = "20261015f";
 
 const AREA_CODE_MAP = {
 "0100":"北京","0200":"广州","0210":"上海","0220":"天津",
@@ -3897,7 +3897,7 @@ function annItemBodyHTML(id) {
   return `
   <div class="ann-body">
     ${hasContent ? `<div class="ann-html">${annSanitize(a.content, atts)}</div>`
-                 : `<div class="ann-miss">正文暂未采集 · 源站接口限制</div>`}
+                 : `<div class="ann-miss">该公告正文需在官网查看（源站接口未开放正文抓取）${a.pageUrl ? ` · <a class="ann-miss-link" href="${esc(a.pageUrl)}" target="_blank" rel="noopener noreferrer">查看原文 ${icon("external")}</a>` : ""}</div>`}
     ${foot}
   </div>`;
 }

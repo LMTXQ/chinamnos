@@ -2792,6 +2792,8 @@
   background: color-mix(in oklab, var(--amber) 8%, var(--surface));
   border: 1px dashed color-mix(in oklab, var(--amber) 45%, transparent);
 }
+.ann-miss-link { color: var(--amber); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.ann-miss-link svg { width: 12px; height: 12px; vertical-align: -1px; }
 .ann-atts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ann-att-chip {
   display: inline-flex; align-items: center; gap: 5px; max-width: 260px; padding: 4px 12px;
