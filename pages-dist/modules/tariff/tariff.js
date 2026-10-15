@@ -110,15 +110,26 @@ const AREA_CODE_MAP = {
 "9930":"石河子","9940":"昌吉","9950":"吐鲁番","9960":"巴音郭楞",
 "9970":"阿克苏","9980":"喀什","9990":"伊犁",
 };
+/* 2位字母省码 → 中文（移动全网套餐 applicableArea 直出省码，如 GD,HA,HB；与官方资费公示接口一致） */
+const PROV_CODE_MAP = {
+"BJ":"北京","TJ":"天津","HE":"河北","SX":"山西","NM":"内蒙古",
+"LN":"辽宁","JL":"吉林","HL":"黑龙江","SH":"上海","JS":"江苏",
+"ZJ":"浙江","AH":"安徽","FJ":"福建","JX":"江西","SD":"山东",
+"HA":"河南","HB":"湖北","HN":"湖南","GD":"广东","GX":"广西",
+"HI":"海南","CQ":"重庆","SC":"四川","GZ":"贵州","YN":"云南",
+"XZ":"西藏","SN":"陕西","GS":"甘肃","QH":"青海","NX":"宁夏",
+"XJ":"新疆",
+};
 function areaFallback(p) {
-  return AREA_CODE_MAP[p] || p;
+  return AREA_CODE_MAP[p] || PROV_CODE_MAP[p] || p;
 }
 function areaCn(v) {
   if (v == null) return v;
   v = String(v).trim();
   if (!v) return v;
   if (/^0{2,4}$/.test(v)) return "全国";
-  if (/^[\d,，、\s]+$/.test(v)) {
+  /* 纯数字串=4位城市码；2位大写字母串=省码，两种都逐个拆开映射 */
+  if (/^[\d,，、\s]+$/.test(v) || /^([A-Z]{2}[,，、\s]*)+$/.test(v)) {
     const parts = v.split(/[,，、\s]+/).map((s) => s.trim()).filter(Boolean);
     if (parts.length > 1) return parts.map(areaFallback).join("、");
   }
