@@ -4028,6 +4028,21 @@ class CloudflareStorage(StorageBackend):
                             del files[rel]
                             deleted_count += 1
                 continue
+            # announce.json 兜底补全（与 EdgeOneStorage 同语义）：--deploy-frontend 等模式
+            # buffer 无公告数据，全量替换制下缺它 = 线上公告被删 → 公告页签「暂无公告源」
+            ann_rel = f'{self.path_prefix}/{carrier_key}/announce.json'
+            if ann_rel not in files:
+                ann_manifest_key = f'/{ann_rel}'
+                if skip_unchanged_download and ann_manifest_key in cached_manifest:
+                    cached_hashes[ann_rel] = cached_manifest[ann_manifest_key]
+                else:
+                    try:
+                        old_ann = self.read_json(f'{carrier_key}/announce.json')
+                    except RuntimeError as e:
+                        logger.warning(f'Cloudflare: 补全旧公告失败 ({carrier_key}): {e}')
+                        old_ann = None
+                    if old_ann is not None:
+                        files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, indent=2).encode('utf-8')
             active_codes = self._get_active_province_codes(carrier_key)
             for prov in PROVINCES:
                 if prov['code'] not in active_codes:
