@@ -1311,10 +1311,17 @@
   opacity: 0.75;
 }
 .tl-chip-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px oklch(20% 0.05 262 / 0.16);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px oklch(20% 0.05 262 / 0.2);
 }
 .tl-chip-btn:active { transform: scale(0.96); }
+/* 时间轴折叠头键盘焦点环（tabindex=0 + Enter/Space 触发展开） */
+.tl-head:focus-visible,
+.tl-sec-head:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--acc) 60%, transparent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
 .tl-chip-btn.c-add {
   background: color-mix(in oklab, var(--green) 15%, transparent);
   color: var(--green);
@@ -2083,6 +2090,7 @@
 }
 .tcard {
   position: relative;
+  isolation: isolate; /* 角部装饰圆 ::after 用 z-index:-1 垫底，防负层级逃逸到卡片背景之后 */
   padding: 16px;
   border-radius: var(--r-lg);
   background: var(--glass);
@@ -2268,8 +2276,31 @@
 }
 .tcard:hover {
   transform: translateY(-4px);
-  box-shadow: var(--shadow-2);
+  box-shadow: 0 14px 34px color-mix(in oklab, var(--acc) 14%, transparent);
   border-color: color-mix(in oklab, var(--acc) 32%, transparent);
+}
+/* 右下角淡色装饰圆（借鉴参考站经典导航卡）：常驻淡显、hover 加深；
+   z-index:-1 垫在内容下方，pointer-events:none 不挡交互 */
+.tcard::after {
+  content: "";
+  position: absolute;
+  inset: auto -2.5rem -2.5rem auto;
+  width: 6.5rem;
+  height: 6.5rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--acc) 9%, transparent);
+  opacity: 0.7;
+  transition: opacity 0.25s var(--ease), background 0.25s var(--ease);
+  pointer-events: none;
+  z-index: -1;
+}
+.tcard:hover::after {
+  background: color-mix(in oklab, var(--acc) 15%, transparent);
+  opacity: 1;
+}
+/* 展开详情态保持纯净，不叠加装饰 */
+.tcard.detail-active::after {
+  display: none;
 }
 .tc-head {
   display: flex;

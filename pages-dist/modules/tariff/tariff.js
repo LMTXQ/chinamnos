@@ -3052,7 +3052,7 @@ function clDraw() {
       (!gc.added && !gc.changed && !gc.removed ? '<i class="b-none" title="无变化"></i>' : "");
 
     html += `<div class="tl-item${open ? " open" : ""}${fresh ? " fresh" : ""}" data-cts="${esc(tsKey)}" role="button" aria-expanded="${open}">`;
-    html += `<div class="tl-head"><span class="tl-time">${esc(clBatchLabel(g.ts))} 采集</span>${fresh ? '<span class="tl-fresh">最新</span>' : ""}<span class="tl-bars">${bars}</span><span class="tl-arrow"></span></div>`;
+    html += `<div class="tl-head" tabindex="0" role="button"><span class="tl-time">${esc(clBatchLabel(g.ts))} 采集</span>${fresh ? '<span class="tl-fresh">最新</span>' : ""}<span class="tl-bars">${bars}</span><span class="tl-arrow"></span></div>`;
 
     // 展开后：类型子卡片（新增/下架/变更），卡片体为业务胶囊，点击弹窗看详情
     html += '<div class="tl-sec-list">';
@@ -3062,7 +3062,7 @@ function clDraw() {
       const lbl = tp === "added" ? "新增" : tp === "removed" ? "下架" : "变更";
       const secOpen = clSecOverride.get(tsKey + "|" + tp) === true;
       html += `<div class="tl-sec-entry${secOpen ? " open" : ""}" data-stype="${tp}">`;
-      html += `<div class="tl-sec-head" role="button" aria-expanded="${secOpen}"><b>${lbl}</b><span class="tl-sec-chips"><span class="chip ${cls}">${gc[tp]} 项</span></span><span class="tl-sec-arrow"></span></div>`;
+      html += `<div class="tl-sec-head" role="button" tabindex="0" aria-expanded="${secOpen}"><b>${lbl}</b><span class="tl-sec-chips"><span class="chip ${cls}">${gc[tp]} 项</span></span><span class="tl-sec-arrow"></span></div>`;
       html += '<div class="tl-sec-body"><div class="tl-chipbox">';
       html += g.items.filter(idx => filtered[idx].type === tp).map(idx => {
         const log = filtered[idx];
@@ -3422,6 +3422,24 @@ function doCheck() {
 }
 
 /* ─────────────── 事件委托（页面级） ─────────────── */
+/** 变更日志：批次节点展开/收起（点击与键盘 Enter/Space 共用） */
+function clToggleBatch(head) {
+  const item = head.closest(".tl-item");
+  if (!item) return;
+  const open = item.classList.toggle("open");
+  item.setAttribute("aria-expanded", open ? "true" : "false");
+  if (item.dataset.cts) clOpenOverride.set(item.dataset.cts, open);
+}
+/** 变更日志：类型子卡片展开/收起（点击与键盘共用） */
+function clToggleSec(head) {
+  const entry = head.closest(".tl-sec-entry");
+  if (!entry) return;
+  const item = entry.closest(".tl-item");
+  const open = entry.classList.toggle("open");
+  head.setAttribute("aria-expanded", open ? "true" : "false");
+  if (item && item.dataset.cts) clSecOverride.set(item.dataset.cts + "|" + (entry.dataset.stype || ""), open);
+}
+
 function onRootClick(e) {
   // 未采集省份提示自动消隐
   const tip = document.getElementById("provTip");
@@ -3468,21 +3486,14 @@ function onRootClick(e) {
   // 变更日志：类型子卡片折叠/展开（记忆用户选择，重渲染不弹回）
   const clSecHead = e.target.closest(".tl-sec-head");
   if (clSecHead && $("tariffRoot") && $("tariffRoot").contains(clSecHead)) {
-    const entry = clSecHead.closest(".tl-sec-entry");
-    const item = entry.closest(".tl-item");
-    const open = entry.classList.toggle("open");
-    clSecHead.setAttribute("aria-expanded", open ? "true" : "false");
-    if (item && item.dataset.cts) clSecOverride.set(item.dataset.cts + "|" + (entry.dataset.stype || ""), open);
+    clToggleSec(clSecHead);
     return;
   }
 
   // 变更日志：批次节点展开/收起（记忆用户选择）
   const clHead = e.target.closest(".tl-item .tl-head");
   if (clHead && $("tariffRoot") && $("tariffRoot").contains(clHead)) {
-    const item = clHead.closest(".tl-item");
-    const open = item.classList.toggle("open");
-    item.setAttribute("aria-expanded", open ? "true" : "false");
-    if (item.dataset.cts) clOpenOverride.set(item.dataset.cts, open);
+    clToggleBatch(clHead);
     return;
   }
 
@@ -3506,8 +3517,17 @@ function carrierSwitchContains(el) {
 let _rootClickHandler = null;
 let _rootKeyHandler = null;
 
-/** "/" 快捷键：聚焦当前页签的搜索框 */
+/** "/" 快捷键：聚焦当前页签的搜索框；时间轴折叠头 Enter/Space = 点击（role=button 的键盘契约） */
 function onRootKeydown(e) {
+  if ((e.key === "Enter" || e.key === " ") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const t = e.target;
+    if (t && t.closest) {
+      const secHead = t.closest(".tl-sec-head");
+      if (secHead) { e.preventDefault(); clToggleSec(secHead); return; }
+      const head = t.closest(".tl-item .tl-head");
+      if (head) { e.preventDefault(); clToggleBatch(head); return; }
+    }
+  }
   if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
   const ae = document.activeElement;
   const tag = ae ? ae.tagName : "";
