@@ -202,7 +202,7 @@ function switchCarrier(carrier) {
   const logoText = $("logoText");
   if (logoIcon) logoIcon.textContent = brand.icon;
   if (logoText) logoText.textContent = brand.name + "资费监控";
-  document.title = brand.name + "资费监控 · v4 — ChinaMNOs";
+  document.title = brand.name + "资费监控 — ChinaMNOs";
 
   applyBrandVars(brand);
 
