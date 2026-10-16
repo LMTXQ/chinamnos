@@ -5363,6 +5363,20 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
     logger.info(f'stats.json 已保存 (status={status})')
 
 
+def _log_rss(tag):
+    """内存探针：打印进程 RSS（Linux /proc）。用于验证省份级释放后 RSS 不再随运营商阶梯上涨
+    （Python 内存池特性：已释放内存优先复用不还给系统，故判据是"走平"而非"回落"）。非 Linux 静默跳过。"""
+    try:
+        with open('/proc/self/status', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    parts = line.split()
+                    logger.info(f'[内存] {tag}: RSS={parts[1]}{parts[2]}')
+                    break
+    except Exception:
+        pass
+
+
 def _digest_province_stats(carrier_key, prov, r, storage_ref, crawl_time):
     """省份级内存消化（流水线释放的核心）：
     将该省原始条目一次性转成统计摘要（dist/breakdown/去重键子集/last_crawl/today），
@@ -5893,6 +5907,7 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
         'provinces': province_diags,
         'total_ms': int((time.time() - carrier_start) * 1000),
     }
+    _log_rss(f'{carrier_display(carrier_key)} 采集完成')
     try:
         storage.write_json(f'{carrier_key}/_diag.json', diag_data)
     except Exception as e:
@@ -6113,6 +6128,7 @@ def run():
     total_success = sum(all_success_count.values())
     total_fail = sum(all_fail_count.values())
     logger.info(f'全部采集完成: 成功={total_success}, 失败={total_fail}, 耗时={crawl_duration_ms / 1000:.2f}s')
+    _log_rss('全部采集完成')
 
     _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_duration_ms, all_success_count, all_fail_count, old_stats)
     # ── 公告监测（与资费采集隔离：失败仅记日志，不影响资费上传）──
@@ -6123,6 +6139,7 @@ def run():
 
     refresh_public_config(storage)
     storage.commit(message=f'tariff update {crawl_time[:10]}')
+    _log_rss('部署完成')
 
     for _api in _active_apis:
         if hasattr(_api, 'close'):
