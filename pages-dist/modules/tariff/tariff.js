@@ -3032,7 +3032,9 @@ function clDraw() {
       html += '<div class="tl-sec-body"><div class="tl-chipbox">';
       html += g.items.filter(idx => filtered[idx].type === tp).map(idx => {
         const log = filtered[idx];
-        return `<a class="tl-chip-btn c-${cls}" href="javascript:void(0)" data-clidx="${idx}" title="点击查看该业务详情">${esc(log.name || "")}</a>`;
+        const sym = tp === "added" ? "+" : tp === "removed" ? "-" : "✎";
+        const diffN = tp === "changed" && log.diff ? Object.keys(log.diff).length : 0;
+        return `<a class="tl-chip-btn c-${cls}" href="javascript:void(0)" data-clidx="${idx}" title="点击查看该业务详情">${sym} <span>${esc(log.name || "")}</span>${diffN ? `<b class="cn">${diffN}项</b>` : ""}</a>`;
       }).join("");
       html += '</div></div></div>';
     });

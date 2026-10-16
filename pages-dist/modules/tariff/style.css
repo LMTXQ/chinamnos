@@ -1304,6 +1304,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tl-chip-btn .cn {
+  flex-shrink: 0;
+  margin-left: 4px;
+  font-weight: 600;
+  opacity: 0.75;
+}
 .tl-chip-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px oklch(20% 0.05 262 / 0.16);
