@@ -20,7 +20,7 @@ import { api } from "../../shell/api.js";
 import { adaptPost, viewFromCardhubRaw, renderListCard, renderDetailBody, relTime } from "../../shell/post-view.js";
 import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
-import { loadNotices, maybePromosOnSwitch } from "../../shell/notice.js";
+import { loadNotices, maybePromosOnSwitch, scopeMatch } from "../../shell/notice.js";
 
 const $ = (id) => document.getElementById(id);
 const cache = {};
@@ -512,7 +512,9 @@ function onTabChange(v) {
 let _noticesViewRendered = false;
 let _ntcPromoFilter = "scope"; // scope=当前范围（默认） | all=全部
 
-/* 与弹窗 judgePromos 相同的范围匹配逻辑（含站点默认回退） */
+/* 与弹窗 judgePromos 同源的范围匹配（scopeMatch 单一事实来源；含站点默认回退）：
+   moduleId="tariff" → 当前范围 = 全站条目 + tariff 模块条目，且运营商/省份命中；
+   其他模块条目（如跳蚤市集警告）不混入，回看走「全部」 */
 function ntcScopeFilter(list) {
   let curCarrier = "", curProv = "";
   try {
@@ -521,14 +523,7 @@ function ntcScopeFilter(list) {
   } catch { /* */ }
   if (!curCarrier) curCarrier = "cmcc";
   if (!curProv) curProv = "hun";
-  return list.filter((p) => {
-    const sc = p.scope || {};
-    const carriers = Array.isArray(sc.carriers) ? sc.carriers : [];
-    const provinces = Array.isArray(sc.provinces) ? sc.provinces : [];
-    if (carriers.length && !carriers.includes(curCarrier)) return false;
-    if (provinces.length && !provinces.includes(curProv)) return false;
-    return true;
-  });
+  return list.filter((p) => scopeMatch(p, curCarrier, curProv, "tariff"));
 }
 
 function renderPromoList(pBody, list) {

@@ -178,8 +178,9 @@ function currentCarrierProv() {
 }
 
 /* 范围匹配（三维同时配置 = 与关系）：moduleId 传 undefined = 全站判定（模块条目不参与），
-   传模块 id = 模块进入判定（仅命中声明了该模块的条目） */
-function scopeMatch(p, curCarrier, curProv, moduleId) {
+   传模块 id = 模块进入判定（仅命中声明了该模块的条目）
+   export 供「公告推广」页签「当前范围」过滤复用（单一事实来源） */
+export function scopeMatch(p, curCarrier, curProv, moduleId) {
   const sc = p.scope || {};
   const carriers = Array.isArray(sc.carriers) ? sc.carriers : [];
   const provinces = Array.isArray(sc.provinces) ? sc.provinces : [];
