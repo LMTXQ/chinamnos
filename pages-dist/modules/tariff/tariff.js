@@ -192,19 +192,21 @@ function renderCarrierSwitch(keys) {
   }).join("");
 }
 
-function switchCarrier(carrier) {
-  if (!ACTIVE_CARRIERS.includes(carrier) || carrier === currentCarrier) return;
-  currentCarrier = carrier;
-  try { localStorage.setItem(CARRIER_STORAGE_KEY, carrier); } catch {}
-  const brand = CARRIER_BRAND[carrier];
-
+/** 品牌标识套用：顶栏 logo 文案 + 标题栏 title + 品牌色变量（切运营商与页面重入共用） */
+function applyBrandIdentity(brand) {
   const logoIcon = $("logoIcon");
   const logoText = $("logoText");
   if (logoIcon) logoIcon.textContent = brand.icon;
   if (logoText) logoText.textContent = brand.name + "资费监控";
   document.title = brand.name + "资费监控 — ChinaMNOs";
-
   applyBrandVars(brand);
+}
+
+function switchCarrier(carrier) {
+  if (!ACTIVE_CARRIERS.includes(carrier) || carrier === currentCarrier) return;
+  currentCarrier = carrier;
+  try { localStorage.setItem(CARRIER_STORAGE_KEY, carrier); } catch {}
+  applyBrandIdentity(CARRIER_BRAND[carrier]);
 
   document.querySelectorAll(".carrier-btn, .carrier-switch .seg-btn").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.carrier === carrier);
@@ -1557,6 +1559,7 @@ function renderOverview() {
       return;
     }
 
+    applyBrandIdentity(CARRIER_BRAND[currentCarrier]); // 页面重入：恢复当前运营商 logo/标题（骨架为静态默认值，shell 已先设通用页标题）
     fillProvSelects();
     chTabRefresh(true); // #gProv 已填充 → 省份中文名可用 → 跳蚤市集 tab 探测（须在 fillProvSelects 之后）
     actTabRefreshAndRender(); // 情报酒馆列表随省份联动

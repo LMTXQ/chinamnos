@@ -265,7 +265,6 @@ Shell.registerPage({
   onEnter: async function (root) {
     await ensureStylesheet(Shell.config.base + "modules/tools/style.css");
     root.innerHTML = skeletonHTML();
-    document.title = "工具宝库 · ChinaMNOs";
     mountIcons(root);
     mountAppsMenu($("toolsAppsMenuSlot"), "tools");
     mountAuth($("toolsAuthSlot"));

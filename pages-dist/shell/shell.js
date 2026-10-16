@@ -107,6 +107,16 @@ export const theme = {
 
 /* ─────────────── 页面注册表 ─────────────── */
 const pages = new Map();
+/* 页面级标题（id → 显示名）：activate 进入页面即切，模块可在 onEnter 内覆盖更具体的标题
+   （如资费页带运营商名「XX资费监控」）；名称与 apps-menu.js APP_SITES 保持同源一致 */
+const PAGE_TITLES = {
+  tariff: "资费监测",
+  cardhub: "跳蚤市集",
+  ticket: "工单中心",
+  tools: "工具宝库",
+  admin: "管理后台",
+  config: "管理中心",
+};
 let active = null;
 
 export const Shell = {
@@ -165,6 +175,10 @@ function initAurora() {
 
 /** 页面切换（包裹 View Transition，降级为直接切换） */
 async function activate(page) {
+  /* 标题随页面切换（onEnter 之前设置：模块专属标题可再覆盖） */
+  document.title = PAGE_TITLES[page.id]
+    ? PAGE_TITLES[page.id] + " — ChinaMNOs"
+    : "ChinaMNOs 讯览台";
   const run = () => {
     /* 记录来源页：供管理后台等页面的「返回」按钮回到进入前的功能区 */
     Shell.prevPage = active;
