@@ -432,7 +432,8 @@ function loadSnapshot(code) {
 }
 
 function loadChangelog(code) {
-  return loadJson(`changelogs/changelog_${code}.json`);
+  // 省份无变更日志文件（如广电部分省）时按空记录处理 → 界面显示「暂无变更记录」
+  return loadJson(`changelogs/changelog_${code}.json`).catch(() => ({ logs: [] }));
 }
 
 function fmt(n) { return (n === undefined || n === null) ? "-" : n.toLocaleString("zh-CN"); }

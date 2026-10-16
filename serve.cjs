@@ -21,6 +21,11 @@ http.createServer((req, res) => {
   if (urlPath.endsWith('/')) urlPath += 'index.html';
   const file = path.join(ROOT, urlPath);
   if (!file.startsWith(ROOT) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    // 数据请求不参与 SPA 兜底：缺失文件如实返回 404，避免 HTML 被当作 JSON 解析
+    if (urlPath.startsWith('/data/')) {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+      return res.end(JSON.stringify({ error: 'Not Found', path: urlPath }));
+    }
     // SPA 兜底：路由交由前端模块处理
     const idx = path.join(ROOT, 'index.html');
     if (fs.existsSync(idx)) {
