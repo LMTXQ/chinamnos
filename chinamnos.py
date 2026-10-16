@@ -5364,17 +5364,40 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
 
 
 def _log_rss(tag):
-    """内存探针：打印进程 RSS（Linux /proc）。用于验证省份级释放后 RSS 不再随运营商阶梯上涨
-    （Python 内存池特性：已释放内存优先复用不还给系统，故判据是"走平"而非"回落"）。非 Linux 静默跳过。"""
+    """内存探针（Linux /proc）：RSS + gc 存活对象数 + malloc_trim 碎片实验。
+    判读：RSS 涨而"存活对象"走平 → 碎片/水位（非泄露）；trim 后 RSS 骤降 → glibc 碎片实锤。
+    ▸ 存活对象 = gc 追踪的容器对象（dict/list 等）计数，字符串/数字不受追踪不计入；
+    ▸ gc.get_objects() 会临时生成指针大列表（每对象 8 字节，取完 len 即释放），对读数影响可控；
+    ▸ malloc_trim 主动归还 glibc 空闲页，trim 后 RSS 是后续阶段的真实基线。
+    非 Linux 静默跳过。"""
+    rss_kb = None
     try:
         with open('/proc/self/status', encoding='utf-8') as f:
             for line in f:
                 if line.startswith('VmRSS:'):
-                    parts = line.split()
-                    logger.info(f'[内存] {tag}: RSS={parts[1]}{parts[2]}')
+                    rss_kb = int(line.split()[1])
                     break
     except Exception:
+        return
+    import gc as _gc
+    try:
+        live_n = len(_gc.get_objects())
+    except Exception:
+        live_n = -1
+    trim_note = ''
+    try:
+        import ctypes as _ct
+        _libc = _ct.CDLL('libc.so.6')
+        if _libc.malloc_trim(0):
+            with open('/proc/self/status', encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith('VmRSS:'):
+                        after_kb = int(line.split()[1])
+                        trim_note = f'，trim后={after_kb}kB(降{rss_kb - after_kb}kB)'
+                        break
+    except Exception:
         pass
+    logger.info(f'[内存] {tag}: RSS={rss_kb}kB 存活对象={live_n}{trim_note}')
 
 
 def _digest_province_stats(carrier_key, prov, r, storage_ref, crawl_time):
