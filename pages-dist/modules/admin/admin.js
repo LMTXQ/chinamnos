@@ -9,7 +9,7 @@
 "use strict";
 
 import { Shell, esc, theme } from "../../shell/shell.js";
-import { icon, mountIcons, toast } from "../../shell/ui.js";
+import { icon, mountIcons, toast, showPageLoading, hidePageLoading } from "../../shell/ui.js";
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
@@ -1870,6 +1870,7 @@ Shell.registerPage({
       root.innerHTML = `<div style="padding:80px 20px;text-align:center"><h2 style="color:var(--red)">无权访问</h2><p style="color:var(--muted);margin:8px 0 24px">仅管理员可进入管理后台</p><button class="btn primary" onclick="Shell.navigate('/')">返回首页</button></div>`;
       return;
     }
+    showPageLoading("管理后台加载数据…");
     if (!document.querySelector('style[data-admin-css]')) {
       const s = document.createElement("style");
       s.setAttribute("data-admin-css", "");
@@ -1894,7 +1895,8 @@ Shell.registerPage({
     paint();
     tb.addEventListener("click", () => { theme.toggle(); paint(); });
 
-    await loadAll();
+    /* 拉全部后台数据：期间由全局加载遮罩占位（骨架壳只搭了顶栏+tab 行，主体在数据就绪后渲染） */
+    try { await loadAll(); } finally { hidePageLoading(); }
   },
   onExit(root) {
     unbindEvents();

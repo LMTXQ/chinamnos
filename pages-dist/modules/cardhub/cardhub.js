@@ -12,7 +12,7 @@
 "use strict";
 
 import { Shell, esc, theme, ensureStylesheet } from "../../shell/shell.js";
-import { icon, mountIcons, toast, Tabs, initFX, withPending } from "../../shell/ui.js";
+import { icon, mountIcons, toast, Tabs, initFX, withPending, showPageLoading, hidePageLoading } from "../../shell/ui.js";
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
@@ -2272,27 +2272,31 @@ Shell.registerPage({
   id: "cardhub",
   route: "/cardhub",
   async onEnter(root) {
+    showPageLoading("跳蚤市集加载中…");
     await ensureStylesheet(Shell.config.base + "modules/cardhub/style.css");
 
     /* 模块开关守卫：关闭时直接显示禁用页 */
     const meta = await api.fetchMeta();
     if (meta.cardhub === false) {
+      hidePageLoading();
       root.innerHTML = `<div style="padding:80px 20px;text-align:center"><h2 style="color:var(--muted)">跳蚤市集暂未开放</h2><p style="color:var(--muted);margin:8px 0 24px">该功能已由管理员临时关闭，请稍后再来</p><button class="btn primary" onclick="Shell.navigate('/')">返回资费监测</button></div>`;
       return;
     }
 
+    /* 首次进入：数据请求期间由全局加载遮罩占位（双环转圈+弹跳点），数据就绪后再渲染骨架壳 */
     if (!S.schema) {
-      root.innerHTML = `<div class="boot" style="display:grid;place-items:center;min-height:60vh"><div style="text-align:center;color:var(--sub)">跳蚤市集加载中…</div></div>`;
       try {
         await loadFromApi();
         if (S.user) await loadMyPosts();
       } catch (err) {
+        hidePageLoading();
         root.innerHTML = `<div style="padding:48px 20px;text-align:center;color:var(--red)">跳蚤市集数据加载失败：${esc(err.message)}</div>`;
         return;
       }
     }
 
     root.innerHTML = skeletonHTML();
+    hidePageLoading();
     mountIcons($("cardhubRoot"));
     mountAuth($("chAuthSlot"));
     mountAppsMenu($("chAppsMenuSlot"), "cardhub");

@@ -136,6 +136,40 @@ export function toast(msg, type) {
   toastTimer = setTimeout(() => { toastEl.style.opacity = "0"; toastEl.style.transform = "translateX(-50%) translateY(-20px)"; }, 2400);
 }
 
+/* ─────────────── 页面级加载遮罩（模块 onEnter 网络等待期共用，样式同 tariff #dataLoading） ───────────────
+   挂 <html> 而非 <body>：页面切换会整页重写 body，挂 html 才能活着跨过切换瞬间（同 notice 弹窗先例） */
+let pageLoadingEl = null;
+let pageLoadingShownAt = 0;
+let pageLoadingHideTimer = 0;
+const PAGE_LOADING_MIN_MS = 300; // 最小显示时长：数据秒回时补齐再隐藏，避免遮罩"闪一下"
+function ensurePageLoading() {
+  if (pageLoadingEl && document.documentElement.contains(pageLoadingEl)) return pageLoadingEl;
+  pageLoadingEl = document.createElement("div");
+  pageLoadingEl.id = "pageLoading";
+  pageLoadingEl.className = "loading-overlay";
+  pageLoadingEl.innerHTML =
+    '<div class="loading-spinner"></div>' +
+    '<div class="loading-text"></div>' +
+    '<div class="loading-dots" aria-hidden="true"><span></span><span></span><span></span></div>';
+  document.documentElement.appendChild(pageLoadingEl);
+  return pageLoadingEl;
+}
+export function showPageLoading(text) {
+  const el = ensurePageLoading();
+  clearTimeout(pageLoadingHideTimer);
+  if (text) el.querySelector(".loading-text").textContent = String(text);
+  if (pageLoadingShownAt) return; // 已在显示中：仅更新文案，不重置计时
+  pageLoadingShownAt = Date.now();
+  el.classList.add("show");
+}
+export function hidePageLoading() {
+  if (!pageLoadingEl || !pageLoadingShownAt) return;
+  const wait = Math.max(0, PAGE_LOADING_MIN_MS - (Date.now() - pageLoadingShownAt));
+  pageLoadingShownAt = 0;
+  if (!wait) { pageLoadingEl.classList.remove("show"); return; }
+  pageLoadingHideTimer = setTimeout(() => pageLoadingEl.classList.remove("show"), wait);
+}
+
 /* ─────────────── <num-ticker> 数字滚动动画 ─────────────── */
 class NumTicker extends HTMLElement {
   static get observedAttributes() {

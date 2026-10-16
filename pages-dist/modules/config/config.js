@@ -13,7 +13,7 @@
 "use strict";
 
 import { Shell, esc, theme, ensureStylesheet } from "../../shell/shell.js";
-import { icon, mountIcons, Tabs, initFX } from "../../shell/ui.js";
+import { icon, mountIcons, Tabs, initFX, showPageLoading, hidePageLoading } from "../../shell/ui.js";
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
@@ -1610,6 +1610,9 @@ Shell.registerPage({
       root.innerHTML = '<div style="padding:80px 20px;text-align:center"><h2 style="color:var(--red)">无权访问</h2><p style="color:var(--muted);margin:8px 0 24px">配置生成工具仅管理员可使用</p><button class="btn primary" onclick="Shell.navigate(\'/\')">返回首页</button></div>';
       return;
     }
+    /* 遮罩须在 ensureStylesheet 之前就绪：上一个页面的 onExit 已清空 body，
+       这段取 CSS 的网络窗口期若无遮罩就是全屏空白 */
+    showPageLoading("配置工具加载中…");
     await ensureStylesheet(Shell.config.base + "modules/config/style.css");
 
     /* 重置模块状态（等价于原版每次进入重新执行脚本） */
@@ -2054,6 +2057,7 @@ Shell.registerPage({
     bindEvents();
     initCfgTheme();
     init();
+    hidePageLoading();
   },
   onExit: function (root) {
     if (navTabs) { navTabs.destroy(); navTabs = null; }
