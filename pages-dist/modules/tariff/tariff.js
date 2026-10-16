@@ -1600,7 +1600,7 @@ function renderProvStatsRow(s) {
   const p = s.provinces ? s.provinces.find(x => x.code === code) : null;
   if (!p) { el.innerHTML = ""; return; }
   const name = provName(code);
-  // 「占全国」分母 = 全网资费总量（去重，跨省条目名去重含全网+31省专区）
+  // 「占全国」分母 = 全网资费总量（去重，跨省按方案编号去重、无编号回退名称，含全网+31省专区）
   const allTariffs = s.total_unique || 0;
   const pTariffs = p.total ? p.total.tariffs : 0;
   const pct = allTariffs > 0 ? ((pTariffs / allTariffs) * 100).toFixed(1) : "0";
@@ -1885,7 +1885,7 @@ function buildDynamicTabs(stats) {
           <input type="date" id="${t1Id(code, "offTo")}" class="filter-input date-input"></span>
           <button type="button" class="filter-btn clear-btn" id="${t1Id(code, "clearFilter")}">清除</button>
         </div>
-        <div class="search-wrap"><input type="search" id="${t1Id(code, "search")}" class="search-box" placeholder="搜索名称/资费标准/说明…"><kbd class="search-kbd" title="按 / 快速聚焦">/</kbd></div>
+        <div class="search-wrap"><button type="button" class="search-mode-btn" id="${t1Id(code, "qmode")}" title="切换搜索范围：全部内容（名称+字段） / 仅名称">全部</button><input type="search" id="${t1Id(code, "search")}" class="search-box" placeholder="搜索名称/资费标准/说明…"><kbd class="search-kbd" title="按 / 快速聚焦">/</kbd></div>
         <select id="${t1Id(code, "attr")}" class="sel" style="width:auto"><option value="">全部归属</option></select>
         <select id="${t1Id(code, "type2")}" class="sel" style="width:auto"><option value="">全部类型</option></select>
         <button class="btn ghost" id="${t1Id(code, "exportCsv")}" title="导出当前筛选结果为 CSV">${icon("download")} 导出</button>
@@ -1946,7 +1946,7 @@ function updateType2Options(selId, items) {
 function getListState(key) {
   /* 默认「最新上架」降序：原始顺序是采集落库序（按分类抓取顺序拼接），无时间/价格语义，
      不排序会让用户无从判断条目次序；清除筛选/重新加载也回到该默认值 */
-  if (!listState[key]) listState[key] = {items: null, page: 1, q: "", attr: "", type2: "", sort: "time", order: -1, zeroOnly: false, favOnly: false, priceMin: null, priceMax: null, dateFrom: null, dateTo: null, offFrom: null, offTo: null, changeMap: null};
+  if (!listState[key]) listState[key] = {items: null, page: 1, q: "", qMode: "all", attr: "", type2: "", sort: "time", order: -1, zeroOnly: false, favOnly: false, priceMin: null, priceMax: null, dateFrom: null, dateTo: null, offFrom: null, offTo: null, changeMap: null};
   return listState[key];
 }
 
@@ -1995,6 +1995,25 @@ function bindListSection(type1Code) {
     s.page = 1;
     drawList(type1Code, getProvCode());
   });
+
+  /* 搜索范围切换：all=全部内容（名称+字段） / name=仅名称。
+     绑定时先按既有状态同步按钮与 placeholder（页面重入后骨架重建，避免按钮显示与实际模式脱节） */
+  const qmodeEl = $(t1Id(type1Code, "qmode"));
+  if (qmodeEl) {
+    const syncSearchMode = () => {
+      const sm = getListState(type1Code + "_" + getProvCode()).qMode;
+      qmodeEl.textContent = sm === "name" ? "仅名称" : "全部";
+      qmodeEl.classList.toggle("name-mode", sm === "name");
+      searchEl.placeholder = sm === "name" ? "搜索资费名称…" : "搜索名称/资费标准/说明…";
+    };
+    syncSearchMode();
+    qmodeEl.addEventListener("click", () => {
+      const s = getListState(type1Code + "_" + getProvCode());
+      s.qMode = s.qMode === "name" ? "all" : "name";
+      syncSearchMode();
+      if (s.q) { s.page = 1; drawList(type1Code, getProvCode()); } // 有关键词才需重筛，无则仅切模式
+    });
+  }
 
   $(attrId).addEventListener("change", () => {
     const s = getListState(type1Code + "_" + getProvCode());
@@ -2418,9 +2437,15 @@ function filterItems(st) {
       if (st.offTo && d > st.offTo) return false;
     }
     if (st.q) {
-      const f = it.fields || {};
-      const hay = (it.name + " " + Object.values(f).filter(v => v != null && v !== "").join(" ")).toLowerCase();
-      if (!hay.includes(st.q)) return false;
+      if (st.qMode === "name") {
+        // 仅名称模式：只匹配资费名称
+        if (!String(it.name || "").toLowerCase().includes(st.q)) return false;
+      } else {
+        // 全部内容模式（默认）：名称 + 全部字段值
+        const f = it.fields || {};
+        const hay = (it.name + " " + Object.values(f).filter(v => v != null && v !== "").join(" ")).toLowerCase();
+        if (!hay.includes(st.q)) return false;
+      }
     }
     return true;
   });
@@ -4063,7 +4088,7 @@ Shell.registerPage({
       <h1 class="page-title">数据总览</h1>
       <p class="page-sub">实时监控全国及各省资费套餐变化</p>
       <div class="stat-grid" id="ovStatsRow">
-        <div class="stat-card tilt rise" style="--i:0"><div class="stat-info"><div class="stat-label">全网资费总量（去重）</div><div class="stat-value accent"><num-ticker id="stNational">-</num-ticker></div></div><div class="stat-icon total">${icon("package")}</div></div>
+        <div class="stat-card tilt rise" style="--i:0" title="跨省按方案编号去重（无编号回退名称）：全国方案跨省同码只计一次；同名不同编码为不同方案分别计数"><div class="stat-info"><div class="stat-label">全网资费总量（去重）</div><div class="stat-value accent"><num-ticker id="stNational">-</num-ticker></div></div><div class="stat-icon total">${icon("package")}</div></div>
         <div class="stat-card tilt rise" style="--i:1"><div class="stat-info"><div class="stat-label">今日新增</div><div class="stat-value green"><num-ticker id="stTodayAdd">-</num-ticker></div></div><div class="stat-icon added">${icon("plusCircle")}</div></div>
         <div class="stat-card tilt rise" style="--i:2"><div class="stat-info"><div class="stat-label">今日下架</div><div class="stat-value red"><num-ticker id="stTodayRm">-</num-ticker></div></div><div class="stat-icon removed">${icon("minusCircle")}</div></div>
       </div>

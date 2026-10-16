@@ -2363,6 +2363,26 @@
   width: 100%;
   padding-right: 34px;
 }
+/* 搜索范围切换：全部内容 / 仅名称（默认全部） */
+.search-mode-btn {
+  flex-shrink: 0;
+  margin-right: 6px;
+  padding: 0 10px;
+  border-radius: var(--r-full);
+  border: 1px solid color-mix(in oklab, var(--acc) 34%, transparent);
+  background: color-mix(in oklab, var(--acc) 12%, transparent);
+  color: var(--acc);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.search-mode-btn.name-mode {
+  border-color: color-mix(in oklab, var(--amber) 34%, transparent);
+  background: color-mix(in oklab, var(--amber) 15%, transparent);
+  color: var(--amber);
+}
 .search-kbd {
   position: absolute;
   right: 9px;

@@ -3607,7 +3607,7 @@ def build_stats(opts):
 
         carriers[carrier_key] = {
             'default_province': default_province,
-            # 全专区条目名并集去重计数（全网+31省）：挤掉跨省重复，反映真实套餐品种数
+            # 跨省去重计数（全网+31省）：按方案编号去重（全国方案跨省同码只计一次，无编号回退名称），反映真实套餐品种数
             'total_unique': len(cdata.get('name_set') or set()),
             'last_crawl': last_crawl,
             'today': today,
@@ -5258,15 +5258,18 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
         target_provinces = get_target_provinces(carrier_cfg, carrier_key)
 
         province_data = []
-        carrier_name_set = set()   # 全专区条目名并集（全网+31省，供「全网资费总量(去重)」统计）
+        carrier_dedup_keys = set()   # 跨省去重键集合（全网+31省，供「全网资费总量(去重)」统计）
         for prov in target_provinces:
             result = crawl_results.get(prov['name'])
             if result and result.get('items') is not None:
                 items = result['items']
                 for it in items:
                     n = (it.get('name') or '').strip()
-                    if n:
-                        carrier_name_set.add(n)
+                    if not n:
+                        continue
+                    # 去重键 = 方案编号：全国方案跨省同码只计一次；同名不同码（价格不同）是不同方案不合并；无编号回退名称
+                    code = ((it.get('fields') or {}).get('方案编号') or '').strip()
+                    carrier_dedup_keys.add('c:' + code if code else 'n:' + n)
                 changes = result.get('changes', {})
                 crawl_status = result.get('crawl_status', 'success')
                 data_crawl_time = result.get('data_crawl_time', crawl_time)
@@ -5334,7 +5337,7 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
         carriers_data[carrier_key] = {
             'default_province': default_province,
             'province_data': province_data,
-            'name_set': carrier_name_set,   # 内存传递，不落盘（stats 只写入去重计数）
+            'name_set': carrier_dedup_keys,   # 内存传递，不落盘（stats 只写入去重计数）
         }
 
     cache_ttl = config.get('storage', {}).get('cache', {}).get('ttl_minutes', 30)
