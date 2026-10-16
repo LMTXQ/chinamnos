@@ -5261,6 +5261,13 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
         carrier_dedup_keys = set()   # 跨省去重键集合（全网+31省，供「全网资费总量(去重)」统计）
         for prov in target_provinces:
             result = crawl_results.get(prov['name'])
+            digested = (result or {}).get('_digested')
+            if digested:
+                # 省份级流水线：省级摘要已在采集期生成（原始条目已释放），直接组装；
+                # 去重键 = 各包子集的并集（结合律保证与全量合并等价）
+                province_data.append(digested['province_data'])
+                carrier_dedup_keys.update(digested['dedup_keys'])
+                continue
             if result and result.get('items') is not None:
                 items = result['items']
                 for it in items:
@@ -5354,6 +5361,86 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
 
     storage.write_json('stats.json', stats)
     logger.info(f'stats.json 已保存 (status={status})')
+
+
+def _digest_province_stats(carrier_key, prov, r, storage_ref, crawl_time):
+    """省份级内存消化（流水线释放的核心）：
+    将该省原始条目一次性转成统计摘要（dist/breakdown/去重键子集/last_crawl/today），
+    挂到 r['crawl_result']['_digested']，随后释放原始条目——内存随即回落。
+
+    与 _build_and_save_stats 的省级计算逐字段等价（纯搬家，不改任何口径）：
+    ▸ 跨省去重由各包子集在 stats 组装时做集合并集（结合律保证与全量合并一致）；
+    ▸ 变更日志在本省 _process_prov 内已写入 storage_ref 缓冲，此处读到即为本轮内容，
+      与原统计阶段从主缓冲读取的一致；
+    ▸ 无 crawl_result（PW 回退重试等）时为空操作。
+    """
+    crawl_result = r.get('crawl_result') if isinstance(r, dict) else None
+    if not crawl_result:
+        return
+    items = crawl_result.get('items')
+    if items is None:
+        return  # 无原始数据（rebuild 路径等），组装阶段走旧数据回退分支
+
+    try:
+        changes = crawl_result.get('changes', {})
+        crawl_status = crawl_result.get('crawl_status', 'success')
+        data_crawl_time = crawl_result.get('data_crawl_time', crawl_time)
+
+        dist = compute_dist(items)
+        breakdown = compute_breakdown(items)
+
+        last_crawl = {}
+        for change_type, key in (('added', 'added'), ('removed', 'removed'), ('modified', 'changed')):
+            for c in changes.get(change_type, []):
+                attr = c.get('attr', '') or '0'
+                last_crawl.setdefault(attr, {'added': 0, 'removed': 0, 'changed': 0})
+                last_crawl[attr][key] += 1
+
+        from datetime import datetime as _dt
+        today_start = _dt.strptime(crawl_time, '%Y-%m-%dT%H:%M:%S.%fZ').replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start_iso = today_start.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        changelog_path = f'{carrier_key}/changelogs/changelog_{prov["code"]}.json'
+        changelog_data = storage_ref.read_json(changelog_path) or {}
+        today_entries = [e for e in (changelog_data.get('logs') or [])
+                         if (e.get('ts') or '') >= today_start_iso]
+        today = {}
+        for c in today_entries:
+            attr = c.get('attr', '') or '0'
+            ctype = c.get('type')
+            if ctype in ('added', 'removed', 'changed'):
+                today.setdefault(attr, {'added': 0, 'removed': 0, 'changed': 0})
+                today[attr][ctype] += 1
+
+        dedup_keys = set()
+        for it in items:
+            n = (it.get('name') or '').strip()
+            if not n:
+                continue
+            # 去重键 = 方案编号：全国方案跨省同码只计一次；同名不同码是不同方案不合并；无编号回退名称
+            code = ((it.get('fields') or {}).get('方案编号') or '').strip()
+            dedup_keys.add('c:' + code if code else 'n:' + n)
+    except Exception as e:
+        # 消化失败绝不影响采集主流程：保留原始条目，stats 组装期走原有计算路径（数据不变）
+        logger.warning(f'{carrier_display(carrier_key)} {prov.get("name", "")}: 省级消化失败，回退统计期计算: {e}')
+        return
+
+    crawl_result['_digested'] = {
+        'province_data': {
+            'code': prov['code'],
+            'name': prov['name'],
+            'breakdown': breakdown,
+            'data_crawl_time': data_crawl_time,
+            'crawl_status': crawl_status,
+            'last_crawl': last_crawl,
+            'today': today,
+            'dist': dist,
+            'volatility': crawl_result.get('volatility'),
+            'consecutive_degrade_count': crawl_result.get('consecutive_degrade_count', 0),
+        },
+        'dedup_keys': dedup_keys,
+    }
+    # 摘要已生成，原始条目立即释放（内存回落的关键动作）
+    crawl_result['items'] = None
 
 
 def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
@@ -5751,6 +5838,8 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
                             'volatility_warning': None, 'partial_warning': None,
                             'pw_needs_fallback': False,
                         }
+                    # 省级流水线：采集完成立即消化并释放原始条目（变更日志已在 prov_storage 缓冲）
+                    _digest_province_stats(carrier_key, prov, r, prov_storage, crawl_time)
                     if r['pw_needs_fallback']:
                         pw_fallback_provs.append(prov)
                     else:
@@ -5769,6 +5858,7 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
                 logger.info(f'电信 PW 回退: {len(pw_fallback_provs)} 个省份将串行采集')
                 for i, prov in enumerate(pw_fallback_provs):
                     r = _process_prov(prov, api, storage, pw_fallback_mode=True)
+                    _digest_province_stats(carrier_key, prov, r, storage, crawl_time)
                     _merge_prov_result(r)
                     if i < len(pw_fallback_provs) - 1:
                         _prov_delay()
@@ -5780,8 +5870,10 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
                 r = _process_prov(prov, api, storage, prov_index=i)
                 if r['pw_needs_fallback']:
                     r_pw = _process_prov(prov, api, storage, pw_fallback_mode=True, prov_index=i)
+                    _digest_province_stats(carrier_key, prov, r_pw, storage, crawl_time)
                     _merge_prov_result(r_pw)
                 else:
+                    _digest_province_stats(carrier_key, prov, r, storage, crawl_time)
                     _merge_prov_result(r)
                 if i < len(target_provinces) - 1:
                     _prov_delay()
