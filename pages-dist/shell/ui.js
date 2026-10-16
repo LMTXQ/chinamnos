@@ -71,6 +71,8 @@ const ICONS = {
   hash: '<path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   arrowRight: '<path d="M5 12h14M12 5l7 7-7 7"/>',
+  alertCircle: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',
+  alertTriangle: '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
   flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
   layers: '<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>',
   keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 12h.01M6 12h.01M10 12h.01M14 12h.01M18 8h.01M8 16h8"/>',
@@ -101,7 +103,21 @@ export function mountIcons(root) {
 /* ─────────────── Toast 轻提示 ─────────────── */
 let toastEl = null;
 let toastTimer = 0;
-export function toast(msg) {
+/* 类型 → 图标/颜色：success 绿 / error 红 / warning 琥珀 / info 蓝。
+   未传 type 时按文案关键词自动分级——历史调用点 100+ 处不逐一标注，本站文案措辞
+   高度规范化（"失败/异常"=错误、"请/需/不能"=提醒），判定错的代价仅是配色差异 */
+const TOAST_TYPES = {
+  success: { ic: "check", color: "#22c55e" },
+  error: { ic: "alertCircle", color: "var(--red)" },
+  warning: { ic: "alertTriangle", color: "var(--amber)" },
+  info: { ic: "info", color: "var(--acc)" },
+};
+const TOAST_ERR_RE = /(失败|异常|错误|不支持|不存在)/;
+const TOAST_WARN_RE = /(请|需|须|不能|不匹配|不一致|超过|太频繁|未填写|未就绪|已达上限)/;
+export function toast(msg, type) {
+  const conf = TOAST_TYPES[type] ||
+    (TOAST_ERR_RE.test(String(msg == null ? "" : msg)) ? TOAST_TYPES.error :
+      TOAST_WARN_RE.test(String(msg == null ? "" : msg)) ? TOAST_TYPES.warning : TOAST_TYPES.success);
   /* 路由切换会重写 body.innerHTML，缓存节点可能已游离文档外，需重建 */
   if (!toastEl || !document.body.contains(toastEl)) {
     toastEl = document.createElement("div");
@@ -109,10 +125,11 @@ export function toast(msg) {
     toastEl.style.cssText = "position:fixed;left:50%;top:24px;transform:translateX(-50%) translateY(-20px);background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 18px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:99999;display:flex;align-items:center;gap:8px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;max-width:80vw;word-break:break-all";
     document.body.appendChild(toastEl);
   }
-  toastEl.innerHTML = icon("check") + "<span>" + String(msg == null ? "" : msg).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) + "</span>";
+  toastEl.innerHTML = icon(conf.ic) + "<span>" + String(msg == null ? "" : msg).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) + "</span>";
+  toastEl.style.borderLeft = "3px solid " + conf.color;
   mountIcons(toastEl);
   const tsvg = toastEl.querySelector("svg");
-  if (tsvg) { tsvg.style.width = "16px"; tsvg.style.height = "16px"; tsvg.style.flexShrink = "0"; tsvg.style.color = "#22c55e"; }
+  if (tsvg) { tsvg.style.width = "16px"; tsvg.style.height = "16px"; tsvg.style.flexShrink = "0"; tsvg.style.color = conf.color; }
   toastEl.style.opacity = "1";
   toastEl.style.transform = "translateX(-50%) translateY(0)";
   clearTimeout(toastTimer);

@@ -242,14 +242,18 @@ async function route() {
   }
   theme.init();
   initAurora();
+  /* 启动屏阶段文案：boot-sub 随加载进程更新（hideBoot 移除节点前一直可写） */
+  const bootSub = document.getElementById("bootSub");
 
   const modules = rawConfig.modules || [];
   try {
+    if (bootSub) bootSub.textContent = "装载功能模块…";
     await Promise.all(
       modules.map((m) =>
         import(/* webpackIgnore: true */ new URL(BASE + m.src, document.baseURI).href)
       )
     );
+    if (bootSub) bootSub.textContent = "渲染页面…";
   } catch (e) {
     fatal("模块加载失败：" + esc((e && e.message) || e));
     return;

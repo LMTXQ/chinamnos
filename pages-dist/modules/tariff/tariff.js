@@ -271,15 +271,25 @@ let pendingTab = null;
 function t1Id(code, suffix) { return "t1_" + code + "_" + suffix; }
 function t1ViewId(code) { return "t1_" + code; }
 
+const LOADING_MIN_MS = 300;   // 最小加载时长：低于该值补齐再隐藏，避免数据秒回时转圈"闪一下"
+let _loadingShownAt = 0;
+let _loadingHideTimer = 0;
 function showLoading(text) {
   const el = $("dataLoading");
   if (!el) return;
+  clearTimeout(_loadingHideTimer);
   if (text) { const t = el.querySelector(".loading-text"); if (t) t.textContent = text; }
+  if (_loadingShownAt) return; // 已在显示中：仅更新文案，不重置计时
+  _loadingShownAt = Date.now();
   el.classList.add("show");
 }
 function hideLoading() {
   const el = $("dataLoading");
-  if (el) el.classList.remove("show");
+  if (!el || !_loadingShownAt) return;
+  const wait = Math.max(0, LOADING_MIN_MS - (Date.now() - _loadingShownAt));
+  _loadingShownAt = 0;
+  if (!wait) { el.classList.remove("show"); return; }
+  _loadingHideTimer = setTimeout(() => el.classList.remove("show"), wait);
 }
 
 /** 统计数值写入：<num-ticker> 走滚动动画，其余直接写文本 */
@@ -4259,6 +4269,7 @@ Shell.registerPage({
 <div class="loading-overlay" id="dataLoading">
   <div class="loading-spinner"></div>
   <div class="loading-text">数据加载中…</div>
+  <div class="loading-dots" aria-hidden="true"><span></span><span></span><span></span></div>
 </div>
 </div>
 `;
