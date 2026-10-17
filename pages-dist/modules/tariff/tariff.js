@@ -1323,11 +1323,11 @@ function actOnBodyClick(e) {
    ▸ 数据：/api/communities?carrier&province（复用 activities 表，范围匹配 本省+本运营商全国+通用）
    ▸ 提交：登录用户先审后发（待审≤5 与情报酒馆共享配额）；种类单选；url/群号至少其一
    ▸ 授权凭证（群主/管理员身份截图）选填强提醒，R2 私有存储仅管理组审核可见；二维码复用活动二维码端点
-   ▸ 无匿名、无截止时间（社群长期有效）；提交者实名（点头像看资料卡） */
+   ▸ 无截止时间（社群长期有效）；可选匿名展示（公众侧匿名 chip，管理组审核可见）；提交者实名/匿名（点头像看资料卡） */
 const CHAT_TYPES = ["论坛", "QQ群", "微信群", "贴吧", "纸飞机", "其他"];
 const chatState = {
   items: [], mine: [], panelOpen: false, q: "", typeFilter: "", scope: "",
-  form: { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", qr: null, proof: null },
+  form: { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", anon: false, qr: null, proof: null },
 };
 
 let chatProvPending = false; // 直链 #chat 时 STATS 未就绪的补加载守卫（同 acts/announce 模式）
@@ -1364,9 +1364,11 @@ function chatCardHTML(a) {
   const mainAct = a.url
     ? `<a class="btn primary sm act-go" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer nofollow">加入 / 访问<i data-icon="external"></i></a>`
     : (a.chat_id ? `<button type="button" class="btn primary sm" data-act="chatCopyId" data-id="${esc(a.chat_id)}" title="复制群号/账号"><i data-icon="copy"></i>复制群号</button>` : "");
-  const authorHTML = a.submitted_by
-    ? `<button type="button" class="act-author" data-act="chatAuthor" data-uid="${esc(a.submitted_by)}" title="查看提交者资料卡">${esc(a.submitter_nickname || "用户")}</button>`
-    : `<span>${esc(a.submitter_nickname || "用户")}</span>`;
+  const authorHTML = a.anon
+    ? `<span class="act-anon-chip" title="收录者选择匿名展示">匿名</span>`
+    : (a.submitted_by
+      ? `<button type="button" class="act-author" data-act="chatAuthor" data-uid="${esc(a.submitted_by)}" title="查看收录者资料卡">${esc(a.submitter_nickname || "用户")}</button>`
+      : `<span>${esc(a.submitter_nickname || "用户")}</span>`);
   return `
   <div class="act-card chat-card">
     <div class="act-main">
@@ -1459,6 +1461,7 @@ function chatRenderBody() {
         <div class="act-panel-full"><span class="af-l">群二维码 <i>选填 · PNG / JPG / WebP，自动压缩</i></span>${qrBlock("chatQrPick", "chatQrClear", "qr", "二维码")}</div>
         <div class="act-panel-full"><span class="af-l">授权凭证 <i>选填 · 强烈建议上传，可大幅加快审核</i></span>${qrBlock("chatProofPick", "chatProofClear", "proof", "凭证")}</div>
       </div>
+      <label class="act-anon-row"><input type="checkbox" id="chatFAnon" ${f.anon ? "checked" : ""}><span>匿名展示 <i>公众侧不显示我的昵称与资料卡（管理组审核可见）</i></span></label>
       <div class="act-form-note">${icon("shield")} 授权凭证（群主/管理员身份截图等）仅用于管理组核验你的收录权限，<b>不会公开展示</b>。</div>
       <div class="act-panel-actions">
         <button type="button" class="btn ghost" data-act="chatCancel">取消</button>
@@ -1501,6 +1504,8 @@ function chatRenderBody() {
   bindV("chatFTitle", "title"); bindV("chatFUrl", "url"); bindV("chatFId", "chatId"); bindV("chatFDescr", "descr");
   const ts = $("chatFType");
   if (ts) { ts.value = chatState.form.type || "QQ群"; ts.addEventListener("change", () => { chatState.form.type = ts.value; }); }
+  const anonCb = $("chatFAnon");
+  if (anonCb) anonCb.addEventListener("change", () => { chatState.form.anon = anonCb.checked; });
   const qrInput = $("chatF_qr");
   if (qrInput) qrInput.addEventListener("change", async () => {
     const file = qrInput.files && qrInput.files[0];
@@ -1533,13 +1538,14 @@ async function chatSubmit() {
     carrier: CH_CARRIER_MAP[currentCarrier] || "",
     province: provName,
     title, url, chat_id: chatId, descr: (f.descr || "").trim(),
+    anon: !!f.anon,
   };
   if (f.qr) body.qr = f.qr;
   if (f.proof) body.proof = f.proof;
   const r = await api.communityCreate(body);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : (r.error?.message || (r.data && r.data.message) || "提交失败，请稍后再试")); return; }
   chatState.panelOpen = false;
-  chatState.form = { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", qr: null, proof: null };
+  chatState.form = { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", anon: false, qr: null, proof: null };
   toast("已提交，等待管理组审核");
   chatTabRefreshAndRender();
 }

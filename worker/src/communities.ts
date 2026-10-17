@@ -40,6 +40,7 @@ interface ChatRow {
   chat_type: string | null;
   chat_id: string | null;
   status: string;
+  anon: number;
   submitted_by: string;
   created_at: number;
   qr_key?: string | null;
@@ -54,21 +55,26 @@ export async function handleCommunityList(request: Request, env: Env): Promise<R
   if (!CARRIERS.some((c) => c.id === carrier)) return ok({ items: [], mine_pending: [] });
 
   const rows = await env.DB.prepare(
-    `SELECT id, mode, carrier, province, title, url, descr, chat_type, chat_id, status, submitted_by, created_at, qr_key
+    `SELECT id, mode, carrier, province, title, url, descr, chat_type, chat_id, status, anon, submitted_by, created_at, qr_key
      FROM activities
      WHERE mode = 'chat' AND status = 'open' AND (carrier = ?1 OR carrier = '') AND province IN (?2, '')
      ORDER BY created_at DESC LIMIT 50`,
   ).bind(carrier, province).all<ChatRow>();
 
-  const uids = [...new Set(rows.results.map((r) => r.submitted_by))];
+  // 匿名（anon=1）公众侧不下发提交者 uid/昵称（同情报酒馆口径）
+  const uids = [...new Set(rows.results.filter((r) => !r.anon).map((r) => r.submitted_by))];
   const authorMap = await getPublicProfiles(env, uids);
-  const items = rows.results.map((r) => ({
-    id: r.id, chat_type: r.chat_type || '其他', carrier: r.carrier, province: r.province,
-    title: r.title, url: r.url || null, descr: r.descr, chat_id: r.chat_id || null,
-    has_qr: !!r.qr_key, created_at: r.created_at,
-    submitted_by: r.submitted_by,
-    submitter_nickname: authorMap.get(r.submitted_by)?.nickname ?? null,
-  }));
+  const items = rows.results.map((r) => {
+    const anon = !!r.anon;
+    return {
+      id: r.id, chat_type: r.chat_type || '其他', carrier: r.carrier, province: r.province,
+      title: r.title, url: r.url || null, descr: r.descr, chat_id: r.chat_id || null,
+      has_qr: !!r.qr_key, created_at: r.created_at,
+      anon,
+      submitted_by: anon ? null : r.submitted_by,
+      submitter_nickname: anon ? null : (authorMap.get(r.submitted_by)?.nickname ?? null),
+    };
+  });
 
   // 我的待审（登录用户）：撤回入口用
   let minePending: Array<Record<string, unknown>> = [];
@@ -101,6 +107,7 @@ export async function handleCommunityCreate(request: Request, env: Env): Promise
   const descr = typeof body.descr === 'string' ? body.descr.trim() : '';
   // 范围三选：all=通用 | carrier=当前运营商 | prov=当前运营商当前省份
   const scope = body.scope === 'carrier' || body.scope === 'prov' ? body.scope : 'all';
+  const anon = body.anon === true || body.anon === 1 ? 1 : 0; // 匿名展示（公众侧不下发 uid/昵称；管理组审核可见）
 
   const fieldErr = (field: string, message: string) => fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400, { field, message });
 
@@ -176,10 +183,10 @@ export async function handleCommunityCreate(request: Request, env: Env): Promise
   try {
     await env.DB.prepare(
       `INSERT INTO activities (id, mode, carrier, province, title, url, descr, chat_type, chat_id, status, anon, ends_at, submitted_by, created_at, qr_key, proof_key)
-       VALUES (?1, 'chat', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', 0, NULL, ?9, ?10, ?11, ?12)`,
+       VALUES (?1, 'chat', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, NULL, ?10, ?11, ?12, ?13)`,
     ).bind(
       id, carrier, province, title, url || null, descr,
-      chatType, chatId || null, g.viewer.id, now, qrKey, proofKey,
+      chatType, chatId || null, anon, g.viewer.id, now, qrKey, proofKey,
     ).run();
   } catch (e) {
     for (const k of [qrKey, proofKey]) { if (k) { try { await env.PROOFS!.delete(k); } catch { /* */ } } }
