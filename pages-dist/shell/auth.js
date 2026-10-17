@@ -361,7 +361,7 @@ export const Auth = {
           <div class="auth-profile-uid">UID: ${esc(p.id)}</div>
         </div>
       </div>
-      ${p.bio ? `<div class="auth-profile-ct auth-profile-ct-bio"><span class="t">签名</span><span class="v">${esc(p.bio)}</span></div>` : ""}
+      ${p.bio ? `<div class="auth-profile-ct auth-profile-ct-bio"><span class="v">${esc(p.bio)}</span></div>` : ""}
       ${(p.contacts || []).map((c) => `
         <div class="auth-profile-ct"><span class="t">${CT_LABELS[c.type] || "其他"}</span><code>${esc(c.value)}</code>
         <button class="btn ghost" data-act="copyUid" data-val="${esc(c.value)}" style="flex:none;padding:6px 10px;margin-left:auto">复制</button></div>`).join("")
