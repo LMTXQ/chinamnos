@@ -1565,9 +1565,8 @@ function renderConvView() {
       <b>${esc(cv.title || "会话")}${kindTag}${statusTag}</b>
       ${!isOwnerWatch ? `<button type="button" class="btn ghost sm" data-act="convReport" data-id="${esc(cv.id)}" data-uid="${esc(cv.other_uid || "")}" data-title="${esc(cv.title || "")}" style="margin-left:auto"><i data-icon="alertTriangle"></i>举报</button>` : ""}
     </div>
-    <span class="ch-conv-metarow">${roleText} · ${count}/${CONV_MSG_CAP} 条消息</span>
+    <div class="ch-conv-retain">${icon("info")} <span>${roleText} · ${count}/${CONV_MSG_CAP} 条消息 · 聊天记录（含图片链接）仅保留 <b>60 天</b>，到期自动清理，请及时保存需要留存的截图</span></div>
   </div>
-  <div class="ch-conv-retain">${icon("info")} <span>聊天记录（含图片链接）仅保留 <b>60 天</b>，到期自动清理，请及时保存需要留存的截图</span></div>
   <div class="panel ch-msgs">${msgs || '<div class="ch-empty-s">暂无消息</div>'}</div>
   ${replyArea}
 </section>`;
