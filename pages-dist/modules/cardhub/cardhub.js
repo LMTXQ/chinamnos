@@ -74,6 +74,7 @@ const S = {
   convList: null,        // 卖家会话列表（me/conversations），null=加载中
   convQ: "",             // 会话列表搜索词（对方昵称/UID/帖子标题，客户端过滤）
   convFilter: "",        // 会话列表发起方筛选："" 全部 | mine 我发起 | theirs 对方发起
+  convKind: "",          // 会话列表类型筛选："" 全部 | dm 私信 | post 交易帖沟通
   favList: null,         // 我的收藏（me/favorites），null=加载中
   listPage: 1,           // 板块列表当前页（服务端分页）
   boardList: { items: [], total: 0, page: 1, pageSize: 20 }, // 服务端筛选+分页结果（当前板块）
@@ -1375,6 +1376,11 @@ function renderConvsView() {
   <h1 class="page-title">会话 <span class="ch-board-sub">与买家的沟通 · 私信 · 我发起的咨询</span></h1>
   <div class="ch-conv-toolbar">
     <input type="search" class="inp" id="convSearch" placeholder="搜索对方昵称 / UID / 帖子标题…" value="${esc(S.convQ || "")}">
+    <select class="inp" id="convKindSel" title="按会话类型筛选">
+      <option value="">全部类型</option>
+      <option value="dm" ${S.convKind === "dm" ? "selected" : ""}>私信</option>
+      <option value="post" ${S.convKind === "post" ? "selected" : ""}>交易帖沟通</option>
+    </select>
     <select class="inp" id="convFilterSel" title="按发起方筛选">
       <option value="">全部会话</option>
       <option value="mine" ${S.convFilter === "mine" ? "selected" : ""}>我发起的</option>
@@ -1385,11 +1391,13 @@ function renderConvsView() {
 </section>`;
 }
 
-/* 会话列表客户端过滤：搜索词命中对方昵称(title)/UID/买家称呼/帖子 id；按发起方筛选 */
+/* 会话列表客户端过滤：搜索词命中对方昵称(title)/UID/买家称呼/帖子 id；按类型与发起方筛选 */
 function convFilteredItems() {
   const q = (S.convQ || "").trim().toLowerCase();
   const f = S.convFilter || "";
+  const k = S.convKind || "";
   return (S.convList || []).filter((c) => {
+    if (k && (c.kind || "post") !== k) return false;
     if (f === "mine" && c.my_role !== "buyer") return false;
     if (f === "theirs" && c.my_role !== "seller") return false;
     if (!q) return true;
@@ -1400,7 +1408,7 @@ function convFilteredItems() {
 
 function convListHTML(items) {
   if (!items.length) {
-    const filtered = (S.convQ || "").trim() || S.convFilter;
+    const filtered = (S.convQ || "").trim() || S.convFilter || S.convKind;
     return `
   <div class="ch-empty">
     <div class="ch-empty-ic">${icon("message")}</div>
@@ -2167,8 +2175,9 @@ async function openMarketModal(id) {
 
 function onRootChange(e) {
   const t = e.target;
-  /* 会话列表：搜索词/发起方筛选（客户端过滤，局部重绘保持输入焦点） */
+  /* 会话列表：搜索词/类型/发起方筛选（客户端过滤，局部重绘保持输入焦点） */
   if (t.id === "convSearch") { S.convQ = t.value; renderConvListRegion(); return; }
+  if (t.id === "convKindSel") { S.convKind = t.value; renderConvListRegion(); return; }
   if (t.id === "convFilterSel") { S.convFilter = t.value; renderConvListRegion(); return; }
   /* 证明材料方式切换（proof=上传照片 / admin=指定管理员）：重渲染该区 */
   if (t.name === "chProofMode") {
