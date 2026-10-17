@@ -955,7 +955,7 @@ function actModeSeg() {
 function actFilterChips() {
   const chip = (v, label) => `<button type="button" class="act-filter-chip${actState.filter === v ? " active" : ""}" data-act="actFilter" data-mode="${v}">${label}</button>`;
   const favChip = Auth.isLoggedIn() ? chip("fav", "我的收藏") : "";
-  return `<div class="act-filter"><input type="search" class="inp act-search" id="actSearch" placeholder="搜索标题 / 简介…" value="${esc(actState.q)}">${chip("", "全部")}${chip("official", "官方活动")}${chip("guide", "个人攻略")}${favChip}</div>`;
+  return `<div class="act-filter">${chip("", "全部")}${chip("official", "官方活动")}${chip("guide", "个人攻略")}${favChip}</div>`;
 }
 
 /* 图片引导弹窗：站内不提供图床直传，引导到公益图床上传后粘贴外链（与在线沟通同一引导文案结构） */
@@ -1137,6 +1137,7 @@ function actRenderBody() {
     <p class="page-sub">${esc(provName)} · ${esc(brand)} · 官方活动推广与个人攻略发布聚合（投稿后经管理组审核展示）</p>
     ${mineHTML}
     <div class="act-toolbar">
+      <input type="search" class="inp act-search" id="actSearch" placeholder="搜索标题 / 简介…" value="${esc(actState.q)}">
       ${actFilterChips()}
       <button type="button" class="btn primary" data-act="actTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${actState.panelOpen ? "收起投稿面板" : "投稿情报"}</span></button>
     </div>
@@ -1456,10 +1457,8 @@ function chatRenderBody() {
     <p class="page-sub">${esc(provName)} · ${esc(brand)} · 交流社群聚合（论坛 / QQ 群 / 微信群 / 贴吧 / 纸飞机，投稿后经管理组审核展示）</p>
     ${mineHTML}
     <div class="act-toolbar">
-      <div class="act-filter">
-        <input type="search" class="inp act-search" id="chatSearch" placeholder="搜索社群名称 / 说明 / 群号…" value="${esc(chatState.q)}">
-        ${typeChips}
-      </div>
+      <input type="search" class="inp act-search" id="chatSearch" placeholder="搜索社群名称 / 说明 / 群号…" value="${esc(chatState.q)}">
+      <div class="act-filter">${typeChips}</div>
       <button type="button" class="btn primary" data-act="chatTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${chatState.panelOpen ? "收起收录面板" : "收录社群"}</span></button>
     </div>
     <div class="act-filter"><span class="hint">收录你运营或知晓的交流社群；入群请遵守群规并自行甄别信息，站点仅提供信息展示渠道</span></div>
