@@ -1539,6 +1539,10 @@ function renderConvView() {
   const count = (cv.msg_count || 0);
   const remain = CONV_MSG_CAP - count;
   const canReply = !isOwnerWatch && cv.status === "open" && count < CONV_MSG_CAP;
+  /* 头部徽章：状态（绿/灰）与会话类型（私信/交易）复用列表页同款样式 */
+  const statusTag = `<span class="ch-conv-status st-${cv.status === "open" ? "open" : "closed"}">${cv.status === "open" ? "进行中" : "已结束"}</span>`;
+  const kindTag = cv.kind === "dm" ? `<span class="ch-conv-status st-role">私信</span>` : "";
+  const roleText = isOwnerWatch ? "治理查看" : (mine === "buyer" ? "发布者" : esc(cv.buyer_name || "买家"));
   /* 额度提醒条：常驻显示双方合计上限；剩 20 条起转琥珀高亮并引导线下沟通 */
   const quotaBar = `<div class="ch-conv-quota${remain <= 20 ? " warn" : ""}">${icon("info")} <span>双方合计最多 <b>${CONV_MSG_CAP}</b> 条消息 · 已用 <b>${count}</b> 条${remain <= 20 ? `，仅剩 <b>${remain}</b> 条，请尽快交换联系方式转为线下沟通` : ""}</span></div>`;
   const replyArea = isOwnerWatch
@@ -1558,10 +1562,10 @@ function renderConvView() {
   <div class="ch-conv-head">
     ${back}
     <div class="ch-conv-headinfo">
-      <b>${esc(cv.title || "帖子")}</b>
-      <span>${isOwnerWatch ? "治理查看" : (mine === "buyer" ? "发布者" : esc(cv.buyer_name || "买家"))} · ${count}/${CONV_MSG_CAP} 条 · ${cv.status === "open" ? "进行中" : "已结束"}</span>
+      <b>${esc(cv.title || "会话")}${kindTag}${statusTag}</b>
+      <span>${roleText} · ${count}/${CONV_MSG_CAP} 条消息</span>
     </div>
-    ${!isOwnerWatch ? `<button type="button" class="btn ghost sm" data-act="convReport" data-id="${esc(cv.id)}" data-uid="${esc(cv.other_uid || "")}" data-title="${esc(cv.title || "")}"><i data-icon="alertTriangle"></i>举报</button>` : ""}
+    ${!isOwnerWatch ? `<button type="button" class="btn ghost sm" data-act="convReport" data-id="${esc(cv.id)}" data-uid="${esc(cv.other_uid || "")}" data-title="${esc(cv.title || "")}" style="margin-left:auto"><i data-icon="alertTriangle"></i>举报</button>` : ""}
   </div>
   <div class="ch-conv-retain">${icon("info")} <span>聊天记录（含图片链接）仅保留 <b>60 天</b>，到期自动清理，请及时保存需要留存的截图</span></div>
   <div class="panel ch-msgs">${msgs || '<div class="ch-empty-s">暂无消息</div>'}</div>

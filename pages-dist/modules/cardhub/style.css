@@ -1795,7 +1795,7 @@
 .ch-conv-item .ch-card-arrow svg { width: 16px; height: 16px; }
 .ch-conv-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
 .ch-conv-headinfo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ch-conv-headinfo b { font-size: 15px; color: var(--txt); overflow-wrap: anywhere; }
+.ch-conv-headinfo b { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; color: var(--txt); overflow-wrap: anywhere; }
 .ch-conv-headinfo span { font-size: 12.5px; color: var(--sub); }
 .ch-msgs { display: flex; flex-direction: column; gap: 12px; padding: 18px; max-height: 52vh; overflow-y: auto; }
 .ch-msg-row { display: flex; justify-content: flex-start; }
