@@ -141,7 +141,8 @@ export function toast(msg, type) {
 let pageLoadingEl = null;
 let pageLoadingShownAt = 0;
 let pageLoadingHideTimer = 0;
-const PAGE_LOADING_MIN_MS = 300; // 最小显示时长：数据秒回时补齐再隐藏，避免遮罩"闪一下"
+/* 加载遮罩最短显示时长（导出供 tariff 的页内遮罩共用）：数据秒回时补齐再隐藏，避免遮罩"闪一下" */
+export const PAGE_LOADING_MIN_MS = 300;
 function ensurePageLoading() {
   if (pageLoadingEl && document.documentElement.contains(pageLoadingEl)) return pageLoadingEl;
   pageLoadingEl = document.createElement("div");

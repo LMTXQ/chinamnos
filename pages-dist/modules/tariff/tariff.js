@@ -13,7 +13,7 @@
 "use strict";
 
 import { Shell, esc, fetchTimeout, theme, ensureStylesheet } from "../../shell/shell.js";
-import { icon, mountIcons, Tabs, initFX, toast } from "../../shell/ui.js";
+import { icon, mountIcons, Tabs, initFX, toast, PAGE_LOADING_MIN_MS } from "../../shell/ui.js";
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
@@ -271,8 +271,7 @@ let pendingTab = null;
 function t1Id(code, suffix) { return "t1_" + code + "_" + suffix; }
 function t1ViewId(code) { return "t1_" + code; }
 
-const LOADING_MIN_MS = 300;   // 最小加载时长：低于该值补齐再隐藏，避免数据秒回时转圈"闪一下"
-let _loadingShownAt = 0;
+let _loadingShownAt = 0;   // 最短显示时长 PAGE_LOADING_MIN_MS 由 ui.js 提供
 let _loadingHideTimer = 0;
 function showLoading(text) {
   const el = $("dataLoading");
@@ -286,7 +285,7 @@ function showLoading(text) {
 function hideLoading() {
   const el = $("dataLoading");
   if (!el || !_loadingShownAt) return;
-  const wait = Math.max(0, LOADING_MIN_MS - (Date.now() - _loadingShownAt));
+  const wait = Math.max(0, PAGE_LOADING_MIN_MS - (Date.now() - _loadingShownAt));
   _loadingShownAt = 0;
   if (!wait) { el.classList.remove("show"); return; }
   _loadingHideTimer = setTimeout(() => el.classList.remove("show"), wait);

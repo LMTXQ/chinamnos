@@ -869,20 +869,16 @@ dialog.modal::backdrop {
   animation: spin 0.8s linear infinite;
   position: relative;
 }
-/* 双环中心标识字（呼应启动屏 boot-logo） */
+/* 双环中心标识字：反向旋转抵消父级圆环的 spin 保持正立，颜色与圆环转动弧同色、无动效 */
 .loading-spinner .loading-core {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
-  color: var(--acc);
-  animation: core-pulse 1.6s ease-in-out infinite;
-}
-@keyframes core-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  color: var(--acc-2);
+  animation: spin 0.8s linear infinite reverse;
 }
 .loading-spinner::after {
   content: "";
