@@ -1793,10 +1793,11 @@
 .ch-conv-side-hint { font-size: 11px; color: var(--sub); }
 .ch-conv-item .ch-card-arrow { color: var(--sub); }
 .ch-conv-item .ch-card-arrow svg { width: 16px; height: 16px; }
-.ch-conv-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
-.ch-conv-headinfo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ch-conv-headinfo b { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; color: var(--txt); overflow-wrap: anywhere; }
-.ch-conv-headinfo span { font-size: 12.5px; color: var(--sub); }
+/* 会话详情头部：单行标题栏（返回+标题+徽章+举报）+ 次行元信息，整体紧凑无垂直留白 */
+.ch-conv-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
+.ch-conv-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ch-conv-title-row b { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; color: var(--txt); overflow-wrap: anywhere; min-width: 0; }
+.ch-conv-metarow { font-size: 12px; color: var(--sub); padding-left: 2px; }
 .ch-msgs { display: flex; flex-direction: column; gap: 12px; padding: 18px; max-height: 52vh; overflow-y: auto; }
 .ch-msg-row { display: flex; justify-content: flex-start; }
 .ch-msg-row.mine { justify-content: flex-end; }
