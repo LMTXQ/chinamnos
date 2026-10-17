@@ -1793,6 +1793,10 @@
 .ch-conv-side-hint { font-size: 11px; color: var(--sub); }
 .ch-conv-item .ch-card-arrow { color: var(--sub); }
 .ch-conv-item .ch-card-arrow svg { width: 16px; height: 16px; }
+/* 会话列表工具栏：搜索框 + 发起方筛选（左组贴排布，对齐情报酒馆工具栏约定） */
+.ch-conv-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.ch-conv-toolbar .inp { flex: 1 1 220px; max-width: 340px; }
+.ch-conv-toolbar select.inp { flex: 0 0 auto; width: auto; }
 /* 会话详情头部：单行标题栏（返回+标题+徽章+举报）+ 次行元信息提示条（并入 60 天保留提示），整体紧凑 */
 .ch-conv-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
 .ch-conv-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

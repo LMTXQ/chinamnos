@@ -72,6 +72,8 @@ const S = {
   formAllowChat: false, // 发布表单：在线沟通开关
   formAllowRelay: false, // 发布表单：站长中转开关（依赖交易方式「站点担保」）
   convList: null,        // 卖家会话列表（me/conversations），null=加载中
+  convQ: "",             // 会话列表搜索词（对方昵称/UID/帖子标题，客户端过滤）
+  convFilter: "",        // 会话列表发起方筛选："" 全部 | mine 我发起 | theirs 对方发起
   favList: null,         // 我的收藏（me/favorites），null=加载中
   listPage: 1,           // 板块列表当前页（服务端分页）
   boardList: { items: [], total: 0, page: 1, pageSize: 20 }, // 服务端筛选+分页结果（当前板块）
@@ -1368,33 +1370,55 @@ function renderConvsView() {
   if (!S.convList) {
     return `<section class="view active"><div class="ch-empty"><div class="ch-empty-t">加载中…</div></div></section>`;
   }
-  if (!S.convList.length) {
-    return `
-<section class="view active">
-  <h1 class="page-title">会话</h1>
-  <p class="page-sub">买家通过你帖子上的「在线沟通」发起的站内对话</p>
-  <div class="ch-empty">
-    <div class="ch-empty-ic">${icon("message")}</div>
-    <div class="ch-empty-t">暂无会话</div>
-    <div class="ch-empty-s">在发布时开启「在线沟通」渠道，买家即可发起对话</div>
-  </div>
-</section>`;
-  }
   return `
 <section class="view active">
-  <h1 class="page-title">会话 <span class="ch-board-sub">与买家的沟通 · 我发起的咨询</span></h1>
-  <div class="ch-conv-list">
-    ${S.convList.map((c) => {
-      const count = c.msg_count || 0;
-      const remain = CONV_MSG_CAP - count;
-      const near = c.status === "open" && remain <= 20; // 快到上限：进度条/计数转琥珀色
-      const isDm = c.kind === "dm";
-      const kindTag = isDm ? `<span class="ch-conv-status st-role">私信</span>` : "";
-      const counterpart = isDm ? "私信对方" : (c.my_role === "buyer" ? "发布者" : esc(c.buyer_name || "买家"));
-      const roleTag = (!isDm && c.my_role === "buyer") ? `<span class="ch-conv-status st-role">我发起</span>` : "";
-      const statusTag = `<span class="ch-conv-status st-${esc(c.status)}">${c.status === "open" ? "进行中" : "已结束"}</span>`;
-      const pct = Math.max(4, Math.min(100, Math.round((count / CONV_MSG_CAP) * 100)));
-      return `
+  <h1 class="page-title">会话 <span class="ch-board-sub">与买家的沟通 · 私信 · 我发起的咨询</span></h1>
+  <div class="ch-conv-toolbar">
+    <input type="search" class="inp" id="convSearch" placeholder="搜索对方昵称 / UID / 帖子标题…" value="${esc(S.convQ || "")}">
+    <select class="inp" id="convFilterSel" title="按发起方筛选">
+      <option value="">全部会话</option>
+      <option value="mine" ${S.convFilter === "mine" ? "selected" : ""}>我发起的</option>
+      <option value="theirs" ${S.convFilter === "theirs" ? "selected" : ""}>对方发起的</option>
+    </select>
+  </div>
+  <div class="ch-conv-list" id="chConvList">${convListHTML(convFilteredItems())}</div>
+</section>`;
+}
+
+/* 会话列表客户端过滤：搜索词命中对方昵称(title)/UID/买家称呼/帖子 id；按发起方筛选 */
+function convFilteredItems() {
+  const q = (S.convQ || "").trim().toLowerCase();
+  const f = S.convFilter || "";
+  return (S.convList || []).filter((c) => {
+    if (f === "mine" && c.my_role !== "buyer") return false;
+    if (f === "theirs" && c.my_role !== "seller") return false;
+    if (!q) return true;
+    const hay = [c.title, c.other_uid, c.buyer_name, c.post_id].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+function convListHTML(items) {
+  if (!items.length) {
+    const filtered = (S.convQ || "").trim() || S.convFilter;
+    return `
+  <div class="ch-empty">
+    <div class="ch-empty-ic">${icon("message")}</div>
+    <div class="ch-empty-t">${filtered ? "没有匹配的会话" : "暂无会话"}</div>
+    <div class="ch-empty-s">${filtered ? "试试调整搜索词或筛选条件" : "从帖子「在线沟通」或用户资料卡「在线沟通」发起"}</div>
+  </div>`;
+  }
+  return items.map((c) => {
+    const count = c.msg_count || 0;
+    const remain = CONV_MSG_CAP - count;
+    const near = c.status === "open" && remain <= 20; // 快到上限：进度条/计数转琥珀色
+    const isDm = c.kind === "dm";
+    const kindTag = isDm ? `<span class="ch-conv-status st-role">私信</span>` : "";
+    const counterpart = isDm ? "私信对方" : (c.my_role === "buyer" ? "发布者" : esc(c.buyer_name || "买家"));
+    const roleTag = (!isDm && c.my_role === "buyer") ? `<span class="ch-conv-status st-role">我发起</span>` : "";
+    const statusTag = `<span class="ch-conv-status st-${esc(c.status)}">${c.status === "open" ? "进行中" : "已结束"}</span>`;
+    const pct = Math.max(4, Math.min(100, Math.round((count / CONV_MSG_CAP) * 100)));
+    return `
     <button type="button" class="ch-conv-item${c.status === "closed" ? " is-closed" : ""}" data-act="openConv" data-id="${esc(c.id)}">
       <span class="ch-conv-ava">${icon(isDm ? "user" : "message")}</span>
       <span class="ch-conv-main">
@@ -1408,9 +1432,13 @@ function renderConvsView() {
         <span class="ch-card-arrow">${icon("arrowRight")}</span>
       </span>
     </button>`;
-    }).join("")}
-  </div>
-</section>`;
+  }).join("");
+}
+
+/* 会话列表局部重绘（搜索/筛选时保持输入焦点） */
+function renderConvListRegion() {
+  const el = $("chConvList");
+  if (el) el.innerHTML = convListHTML(convFilteredItems());
 }
 
 async function openConv(id) {
@@ -2139,6 +2167,9 @@ async function openMarketModal(id) {
 
 function onRootChange(e) {
   const t = e.target;
+  /* 会话列表：搜索词/发起方筛选（客户端过滤，局部重绘保持输入焦点） */
+  if (t.id === "convSearch") { S.convQ = t.value; renderConvListRegion(); return; }
+  if (t.id === "convFilterSel") { S.convFilter = t.value; renderConvListRegion(); return; }
   /* 证明材料方式切换（proof=上传照片 / admin=指定管理员）：重渲染该区 */
   if (t.name === "chProofMode") {
     S.formReviewMode = t.value;
