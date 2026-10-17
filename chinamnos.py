@@ -5066,9 +5066,10 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
         logger.info(f'  [{ti + 1}/{len(categories)}] 采集分类: {cat_desc}')
 
         cat_items = []
+        cat_ids = set()      # 本分类已计数的条目 id：跨重试轮累计，保证日志计数与实际入库一致
         cat_failed = False
         cat_fail_reason = None
-        cat_start = time.time()
+        cat_total_start = time.time()   # 分类总耗时起点（含重试轮与退避等待，不随重试复位）
         pages_fetched = 0
         total_retries = 0
         request_failures = 0
@@ -5119,7 +5120,7 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
                 if not beans:
                     break
 
-                pages_fetched = page
+                pages_fetched = max(pages_fetched, page)
 
                 for bean in beans:
                     items = standardize_bean(bean, prov_short, prov_name, attr, t1, t2, cmcc_code=prov_code, carrier=carrier_key)
@@ -5127,6 +5128,8 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
                         if item['id'] not in seen_ids:
                             seen_ids.add(item['id'])
                             all_items.append(item)
+                        if item['id'] not in cat_ids:
+                            cat_ids.add(item['id'])
                             cat_items.append(item)
 
                 if pagination_mode == 'auto':
@@ -5162,12 +5165,10 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
             cat_items = []
             cat_failed = False
             cat_fail_reason = None
-            cat_start = time.time()
-            pages_fetched = 0
             prev_page_signature = None
             pagination_confirmed = None
 
-        cat_cost_ms = int((time.time() - cat_start) * 1000)
+        cat_cost_ms = int((time.time() - cat_total_start) * 1000)
         meta = f'耗时{cat_cost_ms / 1000:.2f}s'
         if pages_fetched:
             meta += f' · 翻页{pages_fetched}次'
