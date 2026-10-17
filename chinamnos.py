@@ -5363,12 +5363,35 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
     logger.info(f'stats.json 已保存 (status={status})')
 
 
+def _malloc_trim_now():
+    """主动归还 glibc 空闲页（碎片整理，malloc_trim 线程安全）。
+    返回释放的 kB；非 Linux / 无法读取时返回 None。"""
+    before = None
+    try:
+        with open('/proc/self/status', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    before = int(line.split()[1])
+                    break
+        if before is None:
+            return None
+        import ctypes as _ct
+        _libc = _ct.CDLL('libc.so.6')
+        _libc.malloc_trim(0)
+        with open('/proc/self/status', encoding='utf-8') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    return before - int(line.split()[1])
+    except Exception:
+        return None
+
+
 def _log_rss(tag):
     """内存探针（Linux /proc）：RSS + gc 存活对象数 + malloc_trim 碎片实验。
     判读：RSS 涨而"存活对象"走平 → 碎片/水位（非泄露）；trim 后 RSS 骤降 → glibc 碎片实锤。
     ▸ 存活对象 = gc 追踪的容器对象（dict/list 等）计数，字符串/数字不受追踪不计入；
     ▸ gc.get_objects() 会临时生成指针大列表（每对象 8 字节，取完 len 即释放），对读数影响可控；
-    ▸ malloc_trim 主动归还 glibc 空闲页，trim 后 RSS 是后续阶段的真实基线。
+    ▸ 探针结尾会顺手 trim，归还的空闲页即下一阶段的真实基线。
     非 Linux 静默跳过。"""
     rss_kb = None
     try:
@@ -5385,18 +5408,9 @@ def _log_rss(tag):
     except Exception:
         live_n = -1
     trim_note = ''
-    try:
-        import ctypes as _ct
-        _libc = _ct.CDLL('libc.so.6')
-        if _libc.malloc_trim(0):
-            with open('/proc/self/status', encoding='utf-8') as f:
-                for line in f:
-                    if line.startswith('VmRSS:'):
-                        after_kb = int(line.split()[1])
-                        trim_note = f'，trim后={after_kb}kB(降{rss_kb - after_kb}kB)'
-                        break
-    except Exception:
-        pass
+    freed = _malloc_trim_now()
+    if freed is not None and freed > 0:
+        trim_note = f'，trim后={rss_kb - freed}kB(降{freed}kB)'
     logger.info(f'[内存] {tag}: RSS={rss_kb}kB 存活对象={live_n}{trim_note}')
 
 
@@ -5478,6 +5492,8 @@ def _digest_province_stats(carrier_key, prov, r, storage_ref, crawl_time):
     }
     # 摘要已生成，原始条目立即释放（内存回落的关键动作）
     crawl_result['items'] = None
+    # 实时归还 glibc 碎片：解析峰值水位不再跨省累积（服务器内存紧张时的关键防线）
+    _malloc_trim_now()
 
 
 def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
