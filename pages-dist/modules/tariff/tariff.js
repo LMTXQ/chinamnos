@@ -759,7 +759,7 @@ const ACT_MODE_LABELS = { official: "官方活动", guide: "个人攻略" };
 const ACT_MD_MAX = 10000;  // 攻略正文上限（与后端 MD_MAX 对齐）
 const ACT_DRAFT_KEYS = { official: "act_official", guide: "act_guide" };
 const actState = {
-  items: [], mine: [], favItems: [], favLoaded: false, panelOpen: false, mode: "official", filter: "", editor: null,
+  items: [], mine: [], favItems: [], favLoaded: false, panelOpen: false, mode: "official", filter: "", q: "", editor: null,
   form: { title: "", url: "", scope: "prov", descr: "", ends: "", qr: null, allCarriers: false, content: "", anon: false },
 };
 
@@ -951,11 +951,11 @@ function actModeSeg() {
   </div>`;
 }
 
-/* 模式筛选 chips（客户端过滤列表；「我的收藏」仅登录用户可见） */
+/* 模式筛选 chips + 关键词搜索（客户端过滤列表；「我的收藏」仅登录用户可见） */
 function actFilterChips() {
   const chip = (v, label) => `<button type="button" class="act-filter-chip${actState.filter === v ? " active" : ""}" data-act="actFilter" data-mode="${v}">${label}</button>`;
   const favChip = Auth.isLoggedIn() ? chip("fav", "我的收藏") : "";
-  return `<div class="act-filter">${chip("", "全部")}${chip("official", "官方活动")}${chip("guide", "个人攻略")}${favChip}</div>`;
+  return `<div class="act-filter"><input type="search" class="inp act-search" id="actSearch" placeholder="搜索标题 / 简介…" value="${esc(actState.q)}">${chip("", "全部")}${chip("official", "官方活动")}${chip("guide", "个人攻略")}${favChip}</div>`;
 }
 
 /* 图片引导弹窗：站内不提供图床直传，引导到公益图床上传后粘贴外链（与在线沟通同一引导文案结构） */
@@ -1035,6 +1035,33 @@ async function actOpenDetail(id) {
   mountIcons($("modalBody"));
 }
 
+/* 列表过滤（收藏/模式 chips + 关键词搜索，均客户端执行）：actRenderBody 与搜索局部重绘共用 */
+function actFilteredItems() {
+  const favView = actState.filter === "fav";
+  const listSource = favView ? actState.favItems : actState.items;
+  let items = (favView || !actState.filter) ? listSource : listSource.filter((a) => a.mode === actState.filter);
+  const q = actState.q.trim().toLowerCase();
+  if (q) items = items.filter((a) => `${a.title || ""}\n${a.descr || ""}\n${a.excerpt || ""}`.toLowerCase().includes(q));
+  return items;
+}
+
+/* 列表区局部重绘（搜索输入时保持输入焦点与滚动位置） */
+function actRenderList() {
+  const el = $("actListRegion");
+  if (!el) return;
+  const provName = chProvName();
+  const favView = actState.filter === "fav";
+  const items = actFilteredItems();
+  const emptyTip = favView
+    ? (actState.favLoaded ? "暂无收藏，点击情报卡片上的「收藏」按钮即可保存到这里" : "登录后可收藏感兴趣的情报")
+    : `暂无${esc(provName)}的情报，欢迎投稿第一条！`;
+  const q = actState.q.trim();
+  el.innerHTML = items.length
+    ? `<div class="act-list">${items.map(actCardHTML).join("")}</div>`
+    : `<div class="empty" style="padding:32px;text-align:center">${q ? `没有与「${esc(q)}」匹配的情报` : emptyTip}</div>`;
+  mountIcons(el);
+}
+
 function actRenderBody() {
   const el = $("actTabBody");
   if (!el) return;
@@ -1052,16 +1079,16 @@ function actRenderBody() {
         <button type="button" class="btn ghost sm" data-act="actWithdraw" data-id="${esc(m.id)}">撤回</button>
       </div>`).join("")}
     </div>` : "";
-  /* 收藏视图：favItems（收藏时间倒序，服务端已滤 open）；常规视图：items 按 mode 客户端过滤 */
+  /* 收藏视图：favItems（收藏时间倒序，服务端已滤 open）；常规视图：按 mode + 关键词客户端过滤 */
   const favView = actState.filter === "fav";
-  const listSource = favView ? actState.favItems : actState.items;
-  const items = (favView || !actState.filter) ? listSource : listSource.filter((a) => a.mode === actState.filter);
+  const items = actFilteredItems();
   const emptyTip = favView
     ? (actState.favLoaded ? "暂无收藏，点击情报卡片上的「收藏」按钮即可保存到这里" : "登录后可收藏感兴趣的情报")
     : `暂无${esc(provName)}的${esc(brand)}情报，欢迎投稿第一条！`;
+  const q = actState.q.trim();
   const listHTML = items.length
     ? `<div class="act-list">${items.map(actCardHTML).join("")}</div>`
-    : `<div class="empty" style="padding:32px;text-align:center">${emptyTip}</div>`;
+    : `<div class="empty" style="padding:32px;text-align:center">${q ? `没有与「${esc(q)}」匹配的情报` : emptyTip}</div>`;
   const f = actState.form;
   const commonFields = `
         <label><span class="af-l">标题 <b>*</b></span><input class="inp" id="actFTitle" maxlength="40" value="${esc(f.title)}" placeholder="${guide ? "如：携号转网保号攻略" : "如：移动领 10GB 流量包"}"></label>
@@ -1114,8 +1141,17 @@ function actRenderBody() {
       <button type="button" class="btn primary" data-act="actTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${actState.panelOpen ? "收起投稿面板" : "投稿情报"}</span></button>
     </div>
     ${panel}
-    ${listHTML}`;
+    <div id="actListRegion">${listHTML}</div>`;
   mountIcons(el);
+  /* 搜索框：输入防抖后仅重绘列表区（不整页重绘，保持输入焦点） */
+  const sInp = $("actSearch");
+  if (sInp) {
+    let sT = 0;
+    sInp.addEventListener("input", () => {
+      clearTimeout(sT);
+      sT = setTimeout(() => { actState.q = sInp.value; actRenderList(); }, 200);
+    });
+  }
   /* 行内面板输入同步草稿（innerHTML 重建后重绑） */
   const bind = (id, key) => { const n = $(id); if (n) n.addEventListener("input", () => { actState.form[key] = n.value; actDraftSave(); }); };
   bind("actFTitle", "title"); bind("actFUrl", "url"); bind("actFDescr", "descr"); bind("actFEnds", "ends");
@@ -1278,7 +1314,7 @@ function actOnBodyClick(e) {
    ▸ 无匿名、无截止时间（社群长期有效）；提交者实名（点头像看资料卡） */
 const CHAT_TYPES = ["论坛", "QQ群", "微信群", "贴吧", "纸飞机", "其他"];
 const chatState = {
-  items: [], mine: [], panelOpen: false,
+  items: [], mine: [], panelOpen: false, q: "", typeFilter: "",
   form: { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", qr: null, proof: null },
 };
 
@@ -1340,6 +1376,28 @@ function chatCardHTML(a) {
   </div>`;
 }
 
+/* 列表过滤（种类 chips + 关键词搜索，均客户端执行）：chatRenderBody 与搜索局部重绘共用 */
+function chatFilteredItems() {
+  let items = chatState.items;
+  if (chatState.typeFilter) items = items.filter((a) => (a.chat_type || "其他") === chatState.typeFilter);
+  const q = chatState.q.trim().toLowerCase();
+  if (q) items = items.filter((a) => `${a.title || ""}\n${a.descr || ""}\n${a.chat_id || ""}`.toLowerCase().includes(q));
+  return items;
+}
+
+/* 列表区局部重绘（搜索输入时保持输入焦点与滚动位置） */
+function chatRenderList() {
+  const el = $("chatListRegion");
+  if (!el) return;
+  const provName = chProvName();
+  const items = chatFilteredItems();
+  const q = chatState.q.trim();
+  el.innerHTML = items.length
+    ? `<div class="act-list">${items.map(chatCardHTML).join("")}</div>`
+    : `<div class="empty" style="padding:32px;text-align:center">${(q || chatState.typeFilter) ? "没有匹配的社群，试试调整搜索词或种类筛选" : `暂无${esc(provName)}的社群，欢迎收录第一条！`}</div>`;
+  mountIcons(el);
+}
+
 function chatRenderBody() {
   const el = $("chatTabBody");
   if (!el) return;
@@ -1355,10 +1413,15 @@ function chatRenderBody() {
         <button type="button" class="btn ghost sm" data-act="chatWithdraw" data-id="${esc(m.id)}">撤回</button>
       </div>`).join("")}
     </div>` : "";
-  const items = chatState.items;
+  /* 种类筛选 chips（从当前数据归纳，保证与列表内容一致）+ 关键词过滤 */
+  const types = [...new Set(chatState.items.map((a) => a.chat_type || "其他"))];
+  const typeChips = [`<button type="button" class="act-filter-chip${chatState.typeFilter === "" ? " active" : ""}" data-act="chatTypeFilter" data-type="">全部</button>`]
+    .concat(types.map((t) => `<button type="button" class="act-filter-chip${chatState.typeFilter === t ? " active" : ""}" data-act="chatTypeFilter" data-type="${esc(t)}">${esc(t)}</button>`)).join("");
+  const items = chatFilteredItems();
+  const q = chatState.q.trim();
   const listHTML = items.length
     ? `<div class="act-list">${items.map(chatCardHTML).join("")}</div>`
-    : `<div class="empty" style="padding:32px;text-align:center">暂无${esc(provName)}的${esc(brand)}社群，欢迎收录第一条！</div>`;
+    : `<div class="empty" style="padding:32px;text-align:center">${(q || chatState.typeFilter) ? "没有匹配的社群，试试调整搜索词或种类筛选" : `暂无${esc(provName)}的${esc(brand)}社群，欢迎收录第一条！`}</div>`;
   const f = chatState.form;
   const scopeBtn = (v, label) => `<button type="button" class="act-filter-chip${f.scope === v ? " active" : ""}" data-act="chatScope" data-scope="${v}">${label}</button>`;
   const qrBlock = (pickAct, clearAct, key, label) => `
@@ -1393,12 +1456,25 @@ function chatRenderBody() {
     <p class="page-sub">${esc(provName)} · ${esc(brand)} · 交流社群聚合（论坛 / QQ 群 / 微信群 / 贴吧 / 纸飞机，投稿后经管理组审核展示）</p>
     ${mineHTML}
     <div class="act-toolbar">
-      <div class="act-filter"><span class="hint">收录你运营或知晓的交流社群；入群请遵守群规并自行甄别信息，站点仅提供信息展示渠道</span></div>
+      <div class="act-filter">
+        <input type="search" class="inp act-search" id="chatSearch" placeholder="搜索社群名称 / 说明 / 群号…" value="${esc(chatState.q)}">
+        ${typeChips}
+      </div>
       <button type="button" class="btn primary" data-act="chatTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${chatState.panelOpen ? "收起收录面板" : "收录社群"}</span></button>
     </div>
+    <div class="act-filter"><span class="hint">收录你运营或知晓的交流社群；入群请遵守群规并自行甄别信息，站点仅提供信息展示渠道</span></div>
     ${panel}
-    ${listHTML}`;
+    <div id="chatListRegion">${listHTML}</div>`;
   mountIcons(el);
+  /* 搜索框：输入防抖后仅重绘列表区（不整页重绘，保持输入焦点） */
+  const sInp = $("chatSearch");
+  if (sInp) {
+    let sT = 0;
+    sInp.addEventListener("input", () => {
+      clearTimeout(sT);
+      sT = setTimeout(() => { chatState.q = sInp.value; chatRenderList(); }, 200);
+    });
+  }
   /* 表单输入同步内存草稿（innerHTML 重建后重绑；草稿不落 localStorage，切 tab 保留） */
   const bindV = (id, key) => { const n = $(id); if (n) { n.value = chatState.form[key] || ""; n.addEventListener("input", () => { chatState.form[key] = n.value; }); } };
   bindV("chatFTitle", "title"); bindV("chatFUrl", "url"); bindV("chatFId", "chatId"); bindV("chatFDescr", "descr");
@@ -1460,6 +1536,9 @@ function chatOnBodyClick(e) {
     chatRenderBody();
   } else if (a === "chatScope") {
     chatState.form.scope = actEl.dataset.scope || "prov";
+    chatRenderBody();
+  } else if (a === "chatTypeFilter") {
+    chatState.typeFilter = actEl.dataset.type || "";
     chatRenderBody();
   } else if (a === "chatQrPick") {
     const fi = $("chatF_qr");

@@ -2687,8 +2687,9 @@
   border-bottom: 1px dashed color-mix(in oklab, var(--acc) 45%, transparent);
 }
 .act-author:hover { color: var(--acc-2); }
-/* 模式筛选 chips（全部/官方活动/个人攻略） */
+/* 模式筛选 chips（全部/官方活动/个人攻略）+ 关键词搜索框 */
 .act-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.act-search { flex: 0 1 240px; min-width: 150px; padding: 6px 12px; font-size: 13px; border-radius: 999px; }
 .act-filter-chip {
   padding: 5px 14px; border-radius: 999px; cursor: pointer; font-size: 12.5px; font-weight: 600;
   border: 1px solid var(--line); background: var(--surface); color: var(--sub);
