@@ -28,7 +28,7 @@ import { handleMyPosts } from './cardhub/me-posts';
 import { handleMyDeals } from './cardhub/me-deals';
 import { handleClosePost, handleWithdrawPost, handleResubmitPost, handleDeletePost, handleUpdatePost } from './cardhub/post-actions';
 import { handleAdminPostDetail } from './admin/posts';
-import { handleCreateConversation } from './cardhub/conversations';
+import { handleCreateConversation, handleDmCreate, handleAdminConvList } from './cardhub/conversations';
 import { handleMyConversations, handleReplyMessage, handleConversationDetail } from './cardhub/conversation-messages';
 import { handleCreateRelayRequest } from './cardhub/relay-requests';
 import { handleFavoriteToggle, handleMyFavorites } from './cardhub/favorites';
@@ -213,6 +213,8 @@ export default {
           resp = await handleDeletePost(request, env, p.slice('/api/cardhub/posts/'.length));
         } else if (p === '/api/cardhub/conversations' && m === 'POST') {
           resp = await handleCreateConversation(request, env);
+        } else if (m === 'POST' && /^\/api\/cardhub\/dm\/[^/]+$/.test(p)) {
+          resp = await handleDmCreate(request, env, p.split('/')[4]);
         } else if (p === '/api/cardhub/me/conversations' && m === 'GET') {
           resp = await handleMyConversations(request, env);
         } else if (m === 'GET' && /^\/api\/cardhub\/conversations\/[^/]+$/.test(p)) {
@@ -235,7 +237,9 @@ export default {
           resp = fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
         }
       } else if (p.startsWith('/api/admin/')) {
-        if (p === '/api/admin/nav' && m === 'GET') {
+        if (p === '/api/admin/conversations' && m === 'GET') {
+          resp = await handleAdminConvList(request, env); // 站长专用：查任意用户参与的会话
+        } else if (p === '/api/admin/nav' && m === 'GET') {
           resp = await handleNavAdminList(request, env);
         } else if (m === 'POST' && /^\/api\/admin\/nav\/[^/]+\/review$/.test(p)) {
           resp = await handleNavReview(request, env, p.split('/')[4]);

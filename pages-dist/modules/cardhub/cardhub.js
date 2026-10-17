@@ -1356,7 +1356,7 @@ function myPostOpsHTML(p) {
 
 /* ═══════════════════════════ 视图：会话（卖家收件箱） ═══════════════════════════ */
 /* 会话列表：GET me/conversations；对话页：GET conversations/:id + POST messages */
-const CONV_MSG_CAP = 20; // 单会话双方合计消息上限（与后端 conversation-messages.ts MAX_MSG 保持一致）
+const CONV_MSG_CAP = 200; // 单会话双方合计消息上限（与后端 conversation-messages.ts MAX_MSG 保持一致）
 async function loadConvs() {
   const r = await api.myConversations();
   if (!r.ok) { S.convList = []; toast(r.error || "会话加载失败"); render(); return; }
@@ -1387,16 +1387,18 @@ function renderConvsView() {
     ${S.convList.map((c) => {
       const count = c.msg_count || 0;
       const remain = CONV_MSG_CAP - count;
-      const near = c.status === "open" && remain <= 5; // 快到上限：进度条/计数转琥珀色
-      const counterpart = c.my_role === "buyer" ? "发布者" : esc(c.buyer_name || "买家");
-      const roleTag = c.my_role === "buyer" ? `<span class="ch-conv-status st-role">我发起</span>` : "";
+      const near = c.status === "open" && remain <= 20; // 快到上限：进度条/计数转琥珀色
+      const isDm = c.kind === "dm";
+      const kindTag = isDm ? `<span class="ch-conv-status st-role">私信</span>` : "";
+      const counterpart = isDm ? "私信对方" : (c.my_role === "buyer" ? "发布者" : esc(c.buyer_name || "买家"));
+      const roleTag = (!isDm && c.my_role === "buyer") ? `<span class="ch-conv-status st-role">我发起</span>` : "";
       const statusTag = `<span class="ch-conv-status st-${esc(c.status)}">${c.status === "open" ? "进行中" : "已结束"}</span>`;
       const pct = Math.max(4, Math.min(100, Math.round((count / CONV_MSG_CAP) * 100)));
       return `
     <button type="button" class="ch-conv-item${c.status === "closed" ? " is-closed" : ""}" data-act="openConv" data-id="${esc(c.id)}">
-      <span class="ch-conv-ava">${icon("message")}</span>
+      <span class="ch-conv-ava">${icon(isDm ? "user" : "message")}</span>
       <span class="ch-conv-main">
-        <span class="ch-conv-title">${esc(c.title || "帖子")}${roleTag}${statusTag}</span>
+        <span class="ch-conv-title">${esc(c.title || (isDm ? "私信会话" : "帖子"))}${kindTag}${roleTag}${statusTag}</span>
         <span class="ch-conv-sub">与${counterpart}对话 · 最后活跃 ${relTime(Math.floor((c.updated_at || c.created_at || 0) / 1000))}</span>
         <span class="ch-conv-meter"><i class="${near ? "near" : ""}" style="width:${pct}%"></i></span>
       </span>
@@ -1517,9 +1519,12 @@ function renderConvView() {
   }
   const cv = S.convDetail.conversation || {};
   const mine = S.convDetail.myRole || "seller";
+  const isOwnerWatch = mine === "owner"; // 站长治理视角：只读，不显示输入框，不代读通知
   const msgs = (S.convDetail.messages || []).map((m) => {
-    const isMine = m.sender_role === mine;
-    const who = m.sender_role === "seller" ? (isMine ? "我（卖家）" : "发布者") : (isMine ? "我（买家）" : esc(cv.buyer_name || "买家"));
+    const isMine = !isOwnerWatch && m.sender_role === mine;
+    const who = isOwnerWatch
+      ? (m.sender_role === "seller" ? "发布者" : esc(cv.buyer_name || "买家"))
+      : (m.sender_role === "seller" ? (isMine ? "我（卖家）" : "发布者") : (isMine ? "我（买家）" : esc(cv.buyer_name || "买家")));
     const parsed = splitMsgBody(m.body);
     const imgs = [...new Set([...msgImages(m), ...parsed.imgs])]; // 历史 images_json + 正文图片 URL 行，去重
     return `
@@ -1533,27 +1538,30 @@ function renderConvView() {
   }).join("");
   const count = (cv.msg_count || 0);
   const remain = CONV_MSG_CAP - count;
-  const canReply = cv.status === "open" && count < CONV_MSG_CAP;
-  /* 额度提醒条：常驻显示双方合计上限；剩 5 条起转琥珀高亮并引导线下沟通 */
-  const quotaBar = `<div class="ch-conv-quota${remain <= 5 ? " warn" : ""}">${icon("info")} <span>双方合计最多 <b>${CONV_MSG_CAP}</b> 条消息 · 已用 <b>${count}</b> 条${remain <= 5 ? `，仅剩 <b>${remain}</b> 条，请尽快交换联系方式转为线下沟通` : ""}</span></div>`;
-  const replyArea = cv.status !== "open"
-    ? `<div class="ch-conv-closed">${icon("info")} 会话已结束（帖子已关闭或成交下架）</div>`
-    : canReply
-      ? `${quotaBar}
+  const canReply = !isOwnerWatch && cv.status === "open" && count < CONV_MSG_CAP;
+  /* 额度提醒条：常驻显示双方合计上限；剩 20 条起转琥珀高亮并引导线下沟通 */
+  const quotaBar = `<div class="ch-conv-quota${remain <= 20 ? " warn" : ""}">${icon("info")} <span>双方合计最多 <b>${CONV_MSG_CAP}</b> 条消息 · 已用 <b>${count}</b> 条${remain <= 20 ? `，仅剩 <b>${remain}</b> 条，请尽快交换联系方式转为线下沟通` : ""}</span></div>`;
+  const replyArea = isOwnerWatch
+    ? `<div class="ch-conv-closed">${icon("shield")} 站长治理视角（只读）——仅用于核实举报内容，对话双方不可见此提示</div>`
+    : cv.status !== "open"
+      ? `<div class="ch-conv-closed">${icon("info")} 会话已结束（帖子已关闭或成交下架）</div>`
+      : canReply
+        ? `${quotaBar}
         <div class="ch-conv-reply">
           <button type="button" class="btn ghost ch-conv-imgbtn" data-act="convImgGuide" title="发送图片：使用外部图床外链（点击查看指引）"><i data-icon="image"></i></button>
-          <textarea class="inp" id="chConvInput" rows="2" maxlength="500" placeholder="回复买家…（图片：粘贴图床外链 URL，Enter 发送 / Shift+Enter 换行）"></textarea>
+          <textarea class="inp" id="chConvInput" rows="2" maxlength="500" placeholder="回复对方…（图片：粘贴图床外链 URL，Enter 发送 / Shift+Enter 换行）"></textarea>
           <button class="btn primary" data-act="convSend"><i data-icon="send"></i>发送</button>
         </div>`
-      : `<div class="ch-conv-closed">${icon("info")} 会话已达 ${CONV_MSG_CAP} 条消息上限，无法继续回复</div>`;
+        : `<div class="ch-conv-closed">${icon("info")} 会话已达 ${CONV_MSG_CAP} 条消息上限，无法继续回复</div>`;
   return `
 <section class="view active ch-conv-page">
   <div class="ch-conv-head">
     ${back}
     <div class="ch-conv-headinfo">
       <b>${esc(cv.title || "帖子")}</b>
-      <span>${mine === "buyer" ? "发布者" : esc(cv.buyer_name || "买家")} · ${count}/${CONV_MSG_CAP} 条 · ${cv.status === "open" ? "进行中" : "已结束"}</span>
+      <span>${isOwnerWatch ? "治理查看" : (mine === "buyer" ? "发布者" : esc(cv.buyer_name || "买家"))} · ${count}/${CONV_MSG_CAP} 条 · ${cv.status === "open" ? "进行中" : "已结束"}</span>
     </div>
+    ${!isOwnerWatch ? `<button type="button" class="btn ghost sm" data-act="convReport" data-id="${esc(cv.id)}" data-uid="${esc(cv.other_uid || "")}" data-title="${esc(cv.title || "")}"><i data-icon="alertTriangle"></i>举报</button>` : ""}
   </div>
   <div class="ch-conv-retain">${icon("info")} <span>聊天记录（含图片链接）仅保留 <b>60 天</b>，到期自动清理，请及时保存需要留存的截图</span></div>
   <div class="panel ch-msgs">${msgs || '<div class="ch-empty-s">暂无消息</div>'}</div>
@@ -1771,6 +1779,24 @@ async function onRootClick(e) {
   if (a === "backConvs") { S.view = "convs"; S.convDetail = null; S.convList = null; render(); loadConvs(); return; }
   if (a === "convSend") { withPending(actEl, () => sendConvMsg()); return; }
   if (a === "convImgGuide") { openImageHostGuide(); return; }
+  if (a === "convReport") {
+    /* 会话举报：预填工单（分类其他，机制同情报卡片反馈），管理组凭工单处置 */
+    const id = actEl.dataset.id || "";
+    const uid = actEl.dataset.uid || "";
+    const title = actEl.dataset.title || "";
+    if (!confirm(`将前往工单中心举报该会话${title ? `「${title}」` : ""}，由管理组核实处置。继续？`)) return;
+    try {
+      sessionStorage.setItem("chinamnos_ticket_prefill", JSON.stringify({
+        category: "其他",
+        source: "cardhub",
+        title: `会话举报：${title}`.slice(0, 60),
+        content: `会话编号：${id}\n对方用户：${uid || "（见会话内信息）"}\n举报说明：\n`,
+        banner: "已带入会话举报预设信息（来自跳蚤市集会话），请补充举报说明后提交",
+      }));
+    } catch { /* sessionStorage 不可用时跳转后手填 */ }
+    Shell.navigate("/ticket");
+    return;
+  }
   // 点发布者头像/名称 → 公开资料卡（昵称/UID/主动公开的联系方式）
   if (a === "authorCard") { Auth.showProfileCard(actEl.dataset.id); return; }
   if (a === "newPost") {
@@ -2321,12 +2347,18 @@ Shell.registerPage({
     chTabs = new Tabs($("chNav"), onNavChange);
     chTabs.activate(navViewId());
 
-    /* 通知中心「前往查看」深链：直达我的发布 / 会话收件箱（notify.js 点击时写入） */
+    /* 通知中心/资料卡「在线沟通」深链：直达我的发布 / 会话收件箱（notify.js 点击时写入） */
     try {
       const ntfView = sessionStorage.getItem("ntf_cardhub_view");
       if (ntfView === "me" || ntfView === "convs") {
         sessionStorage.removeItem("ntf_cardhub_view");
         if (S.user) chTabs.activate(ntfView);
+      }
+      /* 私信直达会话：资料卡「在线沟通」创建/复用会话后写入，activate 会话列表后直接打开该会话 */
+      const ntfConv = sessionStorage.getItem("ntf_cardhub_conv");
+      if (ntfConv && S.user) {
+        sessionStorage.removeItem("ntf_cardhub_conv");
+        if (S.view === "conv" || S.view === "convs" || !S.view) openConv(ntfConv);
       }
     } catch { /* 隐私模式忽略 */ }
 

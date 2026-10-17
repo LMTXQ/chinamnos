@@ -689,9 +689,24 @@ document.addEventListener("click", (e) => {
   if (act === "authChangePwd") { closeDrop(); resetState.step = "code"; Auth.openChangePassword(); return; }
   if (act === "authAdmin") { closeDrop(); Shell.navigate("/admin"); return; }
   if (act === "profileChat") {
-    /* 资料卡「在线沟通」：跳转跳蚤市集会话收件箱（会话由帖子发起，收件箱内可见与该用户的既有会话） */
-    closeModal();
-    goCardhubView("convs");
+    /* 资料卡「在线沟通」：发起/复用与该用户的私信会话（kind='dm'，不挂帖子），
+       成功后深链跳蚤市集会话收件箱并直达该会话 */
+    const uid = actEl.dataset.uid;
+    if (!uid) return;
+    withPending(actEl, async () => {
+      const r = await api.dmCreate(uid);
+      if (!r.ok) {
+        const cn = {
+          CONVERSATION_SELF: "不能与自己发起私信",
+          RATE_LIMITED: "今天发起的私信会话已达上限（3 个/天），请明天再试",
+        };
+        toast(cn[r.error] || r.error || "发起失败，请稍后再试");
+        return;
+      }
+      closeModal();
+      try { sessionStorage.setItem("ntf_cardhub_conv", r.data.id); } catch { /* 隐私模式忽略 */ }
+      goCardhubView("convs");
+    });
     return;
   }
 });

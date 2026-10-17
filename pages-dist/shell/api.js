@@ -282,6 +282,8 @@ export const api = {
 
   /* ── 对话接口 ── */
   async createConversation(body) { return this.request("/api/cardhub/conversations", { method: "POST", body }); },
+  async dmCreate(uid) { return this.request("/api/cardhub/dm/" + encodeURIComponent(uid), { method: "POST", body: {} }); },
+  async adminConversations(userId) { return this.request("/api/admin/conversations?user_id=" + encodeURIComponent(userId)); },
   async myConversations() { return this.request("/api/cardhub/me/conversations"); },
   async getConversation(id) { return this.request("/api/cardhub/conversations/" + encodeURIComponent(id)); },
   async replyMessage(convId, body) { return this.request("/api/cardhub/conversations/" + convId + "/messages", { method: "POST", body }); },

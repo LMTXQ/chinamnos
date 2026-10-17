@@ -943,6 +943,40 @@ function renderRelay() {
 }
 
 /* ── 用户管理（筛选 + 搜索 + 分页 + 角色） ── */
+/* 站长专用：查看指定用户参与的会话（交易+私信）；点击行跳跳蚤市集直接打开该会话（治理视角只读）。
+   仅站长可见此按钮与端点（后端 guard 'owner'），管理员不可见且不感知该能力。 */
+async function onAdmUserConvs(id, email) {
+  const r = await api.adminConversations(id);
+  if (!r.ok) { toast(r.error || "会话查询失败"); return; }
+  const items = r.data.items || [];
+  const mask = document.createElement("div");
+  mask.className = "adm-modal-mask";
+  mask.innerHTML = `
+    <div class="adm-modal" role="dialog" aria-modal="true" style="max-width:600px">
+      <div class="adm-modal-title">会话列表 · ${esc(email)}</div>
+      ${items.length ? `
+      <div style="max-height:50vh;overflow:auto;display:flex;flex-direction:column;gap:8px;margin:10px 0 14px">
+        ${items.map((c) => `
+        <button class="btn ghost sm" data-conv="${esc(c.id)}" style="text-align:left;justify-content:flex-start;align-items:flex-start">
+          <b>${c.kind === "dm" ? "私信" : "帖子"}</b> · ${esc(c.title || (c.kind === "dm" ? `对方 ${c.other_uid || "?"}` : "（帖子已删除）"))}
+          <span style="opacity:.75"> · ${c.msg_count || 0} 条 · ${fmtTime(c.updated_at)}</span>
+        </button>`).join("")}
+      </div>` : `<div class="adm-modal-msg">该用户暂无会话</div>`}
+      <div class="adm-modal-btns"><button class="btn ghost" data-m="close">关闭</button></div>
+    </div>`;
+  document.body.appendChild(mask);
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask || e.target.closest('[data-m="close"]')) { mask.remove(); return; }
+    const conv = e.target.closest("[data-conv]");
+    if (conv) {
+      mask.remove();
+      try { sessionStorage.setItem("ntf_cardhub_conv", conv.dataset.conv); } catch { /* 隐私模式忽略 */ }
+      if (window.Shell && window.Shell.navigate) window.Shell.navigate("/cardhub");
+      else location.hash = "/cardhub";
+    }
+  });
+}
+
 function renderUsers() {
   const us = state.users;
   return `
@@ -967,6 +1001,7 @@ function renderUsers() {
           <td>${fmtTime(u.last_login_at)}</td>
           <td><div class="adm-actions">
             <button class="btn ghost sm" data-act="admUserSet" data-id="${u.id}" data-email="${esc(u.email)}">设置</button>
+            ${Auth.isOwner() ? `<button class="btn ghost sm" data-act="admUserConvs" data-id="${u.id}" data-email="${esc(u.email)}">会话</button>` : ""}
             <button class="btn ghost sm" data-act="admTitle" data-id="${u.id}" data-email="${esc(u.email)}" data-title="${esc(u.title || "")}">头衔</button>
             <button class="btn ghost sm" data-act="admAvatar" data-id="${u.id}" data-email="${esc(u.email)}">头像</button>
             ${Auth.isOwner() && u.role !== "owner" ? (u.role === "admin"
@@ -1644,6 +1679,7 @@ function bindEvents() {
     if (act === "setRole") { onSetRole(el.dataset.id, el.dataset.role, el.dataset.email); return; }
     if (act === "admAvatar") { onUploadAvatar(el.dataset.id, el.dataset.email); return; }
     if (act === "admUserSet") { Auth.openSettingsFor(el.dataset.id); return; }
+    if (act === "admUserConvs") { onAdmUserConvs(el.dataset.id, el.dataset.email); return; }
     if (act === "admTitle") { onSetTitle(el.dataset.id, el.dataset.email, el.dataset.title || ""); return; }
     if (act === "toggleSetting") { onToggleSetting(el.dataset.key); return; }
     if (act === "saveSetting") { onSaveSetting(el.dataset.key); return; }
