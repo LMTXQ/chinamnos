@@ -9,7 +9,7 @@
 "use strict";
 
 import { Shell, esc, theme, ensureStylesheet } from "../../shell/shell.js";
-import { icon, mountIcons, toast, withPending } from "../../shell/ui.js";
+import { icon, mountIcons, toast, withPending, showPageLoading, hidePageLoading } from "../../shell/ui.js";
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
@@ -402,8 +402,10 @@ Shell.registerPage({
   id: "ticket",
   route: "/ticket",
   async onEnter(root) {
+    showPageLoading("工单中心加载中…");
     await ensureStylesheet(Shell.config.base + "modules/ticket/style.css");
     if (!Auth.isLoggedIn()) {
+      hidePageLoading();
       root.innerHTML = `
 <div id="ticketRoot">
 <header class="tk-topbar">
@@ -444,7 +446,11 @@ Shell.registerPage({
     if (sch.ok) S.admins = sch.data.admins || [];
     await tkApplyPrefill(); // 各功能页「毛遂自荐」按钮的预填交接（读取即清除）
     tkGenericPrefill();     // 各功能页「反馈/举报」等入口的通用预填交接（读取即清除）
-    await loadList();
+    try {
+      await loadList();
+    } finally {
+      hidePageLoading();
+    }
   },
   onExit(root) {
     unbindEvents();

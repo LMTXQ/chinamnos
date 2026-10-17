@@ -9,7 +9,7 @@
 "use strict";
 
 import { Shell, esc, theme, ensureStylesheet } from "../../shell/shell.js";
-import { icon, mountIcons, toast } from "../../shell/ui.js";
+import { icon, mountIcons, toast, showPageLoading, hidePageLoading } from "../../shell/ui.js";
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
@@ -263,8 +263,10 @@ Shell.registerPage({
   id: "tools",
   route: "/tools",
   onEnter: async function (root) {
+    showPageLoading("工具宝库加载中…");
     await ensureStylesheet(Shell.config.base + "modules/tools/style.css");
     root.innerHTML = skeletonHTML();
+    hidePageLoading();
     mountIcons(root);
     mountAppsMenu($("toolsAppsMenuSlot"), "tools");
     mountAuth($("toolsAuthSlot"));

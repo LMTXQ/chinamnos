@@ -148,7 +148,7 @@ function ensurePageLoading() {
   pageLoadingEl.id = "pageLoading";
   pageLoadingEl.className = "loading-overlay";
   pageLoadingEl.innerHTML =
-    '<div class="loading-spinner"></div>' +
+    '<div class="loading-spinner"><span class="loading-core">资</span></div>' +
     '<div class="loading-text"></div>' +
     '<div class="loading-dots" aria-hidden="true"><span></span><span></span><span></span></div>';
   document.documentElement.appendChild(pageLoadingEl);
