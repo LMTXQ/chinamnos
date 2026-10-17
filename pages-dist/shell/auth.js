@@ -69,6 +69,8 @@ const AUTH_CSS = `
 .auth-profile-bio{font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.6}
 .auth-profile-ct{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:13px;color:var(--txt);margin-bottom:8px}
 .auth-profile-ct code{font-family:ui-monospace,monospace;word-break:break-all;flex:1;min-width:0}
+/* 签名卡：复用联系方式卡布局，正文用常规字体（签名非代码，等宽不合适） */
+.auth-profile-ct-bio .v{flex:1;min-width:0;font-size:13px;line-height:1.6;color:var(--txt);overflow-wrap:anywhere}
 .auth-profile-ct .t{flex:none;font-size:11px;font-weight:700;color:var(--sub);min-width:40px}
 .auth-profile-ct .btn{flex:none;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--sub);font-size:12px;cursor:pointer;transition:.15s}
 .auth-profile-ct .btn:hover{border-color:var(--acc);color:var(--acc)}
@@ -357,9 +359,9 @@ export const Auth = {
           <div class="auth-profile-name">${esc(p.nickname || "未设置昵称")}</div>
           <div class="auth-profile-title">${esc(p.title || "平平无奇的路人")}</div>
           <div class="auth-profile-uid">UID: ${esc(p.id)}</div>
-          ${p.bio ? `<div class="auth-profile-bio">“${esc(p.bio)}”</div>` : ""}
         </div>
       </div>
+      ${p.bio ? `<div class="auth-profile-ct auth-profile-ct-bio"><span class="t">签名</span><span class="v">${esc(p.bio)}</span></div>` : ""}
       ${(p.contacts || []).map((c) => `
         <div class="auth-profile-ct"><span class="t">${CT_LABELS[c.type] || "其他"}</span><code>${esc(c.value)}</code>
         <button class="btn ghost" data-act="copyUid" data-val="${esc(c.value)}" style="flex:none;padding:6px 10px;margin-left:auto">复制</button></div>`).join("")
