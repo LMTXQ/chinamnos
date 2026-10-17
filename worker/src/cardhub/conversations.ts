@@ -92,7 +92,8 @@ export async function handleDmCreate(request: Request, env: Env, uid: string): P
   if (g instanceof Response) return g;
   const me = g.viewer;
 
-  if (!/^[A-Za-z0-9]{4,16}$/.test(uid)) return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400);
+  // users.id 为 ULID（26 位），勿沿用业务 id 的 4-16 位口径
+  if (!/^[A-Za-z0-9]{10,32}$/.test(uid)) return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400);
   if (uid === me.id) return fail(40302, 'CONVERSATION_SELF', 403);
 
   // 目标用户必须存在且未被封禁
@@ -133,7 +134,8 @@ export async function handleAdminConvList(request: Request, env: Env): Promise<R
 
   const url = new URL(request.url);
   const uid = url.searchParams.get('user_id') || '';
-  if (!/^[A-Za-z0-9]{4,16}$/.test(uid)) return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400);
+  // users.id 为 ULID（26 位）
+  if (!/^[A-Za-z0-9]{10,32}$/.test(uid)) return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400);
 
   const rows = await env.DB.prepare(
     `SELECT c.id, c.kind, c.post_id, c.seller_id, c.buyer_user_id, c.buyer_name, c.status, c.msg_count, c.created_at, c.updated_at,
