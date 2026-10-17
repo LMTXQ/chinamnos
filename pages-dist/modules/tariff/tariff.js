@@ -828,6 +828,41 @@ function actTabRefreshAndRender() {
   });
 }
 
+/* 我的投稿编辑：删除原条目（pending=撤回 / rejected=清理）后把内容回填进投稿表单，
+   用户修改后走正常提交流程重新审核（查重只挡 pending/open，删除后可原样重提）。
+   二维码/凭证为 R2 对象无法回填 dataURL，需重新上传（回填提示中说明）。 */
+function mineEndsToDate(endsAt) {
+  if (!endsAt) return "";
+  const d = new Date(endsAt - 8 * 3600 * 1000); // 提交时存 23:59:59+08:00，平移后取东八区日期
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function actEditMine(id) {
+  const m = (actState.mine || []).find((x) => x.id === id);
+  if (!m) { toast("未找到该投稿，请刷新后重试"); return; }
+  if (!confirm("编辑将撤回当前投稿，内容填入下方表单，修改后重新提交审核。二维码（如有）需重新上传，确定继续？")) return;
+  api.activityDelete(id).then((r) => {
+    if (!r.ok) { toast(r.error || "撤回原投稿失败，请稍后再试"); return; }
+    if (actState.editor) { actState.editor.destroy(); actState.editor = null; } // 防旧编辑器内容写回覆盖回填值
+    actState.mode = m.mode === "guide" ? "guide" : "official";
+    actState.form = {
+      title: m.title || "",
+      url: m.url || "",
+      scope: m.province ? "prov" : "nat",
+      descr: m.descr || "",
+      ends: mineEndsToDate(m.ends_at),
+      qr: null,
+      allCarriers: actState.mode === "guide" && !m.carrier,
+      content: m.content_md || "",
+      anon: !!m.anon,
+    };
+    actState.panelOpen = true;
+    actTabRefresh().then(actRenderBody); // 刷新三态区（原条目已删）并重建表单
+    toast("原投稿已撤回，内容已填入下方表单，修改后点「提交审核」");
+  });
+}
+
 function actRemaining(endsAt) {
   if (!endsAt) return `<span class="act-chip">长期有效</span>`;
   const days = Math.ceil((endsAt * 1000 - Date.now()) / 86400000);
@@ -1100,6 +1135,8 @@ function actRenderBody() {
         <span class="act-mine-title">${esc(m.title)}</span>
         ${mineSt(st)}
         ${st === "pending" ? `<button type="button" class="btn ghost sm" data-act="actWithdraw" data-id="${esc(m.id)}">撤回</button>` : ""}
+        ${st !== "open" ? `<button type="button" class="btn ghost sm" data-act="actEdit" data-id="${esc(m.id)}">编辑</button>` : ""}
+        ${st === "rejected" ? `<button type="button" class="btn ghost sm" data-act="actMineDel" data-id="${esc(m.id)}">删除</button>` : ""}
         ${st === "rejected" && m.reject_reason ? `<span class="act-mine-reason">驳回原因：${esc(m.reject_reason)}</span>` : ""}
       </div>`;
       }).join("")}
@@ -1311,6 +1348,15 @@ function actOnBodyClick(e) {
       toast(r.ok ? "已撤回" : (r.error || "撤回失败"));
       if (r.ok) actTabRefreshAndRender();
     });
+  } else if (a === "actMineDel") {
+    const id = actEl.dataset.id;
+    if (!confirm("确定删除这条被驳回的投稿？删除后不可恢复。")) return;
+    api.activityDelete(id).then((r) => {
+      toast(r.ok ? "已删除" : (r.error || "删除失败"));
+      if (r.ok) actTabRefreshAndRender();
+    });
+  } else if (a === "actEdit") {
+    actEditMine(actEl.dataset.id);
   } else if (a === "actQrPick") {
     const fi = $("actFQr");
     if (fi) fi.click();
@@ -1383,6 +1429,33 @@ function chatTabRefreshAndRender() {
   return chatTabRefresh().then(() => {
     const el = $("view-chat");
     if (el && el.classList.contains("active")) chatRenderBody();
+  });
+}
+
+/* 我的收录编辑：删除原条目（pending=撤回 / rejected=清理）后回填收录表单重新提交；
+   二维码/授权凭证需重新上传（回填提示中说明）。 */
+function chatEditMine(id) {
+  const m = (chatState.mine || []).find((x) => x.id === id);
+  if (!m) { toast("未找到该收录，请刷新后重试"); return; }
+  if (!confirm("编辑将撤回当前收录，内容填入下方表单，修改后重新提交审核。二维码/授权凭证（如有）需重新上传，确定继续？")) return;
+  api.communityDelete(id).then((r) => {
+    if (!r.ok) { toast(r.error || "撤回原收录失败，请稍后再试"); return; }
+    // 范围回填：carrier=''=全站通用；carrier+province=仅本省；仅 carrier=仅本运营商
+    const scope = !m.carrier ? "all" : (m.province ? "prov" : "carrier");
+    chatState.form = {
+      type: m.chat_type || "QQ群",
+      scope,
+      title: m.title || "",
+      url: m.url || "",
+      chatId: m.chat_id || "",
+      descr: m.descr || "",
+      anon: !!m.anon,
+      qr: null,
+      proof: null,
+    };
+    chatState.panelOpen = true;
+    chatTabRefreshAndRender(); // 刷新三态区（原条目已删）并重建表单
+    toast("原收录已撤回，内容已填入下方表单，修改后点「提交审核」");
   });
 }
 function chatRenderIfActive() {
@@ -1467,6 +1540,8 @@ function chatRenderBody() {
         <span class="act-mine-title">${esc(m.title)}</span>
         ${chatMineSt(st)}
         ${st === "pending" ? `<button type="button" class="btn ghost sm" data-act="chatWithdraw" data-id="${esc(m.id)}">撤回</button>` : ""}
+        ${st !== "open" ? `<button type="button" class="btn ghost sm" data-act="chatEdit" data-id="${esc(m.id)}">编辑</button>` : ""}
+        ${st === "rejected" ? `<button type="button" class="btn ghost sm" data-act="chatMineDel" data-id="${esc(m.id)}">删除</button>` : ""}
         ${st === "rejected" && m.reject_reason ? `<span class="act-mine-reason">驳回原因：${esc(m.reject_reason)}</span>` : ""}
       </div>`;
       }).join("")}
@@ -1631,6 +1706,15 @@ function chatOnBodyClick(e) {
       toast(r.ok ? "已撤回" : (r.error || "撤回失败"));
       if (r.ok) chatTabRefreshAndRender();
     });
+  } else if (a === "chatMineDel") {
+    const id = actEl.dataset.id;
+    if (!confirm("确定删除这条被驳回的收录？删除后不可恢复。")) return;
+    api.communityDelete(id).then((r) => {
+      toast(r.ok ? "已删除" : (r.error || "删除失败"));
+      if (r.ok) chatTabRefreshAndRender();
+    });
+  } else if (a === "chatEdit") {
+    chatEditMine(actEl.dataset.id);
   } else if (a === "chatAuthor") {
     Auth.showProfileCard(actEl.dataset.uid);
   } else if (a === "chatQr") {

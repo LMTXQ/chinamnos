@@ -85,14 +85,15 @@ export async function handleCommunityList(request: Request, env: Env): Promise<R
   const g = await guard(request, env, 'anon');
   if (!(g instanceof Response) && g.viewer.id) {
     const mine = await env.DB.prepare(
-      `SELECT id, chat_type, province, title, url, status, reject_reason, created_at, reviewed_at FROM activities
+      `SELECT id, chat_type, province, title, url, descr, chat_id, anon, carrier, status, reject_reason, created_at, reviewed_at FROM activities
        WHERE mode = 'chat' AND submitted_by = ?1
          AND (status = 'pending' OR (status IN ('open', 'rejected') AND reviewed_at > ?2))
        ORDER BY created_at DESC LIMIT 50`,
     ).bind(g.viewer.id, Date.now() - 30 * 86400 * 1000).all<ChatRow>();
     mineAll = mine.results.map((r) => ({
       id: r.id, chat_type: r.chat_type || '其他', province: r.province,
-      title: r.title, url: r.url || null, status: r.status, reject_reason: r.reject_reason,
+      title: r.title, url: r.url || null, descr: r.descr || null, chat_id: r.chat_id || null,
+      anon: !!r.anon, carrier: r.carrier, status: r.status, reject_reason: r.reject_reason,
       created_at: r.created_at, reviewed_at: r.reviewed_at,
     }));
     minePending = mineAll.filter((r) => r.status === 'pending');
@@ -214,7 +215,8 @@ export async function handleCommunityDelete(request: Request, env: Env, id: stri
   ).bind(id).first<ChatRow>();
   if (!row) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
   if (row.submitted_by !== g.viewer.id) return fail(ERR.FORBIDDEN, 'FORBIDDEN', 403);
-  if (row.status !== 'pending') return fail(ERR.VALIDATION_ERROR, 'INVALID_STATUS', 400);
+  // pending=撤回；rejected=清理后重投（编辑=删旧重提的回退路径）；open 不可自删
+  if (row.status !== 'pending' && row.status !== 'rejected') return fail(ERR.VALIDATION_ERROR, 'INVALID_STATUS', 400);
 
   await env.DB.prepare('DELETE FROM activities WHERE id = ?1').bind(id).run();
   for (const k of [row.qr_key, row.proof_key]) { if (k) { try { await env.PROOFS!.delete(k); } catch { /* */ } } }

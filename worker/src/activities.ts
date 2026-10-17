@@ -192,12 +192,12 @@ export async function handleActivityList(request: Request, env: Env): Promise<Re
   let mineAll: Array<Record<string, unknown>> = [];
   if (g.viewer.id) {
     const mine = await env.DB.prepare(
-      `SELECT id, mode, province, title, url, status, reject_reason, created_at, reviewed_at FROM activities
+      `SELECT id, mode, province, title, url, descr, ends_at, content_md, anon, carrier, status, reject_reason, created_at, reviewed_at FROM activities
        WHERE mode != 'chat' AND submitted_by = ?1 AND (carrier = ?2 OR carrier = '') AND (province = ?3 OR province = '')
          AND (status = 'pending' OR (status IN ('open', 'rejected') AND reviewed_at > ?4))
        ORDER BY created_at DESC LIMIT 50`,
     ).bind(g.viewer.id, carrier, province, Date.now() - 30 * 86400 * 1000).all<ActRow>();
-    mineAll = mine.results.map((r) => ({ id: r.id, mode: r.mode || 'official', province: r.province, title: r.title, url: r.url || null, status: r.status, reject_reason: r.reject_reason, created_at: r.created_at, reviewed_at: r.reviewed_at }));
+    mineAll = mine.results.map((r) => ({ id: r.id, mode: r.mode || 'official', province: r.province, title: r.title, url: r.url || null, descr: r.descr || null, ends_at: r.ends_at, content_md: r.content_md || null, anon: !!r.anon, carrier: r.carrier, status: r.status, reject_reason: r.reject_reason, created_at: r.created_at, reviewed_at: r.reviewed_at }));
     minePending = mineAll.filter((r) => r.status === 'pending');
   }
 
@@ -439,7 +439,8 @@ export async function handleActivityDelete(request: Request, env: Env, id: strin
   ).bind(id).first<ActRow>();
   if (!row) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
   if (row.submitted_by !== g.viewer.id) return fail(ERR.FORBIDDEN, 'FORBIDDEN', 403);
-  if (row.status !== 'pending') return fail(ERR.VALIDATION_ERROR, 'INVALID_STATUS', 400);
+  // pending=撤回；rejected=清理后重投（编辑=删旧重提的回退路径）；open/expired 不可自删
+  if (row.status !== 'pending' && row.status !== 'rejected') return fail(ERR.VALIDATION_ERROR, 'INVALID_STATUS', 400);
 
   await env.DB.prepare('DELETE FROM activities WHERE id = ?1').bind(id).run();
   await deleteActivityQr(env, row.qr_key ?? null);
