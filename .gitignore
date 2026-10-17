@@ -10,12 +10,14 @@ pages-dist/data/
 
 # 调研/验证用途，不入库
 参考项目/
+参考/
 _verify_*.py
 Temp/
 
 # 运行产物（本地缓存 / 日志，运行时自动重建）
 local_cache/
 logs
+log
 
 # wrangler files
 .wrangler
