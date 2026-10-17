@@ -309,6 +309,15 @@ function skeletonHTML() {
 /* ─────────────── 侧边导航（Tabs 组件宿主，对齐 config：滑动指示器 + data-view） ─────────────── */
 let chTabs = null;
 
+/* 资料卡/通知中心「在线沟通」深链事件：已在本页时 sessionStorage 路径不会重入 onEnter
+   （hash 未变化），notify.js 派发 cmn:cardhub-view 直达对应视图；页外场景 chTabs 为 null 自然忽略 */
+window.addEventListener("cmn:cardhub-view", (e) => {
+  try {
+    const v = e.detail && e.detail.view;
+    if ((v === "me" || v === "convs") && chTabs && S.user) chTabs.activate(v);
+  } catch { /* 隐私模式忽略 */ }
+});
+
 /** 当前视图对应的 nav view id */
 function navViewId() {
   if (S.view === "overview") return "overview";

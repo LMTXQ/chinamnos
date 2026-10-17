@@ -198,7 +198,8 @@ async function onPanelClick(e) {
     const chview = go.dataset.chview || "";
     closePanel();
     if (dest === "/cardhub" && chview) {
-      try { sessionStorage.setItem("ntf_cardhub_view", chview); } catch { /* 隐私模式忽略 */ }
+      goCardhubView(chview);
+      return;
     }
     if (window.Shell && window.Shell.navigate) window.Shell.navigate(dest);
     else location.hash = dest;
@@ -236,3 +237,17 @@ async function onPanelClick(e) {
 document.addEventListener("click", (e) => {
   if (e.target.closest("#ntfBell")) openPanel();
 });
+
+/* 跳蚤市集视图深链（通知中心与资料卡「在线沟通」共用）：
+   页外 → sessionStorage 交接（cardhub onEnter 读取）；已在页内 → navigate 不会重入
+   onEnter（hash 未变化），派发自定义事件由 cardhub.js 监听直达对应视图 */
+export function goCardhubView(view) {
+  try { sessionStorage.setItem("ntf_cardhub_view", view); } catch { /* 隐私模式忽略 */ }
+  if (location.hash === "#/cardhub") {
+    window.dispatchEvent(new CustomEvent("cmn:cardhub-view", { detail: { view } }));
+  } else if (window.Shell && window.Shell.navigate) {
+    window.Shell.navigate("/cardhub");
+  } else {
+    location.hash = "/cardhub";
+  }
+}

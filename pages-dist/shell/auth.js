@@ -12,7 +12,7 @@ import { esc } from "./shell.js";
 import { icon, mountIcons, toast, withPending } from "./ui.js";
 import { api, pbkdf2Base64, randomSalt, DEFAULT_ITER } from "./api.js";
 import { getPubConfig } from "./pubcfg.js";
-import { bellHTML, refreshBell } from "./notify.js";
+import { bellHTML, refreshBell, goCardhubView } from "./notify.js";
 
 const TURNSTILE_SITEKEY = "0x4AAAAAAFFH8cKk2ttfupI-";
 /* 本地开发环境跳过 Turnstile（localhost 不在 sitekey 域名白名单，widget 必然失败） */
@@ -75,6 +75,11 @@ const AUTH_CSS = `
 .auth-profile-ct .btn{flex:none;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--sub);font-size:12px;cursor:pointer;transition:.15s}
 .auth-profile-ct .btn:hover{border-color:var(--acc);color:var(--acc)}
 .auth-profile-none{font-size:12px;color:var(--sub);padding:12px;border:1px dashed var(--line);border-radius:10px;text-align:center}
+/* 资料卡「在线沟通」按钮行（跳转跳蚤市集会话收件箱） */
+.auth-profile-actions{display:flex;margin-top:10px}
+.auth-profile-actions .btn{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px;border-radius:10px;border:none;font-size:13.5px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,var(--acc),var(--acc-deep));color:#fff;box-shadow:0 4px 14px color-mix(in oklab,var(--acc) 35%,transparent);transition:filter .15s}
+.auth-profile-actions .btn:hover{filter:brightness(1.08)}
+.auth-profile-actions .btn svg{width:15px;height:15px}
 /* ── 账号设置表单 ── */
 .auth-ct-list{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:12px;background:color-mix(in oklab,var(--surface-2) 55%,transparent);border:1px solid color-mix(in oklab,var(--line) 70%,transparent)}
 .auth-ct-row{display:flex;align-items:center;gap:8px}
@@ -365,7 +370,9 @@ export const Auth = {
       ${(p.contacts || []).map((c) => `
         <div class="auth-profile-ct"><span class="t">${CT_LABELS[c.type] || "其他"}</span><code>${esc(c.value)}</code>
         <button class="btn ghost" data-act="copyUid" data-val="${esc(c.value)}" style="flex:none;padding:6px 10px;margin-left:auto">复制</button></div>`).join("")
-        || `<div class="auth-profile-none">该用户未公开联系方式</div>`}`;
+        || `<div class="auth-profile-none">该用户未公开联系方式</div>`}
+      ${Auth.isLoggedIn() ? `<div class="auth-profile-actions"><button class="btn primary" data-act="profileChat" data-uid="${esc(p.id)}"><i data-icon="message"></i>在线沟通</button></div>` : ""}`;
+    mountIcons(body);
   },
 };
 
@@ -681,6 +688,12 @@ document.addEventListener("click", (e) => {
   }
   if (act === "authChangePwd") { closeDrop(); resetState.step = "code"; Auth.openChangePassword(); return; }
   if (act === "authAdmin") { closeDrop(); Shell.navigate("/admin"); return; }
+  if (act === "profileChat") {
+    /* 资料卡「在线沟通」：跳转跳蚤市集会话收件箱（会话由帖子发起，收件箱内可见与该用户的既有会话） */
+    closeModal();
+    goCardhubView("convs");
+    return;
+  }
 });
 
 /* ─────────────── 刷新所有已挂载的 auth 容器 ─────────────── */
