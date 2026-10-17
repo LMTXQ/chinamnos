@@ -7,6 +7,7 @@ import { notify } from '../mail/notifier';
 import { deleteProofs, proofRows } from '../cardhub/proofs';
 import { serializePost, type PostRow } from '../cardhub/projection';
 import { getPublicProfile } from '../auth/public-profile';
+import { pushNotification } from '../common/notifications';
 
 /** 管理端列表允许的帖子状态白名单（'*' 表示全部） */
 const POST_STATUSES = new Set(['pending', 'open', 'rejected', 'closed', 'expired']);
@@ -213,6 +214,11 @@ export async function handleReviewPost(request: Request, env: Env, id: string): 
     const template = approve ? 'review_approved' : 'review_rejected';
     void notify(env, user.email, template, { title: post.title, reason: approve ? '' : reason }).catch(() => {});
   }
+  await pushNotification(env, post.user_id,
+    approve ? 'post_approved' : 'post_rejected',
+    id,
+    approve ? `你的帖子「${post.title}」已通过审核` : `你的帖子「${post.title}」未通过审核`,
+    approve ? '已通过管理组审核并上架展示。' : `驳回原因：${reason || '未填写'}`);
 
   await audit(env, request, g.viewer, {
     action: approve ? 'review_post' : 'reject_post',
@@ -234,8 +240,8 @@ export async function handleAdminClosePost(request: Request, env: Env, id: strin
   if (g instanceof Response) return g;
 
   const post = await env.DB.prepare(
-    'SELECT id, title, status FROM posts WHERE id = ?1',
-  ).bind(id).first<{ id: string; title: string; status: string }>();
+    'SELECT id, user_id, title, status FROM posts WHERE id = ?1',
+  ).bind(id).first<{ id: string; user_id: string; title: string; status: string }>();
   if (!post) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
   if (post.status !== 'open') return fail(ERR.VALIDATION_ERROR, 'NOT_OPEN', 400);
 
@@ -243,6 +249,9 @@ export async function handleAdminClosePost(request: Request, env: Env, id: strin
   await env.DB.prepare(
     `UPDATE posts SET status = 'closed', closed_at = ?1, close_reason = 'admin_takedown', updated_at = ?1, pinned_at = NULL WHERE id = ?2`,
   ).bind(now, id).run();
+  await pushNotification(env, post.user_id, 'post_closed', id,
+    `你的帖子「${post.title}」已被管理组下架`,
+    '帖子因违反站点规则或管理需要被下架，如有疑问可通过工单联系管理组。');
 
   await audit(env, request, g.viewer, {
     action: 'close_post',

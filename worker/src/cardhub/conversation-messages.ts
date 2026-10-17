@@ -4,6 +4,7 @@ import { guard } from '../common/auth';
 import { ulid } from '../common/crypto';
 import { IMG_URL_HOSTS } from '../common/img-hosts';
 import { notify } from '../mail/notifier';
+import { pushNotification, markNotificationsReadByRef } from '../common/notifications';
 
 const MAX_MSG = 20;
 const RETENTION_MS = 60 * 86400 * 1000; // 聊天记录保留 60 天（cron 删除 + 读路径过滤双保险）
@@ -59,6 +60,9 @@ export async function handleConversationDetail(request: Request, env: Env, convI
      WHERE conversation_id = ?1 AND created_at >= ?2 ORDER BY created_at ASC`,
   ).bind(convId, Date.now() - RETENTION_MS).all();
 
+  // DM 已读联动：打开对话详情即把该对话的站内新消息通知标为已读
+  await markNotificationsReadByRef(env, g.viewer.id, convId);
+
   return ok({
     conversation: { id: conv.id, post_id: conv.post_id, title: conv.title, status: conv.status, buyer_name: conv.buyer_name, msg_count: conv.msg_count },
     myRole: isSeller ? 'seller' : 'buyer',
@@ -98,11 +102,20 @@ export async function handleReplyMessage(request: Request, env: Env, convId: str
     `UPDATE conversations SET msg_count = msg_count + 1, updated_at = ?1 WHERE id = ?2`,
   ).bind(now, convId).run();
 
+  const plain = stripImageUrlLines(text); // 图片 URL 不进邮件/站内通知正文
+
   // 邮件通知对方（双方均为登录用户，登录后在会话收件箱查看）
   const otherEmail = isSeller ? (conv.buyer_email as string) : (await env.DB.prepare('SELECT email FROM users WHERE id = ?1').bind(conv.post_owner as string).first<{ email: string }>())?.email;
   if (otherEmail) {
-    const plain = stripImageUrlLines(text); // 图片 URL 不进邮件通知正文
     void notify(env, otherEmail, 'conversation_new_message', { title: conv.title as string, body: plain || '（发送了图片）', sender: senderRole }).catch(() => {});
+  }
+
+  // 站内通知对方（铃铛红点；打开对话详情时自动标已读）
+  const otherUserId = isSeller ? (conv.buyer_user_id as string) : (conv.post_owner as string);
+  if (otherUserId) {
+    await pushNotification(env, otherUserId, 'dm_message', convId,
+      '来自交易对话的新消息',
+      `「${conv.title as string}」有新消息：${plain ? plain.slice(0, 80) : '（发送了图片）'}`);
   }
 
   return ok({ sent: true });

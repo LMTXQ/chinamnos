@@ -4,6 +4,7 @@ import { guard } from './common/auth';
 import { hitLimit } from './common/ratelimit';
 import { audit } from './common/audit';
 import { randomBase62 } from './common/crypto';
+import { pushNotification } from './common/notifications';
 // ─────────────────────────────────────────────────────────────
 // 导航链接系统（工具箱等通用导航页）
 // ─────────────────────────────────────────────────────────────
@@ -149,8 +150,8 @@ export async function handleNavReview(request: Request, env: Env, id: string): P
   const reason = cleanStr(body.reason, 200);
 
   const row = await env.DB.prepare(
-    `SELECT id, title, status FROM nav_links WHERE id = ?1`,
-  ).bind(id).first<{ id: string; title: string; status: string }>();
+    `SELECT id, title, status, submitted_by FROM nav_links WHERE id = ?1`,
+  ).bind(id).first<{ id: string; title: string; status: string; submitted_by: string | null }>();
   if (!row) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
   if (row.status !== 'pending') return fail(ERR.VALIDATION_ERROR, 'NOT_PENDING', 400);
   if (!approve && !reason) return fail(ERR.VALIDATION_ERROR, 'REASON_REQUIRED', 400);
@@ -159,6 +160,13 @@ export async function handleNavReview(request: Request, env: Env, id: string): P
   await env.DB.prepare(
     `UPDATE nav_links SET status = ?1, reject_reason = ?2, reviewer_id = ?3, reviewed_at = ?4 WHERE id = ?5`,
   ).bind(approve ? 'open' : 'rejected', approve ? null : reason, g.viewer.id, now, id).run();
+  if (row.submitted_by) {
+    await pushNotification(env, row.submitted_by,
+      approve ? 'link_approved' : 'link_rejected',
+      id,
+      approve ? `你提交的工具「${row.title}」已通过审核` : `你提交的工具「${row.title}」未通过审核`,
+      approve ? '已通过站长审核，将随下一轮站点数据更新公开展示（约 0-8 小时）。' : `驳回原因：${reason || '未填写'}`);
+  }
   void audit(env, request, g.viewer, { action: 'nav_review', targetType: 'nav', targetId: id, detail: { title: row.title, approve, reason: reason || undefined } }).catch(() => {});
 
   return ok({ status: approve ? 'open' : 'rejected' });

@@ -6,6 +6,7 @@ import { randomBase62 } from './common/crypto';
 import { audit } from './common/audit';
 import { getPublicProfiles } from './auth/public-profile';
 import { decodeDataUrl } from './cardhub/proofs';
+import { pushNotification } from './common/notifications';
 
 /* 情报酒馆（原活动集锦）：资费页「情报酒馆」tab 的双模式信息聚合（用户提交 → 管理员审核 → 公开展示）。
    mode=official 官方活动推广：沿用原活动语义（主链接必填、二维码/截止选填、按运营商维度）；
@@ -96,7 +97,7 @@ function parseLinks(v: unknown, mainUrl: string): ActLink[] | 'invalid' {
 }
 
 /* 防御解析落库 links JSON（损坏或结构变化时静默降级为空数组，读路径不因脏数据 500） */
-function safeLinks(s: string | null): ActLink[] {
+export function safeLinks(s: string | null): ActLink[] {
   if (!s) return [];
   try {
     const arr = JSON.parse(s);
@@ -109,7 +110,7 @@ function safeLinks(s: string | null): ActLink[] {
 }
 
 /* 列表摘要：剥离 md 语法取前 EXCERPT_LEN 字（代码块/图片剔除，链接保留文字，连续空白归一） */
-function mdExcerpt(md: string): string {
+export function mdExcerpt(md: string): string {
   const text = md
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
@@ -185,17 +186,22 @@ export async function handleActivityList(request: Request, env: Env): Promise<Re
     };
   });
 
+  /* 我的投稿（三态区数据源）：待审 + 最近 30 天已审结（带 status/reject_reason）；
+     mine_pending 保留旧字段仅为部署过渡期旧前端的待审区兼容 */
   let minePending: Array<Record<string, unknown>> = [];
+  let mineAll: Array<Record<string, unknown>> = [];
   if (g.viewer.id) {
     const mine = await env.DB.prepare(
-      `SELECT id, mode, province, title, url, created_at FROM activities
-       WHERE mode != 'chat' AND submitted_by = ?1 AND status = 'pending' AND (carrier = ?2 OR carrier = '') AND (province = ?3 OR province = '')
-       ORDER BY created_at DESC`,
-    ).bind(g.viewer.id, carrier, province).all<ActRow>();
-    minePending = mine.results.map((r) => ({ id: r.id, mode: r.mode || 'official', province: r.province, title: r.title, url: r.url || null, created_at: r.created_at }));
+      `SELECT id, mode, province, title, url, status, reject_reason, created_at, reviewed_at FROM activities
+       WHERE mode != 'chat' AND submitted_by = ?1 AND (carrier = ?2 OR carrier = '') AND (province = ?3 OR province = '')
+         AND (status = 'pending' OR (status IN ('open', 'rejected') AND reviewed_at > ?4))
+       ORDER BY created_at DESC LIMIT 50`,
+    ).bind(g.viewer.id, carrier, province, Date.now() - 30 * 86400 * 1000).all<ActRow>();
+    mineAll = mine.results.map((r) => ({ id: r.id, mode: r.mode || 'official', province: r.province, title: r.title, url: r.url || null, status: r.status, reject_reason: r.reject_reason, created_at: r.created_at, reviewed_at: r.reviewed_at }));
+    minePending = mineAll.filter((r) => r.status === 'pending');
   }
 
-  return ok({ items, mine_pending: minePending });
+  return ok({ items, mine: mineAll, mine_pending: minePending });
 }
 
 /* ── 收藏（登录用户私有数据；act_favorites 独立于 posts.favorites） ── */
@@ -562,7 +568,7 @@ export async function handleAdminActivityReview(request: Request, env: Env, id: 
   if (!approve && !reason) return fail(ERR.VALIDATION_ERROR, 'REASON_REQUIRED', 400, { field: 'reason' });
 
   const row = await env.DB.prepare(
-    'SELECT id, title, status FROM activities WHERE id = ?1',
+    'SELECT id, mode, submitted_by, title, status FROM activities WHERE id = ?1',
   ).bind(id).first<ActRow>();
   if (!row) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
   if (row.status !== 'pending') return fail(ERR.VALIDATION_ERROR, 'NOT_PENDING', 400);
@@ -571,6 +577,15 @@ export async function handleAdminActivityReview(request: Request, env: Env, id: 
   await env.DB.prepare(
     `UPDATE activities SET status = ?1, reject_reason = ?2, reviewer_id = ?3, reviewed_at = ?4 WHERE id = ?5`,
   ).bind(approve ? 'open' : 'rejected', approve ? null : reason, g.viewer.id, now, id).run();
+
+  // 站内通知提交者（尽力而为；情报与社群共用本端点，按 mode 区分文案与 kind）
+  const isChat = (row.mode || 'official') === 'chat';
+  const noun = isChat ? '社群' : '情报';
+  await pushNotification(env, row.submitted_by,
+    approve ? (isChat ? 'chat_approved' : 'act_approved') : (isChat ? 'chat_rejected' : 'act_rejected'),
+    id,
+    approve ? `你提交的${noun}「${row.title}」已通过审核` : `你提交的${noun}「${row.title}」未通过审核`,
+    approve ? '已通过管理组审核，将随下一轮站点数据更新公开展示（约 0-8 小时）。' : `驳回原因：${reason || '未填写'}`);
 
   await audit(env, request, g.viewer, {
     action: approve ? 'review_activity' : 'reject_activity',
@@ -587,7 +602,7 @@ export async function handleAdminActivityRetire(request: Request, env: Env, id: 
   if (g instanceof Response) return g;
 
   const row = await env.DB.prepare(
-    'SELECT id, title, status FROM activities WHERE id = ?1',
+    'SELECT id, mode, submitted_by, title, status FROM activities WHERE id = ?1',
   ).bind(id).first<ActRow>();
   if (!row) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
   if (row.status !== 'open') return fail(ERR.VALIDATION_ERROR, 'NOT_OPEN', 400);
@@ -596,6 +611,12 @@ export async function handleAdminActivityRetire(request: Request, env: Env, id: 
   await env.DB.prepare(
     `UPDATE activities SET status = 'retired', reviewer_id = ?1, reviewed_at = ?2 WHERE id = ?3`,
   ).bind(g.viewer.id, now, id).run();
+
+  // 站内通知提交者：已被管理组下架
+  const isChat = (row.mode || 'official') === 'chat';
+  await pushNotification(env, row.submitted_by, isChat ? 'act_retired' : 'act_retired', id,
+    `你提交的${isChat ? '社群' : '情报'}「${row.title}」已被管理组下架`,
+    '管理组已将该内容下架（不再公开展示）。如有疑问请通过工单中心联系管理组。');
 
   await audit(env, request, g.viewer, {
     action: 'retire_activity',
@@ -629,9 +650,20 @@ export async function handleAdminActivityDelete(request: Request, env: Env, id: 
   return ok({ deleted: true });
 }
 
-// Cron：到期活动 open → expired（读路径已有 ends_at 过滤双保险）
+// Cron：到期活动 open → expired（读路径已有 ends_at 过滤双保险）；对每条到期内容站内通知提交者
 export async function runActivitiesCron(env: Env): Promise<void> {
+  const now = Date.now();
+  const expired = await env.DB.prepare(
+    `SELECT id, mode, submitted_by, title FROM activities
+     WHERE status = 'open' AND ends_at IS NOT NULL AND ends_at < ?1 AND submitted_by IS NOT NULL`,
+  ).bind(now).all<{ id: string; mode: string | null; submitted_by: string; title: string }>();
   await env.DB.prepare(
     `UPDATE activities SET status = 'expired' WHERE status = 'open' AND ends_at IS NOT NULL AND ends_at < ?1`,
-  ).bind(Date.now()).run();
+  ).bind(now).run();
+  for (const r of expired.results || []) {
+    const isChat = (r.mode || 'official') === 'chat';
+    await pushNotification(env, r.submitted_by, 'act_expired', r.id,
+      `你提交的${isChat ? '社群' : '情报'}「${r.title}」已到期自动下展`,
+      '内容已到截止时间自动下展，不再公开展示。如需继续，欢迎重新投稿。');
+  }
 }

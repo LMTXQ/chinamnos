@@ -43,6 +43,8 @@ interface ChatRow {
   anon: number;
   submitted_by: string;
   created_at: number;
+  reject_reason?: string | null;
+  reviewed_at?: number | null;
   qr_key?: string | null;
   proof_key?: string | null;
 }
@@ -76,20 +78,26 @@ export async function handleCommunityList(request: Request, env: Env): Promise<R
     };
   });
 
-  // 我的待审（登录用户）：撤回入口用
+  // 我的投稿（三态区数据源）：待审 + 最近 30 天已审结（带 status/reject_reason）；
+  // mine_pending 保留旧字段仅为部署过渡期旧前端的待审区兼容
   let minePending: Array<Record<string, unknown>> = [];
+  let mineAll: Array<Record<string, unknown>> = [];
   const g = await guard(request, env, 'anon');
   if (!(g instanceof Response) && g.viewer.id) {
     const mine = await env.DB.prepare(
-      `SELECT id, chat_type, province, title, url, created_at FROM activities
-       WHERE mode = 'chat' AND submitted_by = ?1 AND status = 'pending' ORDER BY created_at DESC`,
-    ).bind(g.viewer.id).all<ChatRow>();
-    minePending = mine.results.map((r) => ({
+      `SELECT id, chat_type, province, title, url, status, reject_reason, created_at, reviewed_at FROM activities
+       WHERE mode = 'chat' AND submitted_by = ?1
+         AND (status = 'pending' OR (status IN ('open', 'rejected') AND reviewed_at > ?2))
+       ORDER BY created_at DESC LIMIT 50`,
+    ).bind(g.viewer.id, Date.now() - 30 * 86400 * 1000).all<ChatRow>();
+    mineAll = mine.results.map((r) => ({
       id: r.id, chat_type: r.chat_type || '其他', province: r.province,
-      title: r.title, url: r.url || null, created_at: r.created_at,
+      title: r.title, url: r.url || null, status: r.status, reject_reason: r.reject_reason,
+      created_at: r.created_at, reviewed_at: r.reviewed_at,
     }));
+    minePending = mineAll.filter((r) => r.status === 'pending');
   }
-  return ok({ items, mine_pending: minePending });
+  return ok({ items, mine: mineAll, mine_pending: minePending });
 }
 
 // POST /api/communities：提交社群（→ pending，管理组审核）

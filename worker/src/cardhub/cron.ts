@@ -1,6 +1,7 @@
 import type { Env } from '../common/env';
 import { notify } from '../mail/notifier';
 import { deleteProofs } from './proofs';
+import { pushNotification } from '../common/notifications';
 
 const DAY = 86400 * 1000;
 
@@ -12,10 +13,19 @@ export async function runCardhubCron(env: Env): Promise<void> {
   const threeDaysLaterMinus1d = now + 2 * DAY;
 
   // 1) 到期帖：open 且 expires_at < now → expired，同时记 closed_at（置顶帖随到期取消置顶）
-  const expRes = await env.DB.prepare(
+  // 先捕获将过期的行用于站内通知，再批量 UPDATE
+  const expiringRows = await env.DB.prepare(
+    `SELECT id, user_id, title FROM posts WHERE status = 'open' AND expires_at < ?1`,
+  ).bind(now).all<{ id: string; user_id: string; title: string }>();
+  await env.DB.prepare(
     `UPDATE posts SET status = 'expired', closed_at = ?1, pinned_at = NULL WHERE status = 'open' AND expires_at < ?2`,
   ).bind(now, now).run();
-  const expiredCount = expRes.meta.changes ?? 0;
+  const expiredCount = expiringRows.results?.length ?? 0;
+  for (const row of expiringRows.results || []) {
+    await pushNotification(env, row.user_id, 'post_expired', row.id,
+      `你的帖子「${row.title}」已到期下架`,
+      '帖子展示期已结束，已自动下架。');
+  }
 
   // 2) 关闭已过期/已关闭帖子的对话
   await env.DB.prepare(

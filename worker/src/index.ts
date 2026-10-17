@@ -4,6 +4,7 @@ import { handleOptions, withCors } from './common/cors';
 import { cachedGet } from './common/cache';
 import { handleMeta, handleAboutTimeline, handleAboutThanks, handleAboutLinks } from './common/meta';
 import { handleNotices } from './common/notices';
+import { handleNotificationsList, handleNotificationsRead } from './common/notifications';
 import { hitLimit } from './common/ratelimit';
 import { TEMPLATES } from './mail/templates';
 import { notify } from './mail/notifier';
@@ -39,6 +40,7 @@ import { handleProofImage } from './cardhub/proofs';
 import { handleCommunityList, handleCommunityCreate, handleCommunityDelete, handleCommunityProof } from './communities';
 import { handleCreateTicket, handleListTickets, handleTicketDetail, handleTicketReply, handleTicketClose, handleTicketApplyTemplate } from './tickets';
 import { handleNavLinks, handleNavSubmit, handleNavAdminList, handleNavReview, handleNavUpdate, handleNavDelete } from './nav';
+import { handleExportActs, handleExportChats, handleExportNavlinks } from './export';
 import { handlePendingPosts, handleListPosts, handleReviewPost, handleAdminClosePost, handleAdminDeletePost } from './admin/posts';
 import { handleListRelayRequests, handleRelayRequest } from './admin/relay';
 import { handleListUsers, handleBanUser, handleUnbanUser, handleSetUserRole, handleGetUserProfile, handleSetUserProfile, handleSetTitle } from './admin/users';
@@ -141,6 +143,16 @@ export default {
         resp = await cachedGet(request, ctx, 60, () => handleNavLinks(request, env)); // 公开导航，60s
       } else if (p === '/api/nav/links' && m === 'POST') {
         resp = await handleNavSubmit(request, env);
+      } else if (p === '/api/export/acts' && m === 'GET') {
+        resp = await cachedGet(request, ctx, 300, () => handleExportActs(request, env)); // 采集端烘焙源，边缘缓存 300s
+      } else if (p === '/api/export/chats' && m === 'GET') {
+        resp = await cachedGet(request, ctx, 300, () => handleExportChats(request, env));
+      } else if (p === '/api/export/navlinks' && m === 'GET') {
+        resp = await cachedGet(request, ctx, 300, () => handleExportNavlinks(request, env));
+      } else if (p === '/api/notifications' && m === 'GET') {
+        resp = await handleNotificationsList(request, env); // 本人最近 50 条 + 未读数
+      } else if (p === '/api/notifications/read' && m === 'POST') {
+        resp = await handleNotificationsRead(request, env); // 单条/全部已读
       } else if (p === '/api/mail/test' && m === 'POST') {
         resp = await handleMailTest(request, env);
       } else if (p === '/api/auth/send-code' && m === 'POST') {
