@@ -12,6 +12,7 @@ import { esc } from "./shell.js";
 import { icon, mountIcons, toast, withPending } from "./ui.js";
 import { api, pbkdf2Base64, randomSalt, DEFAULT_ITER } from "./api.js";
 import { getPubConfig } from "./pubcfg.js";
+import { bellHTML, refreshBell } from "./notify.js";
 
 const TURNSTILE_SITEKEY = "0x4AAAAAAFFH8cKk2ttfupI-";
 /* 本地开发环境跳过 Turnstile（localhost 不在 sitekey 域名白名单，widget 必然失败） */
@@ -224,6 +225,7 @@ export const Auth = {
       const t = (user.title || "").trim() || DEFAULT_TITLE;
       const titleBadge = `<span class="auth-badge title">${esc(t)}</span>`;
       container.innerHTML = `
+        <span class="auth-area">${bellHTML()}
         <div class="auth-chip" id="authChip" tabindex="0" aria-haspopup="true">
           ${avatar}
           <span class="auth-chip-meta">
@@ -231,11 +233,12 @@ export const Auth = {
             <span class="auth-chip-badges">${roleBadge}${titleBadge}</span>
           </span>
           <i data-icon="chevronDown" class="auth-chip-caret"></i>
-        </div>`;
+        </div></span>`;
     } else {
       container.innerHTML = `<button class="auth-btn" id="authLoginBtn"><i data-icon="user"></i><span>登录</span></button>`;
     }
     mountIcons(container);
+    if (user) refreshBell(); // 登录态同步未读红点（30s 节流）
   },
 
   openLogin() {

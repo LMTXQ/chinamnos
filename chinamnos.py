@@ -4046,6 +4046,22 @@ class CloudflareStorage(StorageBackend):
                         old_ann = None
                     if old_ann is not None:
                         files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            # 社区内容静态化兜底（acts/chats，同 announce 语义）：轻量轮 buffer 无烘焙数据，
+            # 全量替换制下缺它 = 线上文件被删 → 前端回落 Worker API 前多一次 404
+            for bake_key in (f'{carrier_key}/acts.json', f'{carrier_key}/chats.json'):
+                bake_rel = f'{self.path_prefix}/{bake_key}'
+                if bake_rel not in files:
+                    bake_manifest_key = f'/{bake_rel}'
+                    if skip_unchanged_download and bake_manifest_key in cached_manifest:
+                        cached_hashes[bake_rel] = cached_manifest[bake_manifest_key]
+                    else:
+                        try:
+                            old_bake = self.read_json(bake_key)
+                        except RuntimeError as e:
+                            logger.warning(f'Cloudflare: 补全旧社区数据失败 ({bake_key}): {e}')
+                            old_bake = None
+                        if old_bake is not None:
+                            files[bake_rel] = json.dumps(old_bake, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
             active_codes = self._get_active_province_codes(carrier_key)
             for prov in PROVINCES:
                 if prov['code'] not in active_codes:
@@ -4098,6 +4114,20 @@ class CloudflareStorage(StorageBackend):
                     old_stats = None
                 if old_stats is not None:
                     files[stats_rel] = json.dumps(old_stats, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+
+        tools_rel = f'{self.path_prefix}/tools.json'
+        if tools_rel not in files:
+            tools_manifest_key = f'/{tools_rel}'
+            if skip_unchanged_download and tools_manifest_key in cached_manifest:
+                cached_hashes[tools_rel] = cached_manifest[tools_manifest_key]
+            else:
+                try:
+                    old_tools = self.read_json('tools.json')
+                except RuntimeError as e:
+                    logger.warning(f'Cloudflare: 补全旧社区工具数据失败: {e}')
+                    old_tools = None
+                if old_tools is not None:
+                    files[tools_rel] = json.dumps(old_tools, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
 
         if deleted_count:
             logger.info(f'Cloudflare: 清理 {deleted_count} 个非配置省份数据文件')
@@ -4600,6 +4630,19 @@ class EdgeOneStorage(StorageBackend):
                 if old_ann is not None:
                     files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                     filled += 1
+            # 社区内容静态化兜底（acts/chats，同 announce 语义）：轻量轮 buffer 无烘焙数据，
+            # 整站替换制下缺它 = 线上文件被删 → 前端回落 Worker API 前多一次 404
+            for bake_key in (f'{carrier_key}/acts.json', f'{carrier_key}/chats.json'):
+                bake_rel = f'{self.path_prefix}/{bake_key}'
+                if bake_rel not in files:
+                    try:
+                        old_bake = self.read_json(bake_key)
+                    except Exception as e:
+                        logger.warning(f'EdgeOne: 补全旧社区数据失败 ({bake_key}): {e}')
+                        old_bake = None
+                    if old_bake is not None:
+                        files[bake_rel] = json.dumps(old_bake, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+                        filled += 1
             for prov in PROVINCES:
                 if prov['code'] not in self._get_active_province_codes(carrier_key):
                     continue
@@ -4624,6 +4667,17 @@ class EdgeOneStorage(StorageBackend):
                 old_stats = None
             if old_stats is not None:
                 files[stats_rel] = json.dumps(old_stats, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+                filled += 1
+
+        tools_rel = f'{self.path_prefix}/tools.json'
+        if tools_rel not in files:
+            try:
+                old_tools = self.read_json('tools.json')
+            except Exception as e:
+                logger.warning(f'EdgeOne: 补全旧社区工具数据失败: {e}')
+                old_tools = None
+            if old_tools is not None:
+                files[tools_rel] = json.dumps(old_tools, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                 filled += 1
 
         logger.info(f'EdgeOne: 准备直传 {len(files)} 个文件（基线补全 {filled}）...')
@@ -4869,6 +4923,74 @@ def refresh_public_config(storage):
         logger.info(f'[public-config] 快照已生成（{ok_cnt}/{len(_PUBLIC_CONFIG_SOURCES)} 项）')
     except Exception as e:
         logger.warning(f'[public-config] 快照写入失败(不影响本次部署): {str(e)[:100]}')
+
+
+# ════════════════════════════════════════════════════════════
+#  社区内容静态化烘焙（acts/chats/tools）
+# ════════════════════════════════════════════════════════════
+#  情报酒馆/唠嗑聚落/工具宝库公开列表低频变更、不追求实时：从 Worker 导出端点
+#  (/api/export/acts|chats|navlinks) 拉取公开数据烘焙为静态 JSON 随三线部署：
+#    ▸ data/{carrier}/acts.json ：该运营商条目 + 全运营商通用（carrier=''），前端按省过滤
+#    ▸ data/{carrier}/chats.json：同上（mode=chat 社群）
+#    ▸ data/tools.json          ：全部集合 open 导航链接
+#  投稿/待审/收藏等登录态私有数据仍走 Worker 实时接口；静态文件缺失时前端自动回落
+#  Worker API（同公告模式 fetch 失败回退），数据无损。
+#  轻量轮（announce-only）不烘焙：部署层兜底逻辑会继承线上旧文件防误删。
+
+
+def _bake_fetch(s, path):
+    """拉取导出端点（4 次尝试 + 指数退避 ±抖动，同 refresh_public_config 口径）；失败返回 None"""
+    last_err = None
+    for attempt in range(4):
+        try:
+            r = s.get(PUBLIC_CONFIG_API_BASE + path, timeout=30)
+            r.raise_for_status()
+            j = r.json()
+            if j.get('code') != 0:   # Worker 统一信封 {code, message, data}
+                raise RuntimeError(f'envelope code={j.get("code")}')
+            return j.get('data') or {}
+        except Exception as e:
+            last_err = e
+            if attempt < 3:
+                wait = min(2 ** (attempt + 1), 8) * (0.8 + 0.4 * random.random())
+                logger.warning(f'[bake] {path} 第 {attempt + 1} 次失败: {str(e)[:80]}，{wait:.1f}s 后重试')
+                time.sleep(wait)
+    logger.warning(f'[bake] {path} 拉取失败(4 次尝试仍失败，前端将回落 Worker 接口): {str(last_err)[:100]}')
+    return None
+
+
+def bake_community_data(storage, config, carrier_keys=None):
+    """社区内容静态化：拉取导出端点写 acts/chats/tools 快照进部署 buffer。
+    逐项尽力而为：任一端点/文件失败只跳过该项，不阻塞部署。"""
+    if carrier_keys is None:
+        carrier_keys = [k for k, v in (config.get('carriers') or {}).items() if v.get('enabled', True)]
+    s = requests.Session()
+    acts = _bake_fetch(s, '/api/export/acts')
+    chats = _bake_fetch(s, '/api/export/chats')
+    tools = _bake_fetch(s, '/api/export/navlinks')
+
+    if tools is not None:
+        try:
+            storage.write_json('tools.json', {'generated_at': now_iso(), 'items': tools.get('items') or []})
+        except Exception as e:
+            logger.warning(f'[bake] tools.json 写入失败(不影响本次部署): {str(e)[:100]}')
+
+    act_items = (acts or {}).get('items') or []
+    chat_items = (chats or {}).get('items') or []
+    gen = now_iso()
+    for ck in carrier_keys:
+        # 只保留该运营商条目 + 全运营商/全站通用条目（carrier=''），与 API 视图同构，前端再按省过滤
+        sub_acts = [x for x in act_items if x.get('carrier') == ck or not x.get('carrier')]
+        sub_chats = [x for x in chat_items if x.get('carrier') == ck or not x.get('carrier')]
+        try:
+            storage.write_json(f'{ck}/acts.json', {'generated_at': gen, 'items': sub_acts})
+        except Exception as e:
+            logger.warning(f'[bake] {ck}/acts.json 写入失败(不影响本次部署): {str(e)[:100]}')
+        try:
+            storage.write_json(f'{ck}/chats.json', {'generated_at': gen, 'items': sub_chats})
+        except Exception as e:
+            logger.warning(f'[bake] {ck}/chats.json 写入失败(不影响本次部署): {str(e)[:100]}')
+    logger.info(f'[bake] 社区内容烘焙完成: acts={len(act_items)} chats={len(chat_items)} tools={len((tools or {}).get("items") or [])}')
 
 
 def create_storage(config):
@@ -6079,6 +6201,7 @@ def rebuild_stats_from_history(config, storage):
     crawl_duration_ms = int((time.time() - crawl_start) * 1000)
     _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_duration_ms, all_success_count, all_fail_count, old_stats)
     refresh_public_config(storage)
+    bake_community_data(storage, config)
     storage.commit(message=f'stats rebuild {crawl_time[:10]}', skip_unchanged_download=True)
     logger.info(f'stats 重建完成，耗时 {crawl_duration_ms / 1000:.2f}s')
 
@@ -6095,6 +6218,7 @@ def run():
         for ck in carriers:
             storage.set_active_provinces(ck, all_prov_codes)
         refresh_public_config(storage)
+        bake_community_data(storage, config, carrier_keys=carriers.keys())
         storage.commit(message='frontend deploy', skip_unchanged_download=True)
         logger.info('前端文件部署完成')
         return
@@ -6222,6 +6346,7 @@ def run():
         logger.warning('[announce] 公告采集异常(已忽略，不影响资费): %s' % str(_ann_e)[:120])
 
     refresh_public_config(storage)
+    bake_community_data(storage, config)
     storage.commit(message=f'tariff update {crawl_time[:10]}')
     _log_rss('部署完成')
 

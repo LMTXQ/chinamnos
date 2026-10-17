@@ -798,13 +798,27 @@ async function actTabRefresh() {
     provName = chProvName();
   }
   if (!carrierKey) { actState.items = []; actState.mine = []; actState.favItems = []; return; }
-  const [r, fr] = await Promise.all([
-    api.activitiesList(carrierKey, provName),
-    Auth.isLoggedIn() ? api.activityMyFavorites() : Promise.resolve(null), // 收藏列表并行拉取
+  /* 公开列表静态源优先（data/{carrier}/acts.json，随部署更新；按当前省客户端过滤），
+     失败/缺失回落 Worker API（同公告模式）。mine（我的投稿三态）与收藏是登录态私有数据，始终走 Worker。 */
+  const [actStatic, actApi, fr] = await Promise.all([
+    fetchTimeout(`./data/${carrierKey}/acts.json?v=${Date.now()}`, { cache: "no-store" }).then((x) => x.json()).catch(() => null),
+    Auth.isLoggedIn() ? api.activitiesList(carrierKey, provName) : Promise.resolve(null),
+    Auth.isLoggedIn() ? api.activityMyFavorites() : Promise.resolve(null),
   ]);
-  if (r.ok) { actState.items = r.data.items || []; actState.mine = r.data.mine_pending || []; }
+  if (actStatic && Array.isArray(actStatic.items)) {
+    actState.items = actStatic.items.filter((x) => !x.province || x.province === provName);
+    actState.mine = (actApi && actApi.ok) ? (actApi.data.mine || []) : [];
+  } else if (actApi && actApi.ok) {
+    actState.items = actApi.data.items || [];
+    actState.mine = actApi.data.mine || [];
+  }
   actState.favItems = (fr && fr.ok) ? (fr.data.items || []) : [];
   actState.favLoaded = Auth.isLoggedIn();
+  /* 收藏标记 merge：静态源 favorited 恒 false，按收藏列表回填（API 源自带时幂等） */
+  if (actState.items.length && actState.favItems.length) {
+    const favIds = new Set(actState.favItems.map((x) => x.id));
+    actState.items.forEach((x) => { x.favorited = favIds.has(x.id); });
+  }
 }
 
 function actTabRefreshAndRender() {
@@ -1070,16 +1084,25 @@ function actRenderBody() {
   const provName = chProvName();
   const brand = (CARRIER_BRAND[currentCarrier] || {}).name || "";
   const guide = actState.mode === "guide";
+  /* 我的投稿三态区：审核中（可撤回）/ 已通过·待展示 / 未通过（含驳回原因） */
+  const mineSt = (st) => st === "open" ? '<span class="act-mine-st ok">已通过 · 待展示</span>'
+    : st === "rejected" ? '<span class="act-mine-st no">未通过</span>'
+    : '<span class="act-mine-st pend">审核中</span>';
   const mineHTML = (actState.mine || []).length ? `
     <div class="act-mine">
-      <div class="act-mine-t">${icon("clock")} 我的提交（审核中，通过后公开展示）</div>
-      ${actState.mine.map((m) => `
+      <div class="act-mine-t">${icon("clock")} 我的投稿（${actState.mine.length}）· 通过后将随下一轮站点数据更新展示（约 0-8 小时）</div>
+      ${actState.mine.map((m) => {
+        const st = m.status || "pending";
+        return `
       <div class="act-mine-item">
         <span class="act-mode-badge sm ${m.mode === "guide" ? "guide" : "official"}">${m.mode === "guide" ? "攻略" : "官方"}</span>
         <span class="act-badge ${m.province ? "act-prov" : "act-nat"}">${m.province ? esc(m.province) : "全国"}</span>
         <span class="act-mine-title">${esc(m.title)}</span>
-        <button type="button" class="btn ghost sm" data-act="actWithdraw" data-id="${esc(m.id)}">撤回</button>
-      </div>`).join("")}
+        ${mineSt(st)}
+        ${st === "pending" ? `<button type="button" class="btn ghost sm" data-act="actWithdraw" data-id="${esc(m.id)}">撤回</button>` : ""}
+        ${st === "rejected" && m.reject_reason ? `<span class="act-mine-reason">驳回原因：${esc(m.reject_reason)}</span>` : ""}
+      </div>`;
+      }).join("")}
     </div>` : "";
   /* 收藏视图：favItems（收藏时间倒序，服务端已滤 open）；常规视图：按 mode + 关键词客户端过滤 */
   const favView = actState.filter === "fav";
@@ -1249,7 +1272,7 @@ async function actSubmit() {
     toast(cn[r.error] || fieldMsg || r.error || "提交失败");
     return;
   }
-  toast("已提交，等待管理组审核");
+  toast("已提交，进入审核；通过后将随下一轮站点数据更新展示（约 0-8 小时）");
   actDraftClear(actState.mode);
   actState.form = { title: "", url: "", scope: f.scope, descr: "", ends: "", qr: null, allCarriers: false, content: "", anon: false };
   actState.panelOpen = false;
@@ -1343,8 +1366,18 @@ async function chatTabRefresh() {
     provName = chProvName();
   }
   if (!carrierKey) { chatState.items = []; chatState.mine = []; return; }
-  const r = await api.communitiesList(carrierKey, provName);
-  if (r.ok) { chatState.items = r.data.items || []; chatState.mine = r.data.mine_pending || []; }
+  /* 公开列表静态源优先（同情报酒馆），失败/缺失回落 Worker API；mine 始终走 Worker */
+  const [chatStatic, chatApi] = await Promise.all([
+    fetchTimeout(`./data/${carrierKey}/chats.json?v=${Date.now()}`, { cache: "no-store" }).then((x) => x.json()).catch(() => null),
+    Auth.isLoggedIn() ? api.communitiesList(carrierKey, provName) : Promise.resolve(null),
+  ]);
+  if (chatStatic && Array.isArray(chatStatic.items)) {
+    chatState.items = chatStatic.items.filter((x) => !x.province || x.province === provName);
+    chatState.mine = (chatApi && chatApi.ok) ? (chatApi.data.mine || []) : [];
+  } else if (chatApi && chatApi.ok) {
+    chatState.items = chatApi.data.items || [];
+    chatState.mine = chatApi.data.mine || [];
+  }
 }
 function chatTabRefreshAndRender() {
   return chatTabRefresh().then(() => {
@@ -1419,15 +1452,24 @@ function chatRenderBody() {
   if (!el) return;
   const provName = chProvName();
   const brand = (CARRIER_BRAND[currentCarrier] || {}).shortName || "";
+  /* 我的收录三态区（与情报酒馆同款三态） */
+  const chatMineSt = (st) => st === "open" ? '<span class="act-mine-st ok">已通过 · 待展示</span>'
+    : st === "rejected" ? '<span class="act-mine-st no">未通过</span>'
+    : '<span class="act-mine-st pend">审核中</span>';
   const mineHTML = (chatState.mine || []).length ? `
     <div class="act-mine">
-      <span class="act-mine-t">我的待审（${chatState.mine.length}）</span>
-      ${chatState.mine.map((m) => `
+      <span class="act-mine-t">我的收录（${chatState.mine.length}）· 通过后将随下一轮站点数据更新展示（约 0-8 小时）</span>
+      ${chatState.mine.map((m) => {
+        const st = m.status || "pending";
+        return `
       <div class="act-mine-row">
         <span class="act-mine-badge">${esc(m.chat_type || "其他")}</span>
         <span class="act-mine-title">${esc(m.title)}</span>
-        <button type="button" class="btn ghost sm" data-act="chatWithdraw" data-id="${esc(m.id)}">撤回</button>
-      </div>`).join("")}
+        ${chatMineSt(st)}
+        ${st === "pending" ? `<button type="button" class="btn ghost sm" data-act="chatWithdraw" data-id="${esc(m.id)}">撤回</button>` : ""}
+        ${st === "rejected" && m.reject_reason ? `<span class="act-mine-reason">驳回原因：${esc(m.reject_reason)}</span>` : ""}
+      </div>`;
+      }).join("")}
     </div>` : "";
   /* 种类筛选 chips（从当前数据归纳，保证与列表内容一致）+ 关键词过滤 */
   const types = [...new Set(chatState.items.map((a) => a.chat_type || "其他"))];
@@ -1546,7 +1588,7 @@ async function chatSubmit() {
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : (r.error?.message || (r.data && r.data.message) || "提交失败，请稍后再试")); return; }
   chatState.panelOpen = false;
   chatState.form = { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", anon: false, qr: null, proof: null };
-  toast("已提交，等待管理组审核");
+  toast("已提交，进入审核；通过后将随下一轮站点数据更新展示（约 0-8 小时）");
   chatTabRefreshAndRender();
 }
 

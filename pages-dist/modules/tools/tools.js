@@ -8,7 +8,7 @@
    ═══════════════════════════════════════════════════════════════ */
 "use strict";
 
-import { Shell, esc, theme, ensureStylesheet } from "../../shell/shell.js";
+import { Shell, esc, fetchTimeout, theme, ensureStylesheet } from "../../shell/shell.js";
 import { icon, mountIcons, toast, showPageLoading, hidePageLoading } from "../../shell/ui.js";
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
@@ -131,9 +131,17 @@ async function loadLinks() {
   const body = $("toolsBody");
   if (body) body.innerHTML = '<div class="loading" style="padding:50px 0">加载中…</div>';
   try {
-    /* 快照优先（data/public-config.json 的 nav_links，下一轮采集更新）；缺失回落 Worker 接口 */
-    const pc = await getPubConfig();
-    let items = pc && pc.nav_links && pc.nav_links[COLLECTION] && pc.nav_links[COLLECTION].items;
+    /* 静态源优先：data/tools.json（每轮随部署烘焙，全集合含 collection 字段，按当前集合过滤）；
+       缺失回落 public-config 快照 nav_links → Worker 接口（三级回退，数据无损） */
+    let items = null;
+    try {
+      const sj = await fetchTimeout(`./data/tools.json?v=${Date.now()}`, { cache: "no-store" }).then((x) => x.json());
+      if (sj && Array.isArray(sj.items)) items = sj.items.filter((x) => x.collection === COLLECTION);
+    } catch { /* 静态源缺失回落 */ }
+    if (!items) {
+      const pc = await getPubConfig();
+      items = pc && pc.nav_links && pc.nav_links[COLLECTION] && pc.nav_links[COLLECTION].items;
+    }
     if (!items) {
       const r = await api.request(`/api/nav/links?collection=${COLLECTION}`, { method: "GET" });
       items = (r.ok && r.data && r.data.items) || [];
@@ -165,7 +173,7 @@ function toggleSubmitPanel() {
   panel.innerHTML = `
     <div class="tl-panel-card rise">
       <h3 class="tl-panel-title"><i data-icon="plus"></i>提交工具</h3>
-      <p class="tl-panel-sub">提交后由站长审核，通过后上架展示。请确保链接安全可靠。</p>
+      <p class="tl-panel-sub">提交后由站长审核，通过后随下一轮站点数据更新上架展示（约 0-8 小时）。请确保链接安全可靠。</p>
       <div class="tl-form">
         <label>名称 <span class="req">*</span><input id="navFTitle" maxlength="30" placeholder="如：运营商话费查询"></label>
         <label>链接 <span class="req">*</span><input id="navFUrl" maxlength="500" placeholder="https:// 或站内路径 /config"></label>

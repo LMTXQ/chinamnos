@@ -2312,6 +2312,15 @@ Shell.registerPage({
     chTabs = new Tabs($("chNav"), onNavChange);
     chTabs.activate(navViewId());
 
+    /* 通知中心「前往查看」深链：直达我的发布 / 会话收件箱（notify.js 点击时写入） */
+    try {
+      const ntfView = sessionStorage.getItem("ntf_cardhub_view");
+      if (ntfView === "me" || ntfView === "convs") {
+        sessionStorage.removeItem("ntf_cardhub_view");
+        if (S.user) chTabs.activate(ntfView);
+      }
+    } catch { /* 隐私模式忽略 */ }
+
     /* 主题按钮 */
     const themeBtn = $("chThemeBtn");
     const paint = () => {

@@ -766,7 +766,7 @@ async function onActReview(id, approve) {
     if (reason === null) return;
     if (!reason.trim()) { toast("请填写拒绝原因"); return; }
   } else {
-    const okGo = await admConfirm({ title: "通过该投稿", message: "通过后将公开展示在资费页「情报酒馆」。", okText: "确认通过" });
+    const okGo = await admConfirm({ title: "通过该投稿", message: "通过后将随下一轮站点数据更新公开展示（约 0-8 小时），并会给投稿用户发送站内通知。", okText: "确认通过" });
     if (okGo !== true) return;
   }
   const r = await api.adminActivityReview(id, !!approve, reason.trim());
