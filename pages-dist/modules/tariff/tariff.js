@@ -759,7 +759,7 @@ const ACT_MODE_LABELS = { official: "官方活动", guide: "个人攻略" };
 const ACT_MD_MAX = 10000;  // 攻略正文上限（与后端 MD_MAX 对齐）
 const ACT_DRAFT_KEYS = { official: "act_official", guide: "act_guide" };
 const actState = {
-  items: [], mine: [], favItems: [], favLoaded: false, panelOpen: false, mode: "official", filter: "", q: "", editor: null,
+  items: [], mine: [], favItems: [], favLoaded: false, panelOpen: false, mode: "official", filter: "", q: "", scope: "", editor: null,
   form: { title: "", url: "", scope: "prov", descr: "", ends: "", qr: null, allCarriers: false, content: "", anon: false },
 };
 
@@ -1035,11 +1035,13 @@ async function actOpenDetail(id) {
   mountIcons($("modalBody"));
 }
 
-/* 列表过滤（收藏/模式 chips + 关键词搜索，均客户端执行）：actRenderBody 与搜索局部重绘共用 */
+/* 列表过滤（收藏/模式 chips + 范围/关键词，均客户端执行）：actRenderBody 与搜索局部重绘共用 */
 function actFilteredItems() {
   const favView = actState.filter === "fav";
   const listSource = favView ? actState.favItems : actState.items;
   let items = (favView || !actState.filter) ? listSource : listSource.filter((a) => a.mode === actState.filter);
+  if (actState.scope === "nat") items = items.filter((a) => !a.province);      // 全国·通用（无省份标记）
+  else if (actState.scope === "prov") items = items.filter((a) => !!a.province); // 本省收录
   const q = actState.q.trim().toLowerCase();
   if (q) items = items.filter((a) => `${a.title || ""}\n${a.descr || ""}\n${a.excerpt || ""}`.toLowerCase().includes(q));
   return items;
@@ -1137,8 +1139,15 @@ function actRenderBody() {
     <p class="page-sub">${esc(provName)} · ${esc(brand)} · 官方活动推广与个人攻略发布聚合（投稿后经管理组审核展示）</p>
     ${mineHTML}
     <div class="act-toolbar">
-      <input type="search" class="inp act-search" id="actSearch" placeholder="搜索标题 / 简介…" value="${esc(actState.q)}">
-      ${actFilterChips()}
+      <div class="act-tb-left">
+        <input type="search" class="inp act-search" id="actSearch" placeholder="搜索标题 / 简介…" value="${esc(actState.q)}">
+        <select class="sel act-scope-sel" id="actScopeSel" title="按范围筛选">
+          <option value="">全部范围</option>
+          <option value="nat" ${actState.scope === "nat" ? "selected" : ""}>全国·通用</option>
+          <option value="prov" ${actState.scope === "prov" ? "selected" : ""}>本省${provName ? `（${esc(provName)}）` : ""}</option>
+        </select>
+        ${actFilterChips()}
+      </div>
       <button type="button" class="btn primary" data-act="actTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${actState.panelOpen ? "收起投稿面板" : "投稿情报"}</span></button>
     </div>
     ${panel}
@@ -1153,6 +1162,8 @@ function actRenderBody() {
       sT = setTimeout(() => { actState.q = sInp.value; actRenderList(); }, 200);
     });
   }
+  const scopeSel = $("actScopeSel");
+  if (scopeSel) scopeSel.addEventListener("change", () => { actState.scope = scopeSel.value; actRenderList(); });
   /* 行内面板输入同步草稿（innerHTML 重建后重绑） */
   const bind = (id, key) => { const n = $(id); if (n) n.addEventListener("input", () => { actState.form[key] = n.value; actDraftSave(); }); };
   bind("actFTitle", "title"); bind("actFUrl", "url"); bind("actFDescr", "descr"); bind("actFEnds", "ends");
@@ -1315,7 +1326,7 @@ function actOnBodyClick(e) {
    ▸ 无匿名、无截止时间（社群长期有效）；提交者实名（点头像看资料卡） */
 const CHAT_TYPES = ["论坛", "QQ群", "微信群", "贴吧", "纸飞机", "其他"];
 const chatState = {
-  items: [], mine: [], panelOpen: false, q: "", typeFilter: "",
+  items: [], mine: [], panelOpen: false, q: "", typeFilter: "", scope: "",
   form: { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", qr: null, proof: null },
 };
 
@@ -1377,10 +1388,12 @@ function chatCardHTML(a) {
   </div>`;
 }
 
-/* 列表过滤（种类 chips + 关键词搜索，均客户端执行）：chatRenderBody 与搜索局部重绘共用 */
+/* 列表过滤（种类/范围 chips 下拉 + 关键词搜索，均客户端执行）：chatRenderBody 与搜索局部重绘共用 */
 function chatFilteredItems() {
   let items = chatState.items;
   if (chatState.typeFilter) items = items.filter((a) => (a.chat_type || "其他") === chatState.typeFilter);
+  if (chatState.scope === "nat") items = items.filter((a) => !a.province);      // 全国·通用
+  else if (chatState.scope === "prov") items = items.filter((a) => !!a.province); // 本省收录
   const q = chatState.q.trim().toLowerCase();
   if (q) items = items.filter((a) => `${a.title || ""}\n${a.descr || ""}\n${a.chat_id || ""}`.toLowerCase().includes(q));
   return items;
@@ -1457,8 +1470,15 @@ function chatRenderBody() {
     <p class="page-sub">${esc(provName)} · ${esc(brand)} · 交流社群聚合（论坛 / QQ 群 / 微信群 / 贴吧 / 纸飞机，投稿后经管理组审核展示）</p>
     ${mineHTML}
     <div class="act-toolbar">
-      <input type="search" class="inp act-search" id="chatSearch" placeholder="搜索社群名称 / 说明 / 群号…" value="${esc(chatState.q)}">
-      <div class="act-filter">${typeChips}</div>
+      <div class="act-tb-left">
+        <input type="search" class="inp act-search" id="chatSearch" placeholder="搜索社群名称 / 说明 / 群号…" value="${esc(chatState.q)}">
+        <select class="sel act-scope-sel" id="chatScopeSel" title="按范围筛选">
+          <option value="">全部范围</option>
+          <option value="nat" ${chatState.scope === "nat" ? "selected" : ""}>全国·通用</option>
+          <option value="prov" ${chatState.scope === "prov" ? "selected" : ""}>本省${provName ? `（${esc(provName)}）` : ""}</option>
+        </select>
+        <div class="act-filter">${typeChips}</div>
+      </div>
       <button type="button" class="btn primary" data-act="chatTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${chatState.panelOpen ? "收起收录面板" : "收录社群"}</span></button>
     </div>
     <div class="act-filter"><span class="hint">收录你运营或知晓的交流社群；入群请遵守群规并自行甄别信息，站点仅提供信息展示渠道</span></div>
@@ -1474,6 +1494,8 @@ function chatRenderBody() {
       sT = setTimeout(() => { chatState.q = sInp.value; chatRenderList(); }, 200);
     });
   }
+  const scopeSel = $("chatScopeSel");
+  if (scopeSel) scopeSel.addEventListener("change", () => { chatState.scope = scopeSel.value; chatRenderList(); });
   /* 表单输入同步内存草稿（innerHTML 重建后重绑；草稿不落 localStorage，切 tab 保留） */
   const bindV = (id, key) => { const n = $(id); if (n) { n.value = chatState.form[key] || ""; n.addEventListener("input", () => { chatState.form[key] = n.value; }); } };
   bindV("chatFTitle", "title"); bindV("chatFUrl", "url"); bindV("chatFId", "chatId"); bindV("chatFDescr", "descr");

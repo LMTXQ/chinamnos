@@ -2690,6 +2690,9 @@
 /* 模式筛选 chips（全部/官方活动/个人攻略）+ 关键词搜索框 */
 .act-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .act-search { flex: 1 1 auto; min-width: 180px; max-width: 420px; padding: 6px 12px; font-size: 13px; border-radius: 999px; }
+/* 工具栏左侧组（搜索+范围下拉+chips）：贴排布防 space-between 拉出大空白 */
+.act-tb-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.act-scope-sel { width: auto; flex: 0 0 auto; padding: 6px 10px; font-size: 13px; border-radius: 999px; }
 .act-filter-chip {
   padding: 5px 14px; border-radius: 999px; cursor: pointer; font-size: 12.5px; font-weight: 600;
   border: 1px solid var(--line); background: var(--surface); color: var(--sub);
