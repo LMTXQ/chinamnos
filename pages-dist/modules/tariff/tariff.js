@@ -1119,14 +1119,18 @@ function actRenderBody() {
   const provName = chProvName();
   const brand = (CARRIER_BRAND[currentCarrier] || {}).name || "";
   const guide = actState.mode === "guide";
-  /* 我的投稿三态区：审核中（可撤回）/ 已通过·待展示 / 未通过（含驳回原因） */
+  /* 我的投稿三态区：默认折叠，点击折叠头展开（actState.mineOpen 记忆展开态） */
   const mineSt = (st) => st === "open" ? '<span class="act-mine-st ok">已通过 · 待展示</span>'
     : st === "rejected" ? '<span class="act-mine-st no">未通过</span>'
     : '<span class="act-mine-st pend">审核中</span>';
+  const mineOpen = !!actState.mineOpen;
   const mineHTML = (actState.mine || []).length ? `
-    <div class="act-mine">
-      <div class="act-mine-t">${icon("clock")} 我的投稿（${actState.mine.length}）· 通过后将随下一轮站点数据更新展示（约 0-8 小时）</div>
-      ${actState.mine.map((m) => {
+    <div class="act-mine${mineOpen ? " open" : ""}">
+      <button type="button" class="act-mine-head" data-act="actMineToggle" aria-expanded="${mineOpen}">
+        <span class="act-mine-t">${icon("clock")} 我的投稿（${actState.mine.length}）<i class="act-mine-sub">通过后将随下一轮站点数据更新展示（约 0-8 小时）</i></span>
+        <i data-icon="chevronDown" class="act-mine-caret"></i>
+      </button>
+      ${mineOpen ? `<div class="act-mine-list">${actState.mine.map((m) => {
         const st = m.status || "pending";
         return `
       <div class="act-mine-item">
@@ -1139,7 +1143,7 @@ function actRenderBody() {
         ${st === "rejected" ? `<button type="button" class="btn ghost sm" data-act="actMineDel" data-id="${esc(m.id)}">删除</button>` : ""}
         ${st === "rejected" && m.reject_reason ? `<span class="act-mine-reason">驳回原因：${esc(m.reject_reason)}</span>` : ""}
       </div>`;
-      }).join("")}
+      }).join("")}</div>` : ""}
     </div>` : "";
   /* 收藏视图：favItems（收藏时间倒序，服务端已滤 open）；常规视图：按 mode + 关键词客户端过滤 */
   const favView = actState.filter === "fav";
@@ -1357,6 +1361,9 @@ function actOnBodyClick(e) {
     });
   } else if (a === "actEdit") {
     actEditMine(actEl.dataset.id);
+  } else if (a === "actMineToggle") {
+    actState.mineOpen = !actState.mineOpen;
+    actRenderBody();
   } else if (a === "actQrPick") {
     const fi = $("actFQr");
     if (fi) fi.click();
@@ -1543,14 +1550,18 @@ function chatRenderBody() {
   if (!el) return;
   const provName = chProvName();
   const brand = (CARRIER_BRAND[currentCarrier] || {}).shortName || "";
-  /* 我的收录三态区（与情报酒馆同款三态） */
+  /* 我的收录三态区（与情报酒馆同款三态；默认折叠，点击展开） */
   const chatMineSt = (st) => st === "open" ? '<span class="act-mine-st ok">已通过 · 待展示</span>'
     : st === "rejected" ? '<span class="act-mine-st no">未通过</span>'
     : '<span class="act-mine-st pend">审核中</span>';
+  const chatMineOpen = !!chatState.mineOpen;
   const mineHTML = (chatState.mine || []).length ? `
-    <div class="act-mine">
-      <span class="act-mine-t">我的收录（${chatState.mine.length}）· 通过后将随下一轮站点数据更新展示（约 0-8 小时）</span>
-      ${chatState.mine.map((m) => {
+    <div class="act-mine${chatMineOpen ? " open" : ""}">
+      <button type="button" class="act-mine-head" data-act="chatMineToggle" aria-expanded="${chatMineOpen}">
+        <span class="act-mine-t">我的收录（${chatState.mine.length}）<i class="act-mine-sub">通过后将随下一轮站点数据更新展示（约 0-8 小时）</i></span>
+        <i data-icon="chevronDown" class="act-mine-caret"></i>
+      </button>
+      ${chatMineOpen ? `<div class="act-mine-list">${chatState.mine.map((m) => {
         const st = m.status || "pending";
         return `
       <div class="act-mine-row">
@@ -1563,7 +1574,7 @@ function chatRenderBody() {
         ${st === "open" ? `<button type="button" class="btn ghost sm" data-act="chatRetireReq" data-id="${esc(m.id)}" data-title="${esc(m.title)}">申请撤回</button>` : ""}
         ${st === "rejected" && m.reject_reason ? `<span class="act-mine-reason">驳回原因：${esc(m.reject_reason)}</span>` : ""}
       </div>`;
-      }).join("")}
+      }).join("")}</div>` : ""}
     </div>` : "";
   /* 种类筛选 chips（从当前数据归纳，保证与列表内容一致）+ 关键词过滤 */
   const types = [...new Set(chatState.items.map((a) => a.chat_type || "其他"))];
@@ -1736,6 +1747,9 @@ function chatOnBodyClick(e) {
     chatEditMine(actEl.dataset.id);
   } else if (a === "chatRetireReq") {
     chatRetireReq(actEl.dataset.id, actEl.dataset.title);
+  } else if (a === "chatMineToggle") {
+    chatState.mineOpen = !chatState.mineOpen;
+    chatRenderBody();
   } else if (a === "chatAuthor") {
     Auth.showProfileCard(actEl.dataset.uid);
   } else if (a === "chatQr") {
