@@ -1463,6 +1463,24 @@ function chatRenderIfActive() {
   if (el && el.classList.contains("active")) chatRenderBody();
 }
 
+/* 我的收录「申请撤回」：已展示（open）的收录不可自删，走工单系统申请管理组核实下架
+   （分类默认「其他」，机制同情报卡片反馈：sessionStorage 预填 + 跳工单中心） */
+function chatRetireReq(id, title) {
+  const t = String(title || "");
+  const okGo = confirm(`将前往工单中心申请撤回已展示的收录「${t}」，由管理组核实后下架。继续？`);
+  if (!okGo) return;
+  try {
+    sessionStorage.setItem("chinamnos_ticket_prefill", JSON.stringify({
+      category: "其他",
+      source: "tariff",
+      title: `申请撤回收录：${t}`.slice(0, 60),
+      content: `收录标题：${t}\n收录编号：${id}\n申请类型：撤回我在唠嗑聚落的收录（已通过展示）\n\n撤回原因：\n`,
+      banner: "已带入收录撤回申请预设信息（来自唠嗑聚落我的收录），请核对补充后提交",
+    }));
+  } catch { /* sessionStorage 不可用时跳转后手填 */ }
+  Shell.navigate("/ticket");
+}
+
 function chatCardHTML(a) {
   const scopeBadge = a.carrier
     ? `<span class="act-badge ${a.province ? "act-prov" : "act-nat"}">${a.province ? esc(a.province) : "全国"}</span>`
@@ -1542,6 +1560,7 @@ function chatRenderBody() {
         ${st === "pending" ? `<button type="button" class="btn ghost sm" data-act="chatWithdraw" data-id="${esc(m.id)}">撤回</button>` : ""}
         ${st !== "open" ? `<button type="button" class="btn ghost sm" data-act="chatEdit" data-id="${esc(m.id)}">编辑</button>` : ""}
         ${st === "rejected" ? `<button type="button" class="btn ghost sm" data-act="chatMineDel" data-id="${esc(m.id)}">删除</button>` : ""}
+        ${st === "open" ? `<button type="button" class="btn ghost sm" data-act="chatRetireReq" data-id="${esc(m.id)}" data-title="${esc(m.title)}">申请撤回</button>` : ""}
         ${st === "rejected" && m.reject_reason ? `<span class="act-mine-reason">驳回原因：${esc(m.reject_reason)}</span>` : ""}
       </div>`;
       }).join("")}
@@ -1715,6 +1734,8 @@ function chatOnBodyClick(e) {
     });
   } else if (a === "chatEdit") {
     chatEditMine(actEl.dataset.id);
+  } else if (a === "chatRetireReq") {
+    chatRetireReq(actEl.dataset.id, actEl.dataset.title);
   } else if (a === "chatAuthor") {
     Auth.showProfileCard(actEl.dataset.uid);
   } else if (a === "chatQr") {
