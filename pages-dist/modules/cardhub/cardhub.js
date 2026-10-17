@@ -2347,18 +2347,22 @@ Shell.registerPage({
     chTabs = new Tabs($("chNav"), onNavChange);
     chTabs.activate(navViewId());
 
-    /* 通知中心/资料卡「在线沟通」深链：直达我的发布 / 会话收件箱（notify.js 点击时写入） */
+    /* 通知中心/资料卡「在线沟通」深链：直达我的发布 / 会话收件箱 / 指定会话。
+       不走 chTabs.activate（S.view 残留会触发 onNavChange 回环拦截导致不渲染），
+       直接按目标视图执行与 onNavChange 相同的动作 */
     try {
       const ntfView = sessionStorage.getItem("ntf_cardhub_view");
-      if (ntfView === "me" || ntfView === "convs") {
-        sessionStorage.removeItem("ntf_cardhub_view");
-        if (S.user) chTabs.activate(ntfView);
+      if (S.user && (ntfView === "convs" || ntfView === "me")) {
+        if (ntfView === "convs") { S.view = "convs"; S.convList = null; render(); loadConvs(); }
+        else { S.view = "me"; render(); }
       }
-      /* 私信直达会话：资料卡「在线沟通」创建/复用会话后写入，activate 会话列表后直接打开该会话 */
+      sessionStorage.removeItem("ntf_cardhub_view");
+      /* 私信直达会话：资料卡「在线沟通」创建/复用会话后写入，无条件打开该会话
+         （S.view 可能有上次停留的残留值，任何残留都让位给深链目标） */
       const ntfConv = sessionStorage.getItem("ntf_cardhub_conv");
       if (ntfConv && S.user) {
         sessionStorage.removeItem("ntf_cardhub_conv");
-        if (S.view === "conv" || S.view === "convs" || !S.view) openConv(ntfConv);
+        openConv(ntfConv);
       }
     } catch { /* 隐私模式忽略 */ }
 
