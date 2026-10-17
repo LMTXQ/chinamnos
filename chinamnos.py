@@ -2487,6 +2487,7 @@ class CtccApi(_BaseCarrierApi):
         all_items = []
         seen_ids = set()
         failed_categories = []
+        failed_cat_keys = []   # 失败板块的结构化键：供 partial 省沿用旧快照条目
         province_diag = {'name': prov_name, 'code': prov_code, 'categories': []}
 
         name_to_type2 = {'套餐': '1', '加装包': '2', '营销活动': '3'}
@@ -2509,6 +2510,7 @@ class CtccApi(_BaseCarrierApi):
                 board_fail_reason = str(e)[:100]
                 logger.warning(f'  [直连] 板块 {l1_name} 查询失败: {e}')
                 failed_categories.append(l1_name)
+                failed_cat_keys.append({'attr': '1', 't1': '1', 't2': t2_code})
                 province_diag['categories'].append({
                     'attr': '1', 't1': '1', 't2': t2_code,
                     'pages': 0, 'items': 0,
@@ -2551,6 +2553,7 @@ class CtccApi(_BaseCarrierApi):
             'total': len(all_items),
             'status': status,
             'failed_categories': failed_categories,
+            'failed_cat_keys': failed_cat_keys,
             'content_duplicate_ratio': compute_content_duplicate_ratio(all_items),
             'diag': province_diag,
         }
@@ -3799,7 +3802,7 @@ class StorageBackend:
         os.makedirs(os.path.dirname(fpath), exist_ok=True)
         tmp = fpath + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
         os.replace(tmp, fpath)
 
     def _cleanup_local_cache(self):
@@ -3957,7 +3960,7 @@ class CloudflareStorage(StorageBackend):
         return None
 
     def write_json(self, key, data):
-        body = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+        body = json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         self._buffer[f'{self.path_prefix}/{key}'] = body
         self._local_write(key, data)
         logger.debug(f'Cloudflare buffer 写入: {self.path_prefix}/{key} ({len(body)} bytes)')
@@ -4042,7 +4045,7 @@ class CloudflareStorage(StorageBackend):
                         logger.warning(f'Cloudflare: 补全旧公告失败 ({carrier_key}): {e}')
                         old_ann = None
                     if old_ann is not None:
-                        files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, indent=2).encode('utf-8')
+                        files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
             active_codes = self._get_active_province_codes(carrier_key)
             for prov in PROVINCES:
                 if prov['code'] not in active_codes:
@@ -4068,7 +4071,7 @@ class CloudflareStorage(StorageBackend):
                                 logger.warning(f'Cloudflare: 补全旧数据失败 ({key}): {e}')
                                 old_data = None
                             if old_data is not None:
-                                files[rel] = json.dumps(old_data, ensure_ascii=False, indent=2).encode('utf-8')
+                                files[rel] = json.dumps(old_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                                 continue
                         manifest_key = f'/{rel}'
                         if skip_unchanged_download and manifest_key in cached_manifest:
@@ -4080,7 +4083,7 @@ class CloudflareStorage(StorageBackend):
                             logger.warning(f'Cloudflare: 补全旧数据失败 ({key}): {e}')
                             old_data = None
                         if old_data is not None:
-                            files[rel] = json.dumps(old_data, ensure_ascii=False, indent=2).encode('utf-8')
+                            files[rel] = json.dumps(old_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
 
         stats_rel = f'{self.path_prefix}/stats.json'
         if stats_rel not in files:
@@ -4094,7 +4097,7 @@ class CloudflareStorage(StorageBackend):
                     logger.warning(f'Cloudflare: 补全旧 stats 失败: {e}')
                     old_stats = None
                 if old_stats is not None:
-                    files[stats_rel] = json.dumps(old_stats, ensure_ascii=False, indent=2).encode('utf-8')
+                    files[stats_rel] = json.dumps(old_stats, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
 
         if deleted_count:
             logger.info(f'Cloudflare: 清理 {deleted_count} 个非配置省份数据文件')
@@ -4329,7 +4332,7 @@ class GitHubStorage(StorageBackend):
             raise RuntimeError(f'GitHub 读取失败 ({key}): {e}')
 
     def write_json(self, key, data):
-        body = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+        body = json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         self._buffer[f'{self.path_prefix}/{key}'] = body
         self._local_write(key, data)
         logger.debug(f'GitHub buffer 写入: {self.path_prefix}/{key} ({len(body)} bytes)')
@@ -4399,7 +4402,7 @@ class GitHubStorage(StorageBackend):
                             logger.warning(f'GitHub: 补全旧数据失败 ({key}): {e}')
                             old_data = None
                         if old_data is not None:
-                            files[rel] = json.dumps(old_data, ensure_ascii=False, indent=2).encode('utf-8')
+                            files[rel] = json.dumps(old_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
 
         if not files and not to_delete:
             logger.warning('GitHub: 无文件需要提交')
@@ -4543,7 +4546,7 @@ class EdgeOneStorage(StorageBackend):
             return None
 
     def write_json(self, key, data):
-        body = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+        body = json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         self._buffer[f'{self.path_prefix}/{key}'] = body
         self._local_write(key, data)
         logger.debug(f'EdgeOne buffer 写入: {self.path_prefix}/{key} ({len(body)} bytes)')
@@ -4595,7 +4598,7 @@ class EdgeOneStorage(StorageBackend):
                     logger.warning(f'EdgeOne: 补全旧公告失败 ({carrier_key}): {e}')
                     old_ann = None
                 if old_ann is not None:
-                    files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, indent=2).encode('utf-8')
+                    files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                     filled += 1
             for prov in PROVINCES:
                 if prov['code'] not in self._get_active_province_codes(carrier_key):
@@ -4610,7 +4613,7 @@ class EdgeOneStorage(StorageBackend):
                             logger.warning(f'EdgeOne: 补全旧数据失败 ({key}): {e}')
                             old_data = None
                         if old_data is not None:
-                            files[rel] = json.dumps(old_data, ensure_ascii=False, indent=2).encode('utf-8')
+                            files[rel] = json.dumps(old_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                             filled += 1
         stats_rel = f'{self.path_prefix}/stats.json'
         if stats_rel not in files:
@@ -4620,7 +4623,7 @@ class EdgeOneStorage(StorageBackend):
                 logger.warning(f'EdgeOne: 补全旧 stats 失败: {e}')
                 old_stats = None
             if old_stats is not None:
-                files[stats_rel] = json.dumps(old_stats, ensure_ascii=False, indent=2).encode('utf-8')
+                files[stats_rel] = json.dumps(old_stats, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                 filled += 1
 
         logger.info(f'EdgeOne: 准备直传 {len(files)} 个文件（基线补全 {filled}）...')
@@ -5032,6 +5035,7 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
     all_items = []
     seen_ids = set()
     failed_categories = []
+    failed_cat_keys = []   # 失败分类的结构化键 (attr,t1,t2)：供 partial 省沿用旧快照条目
     province_diag = {'name': prov_name, 'code': prov_short, 'categories': []}
 
     # 设计决策：分类遍历不采用 ThreadPoolExecutor 并发，原因：
@@ -5070,7 +5074,6 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
         request_failures = 0
         prev_page_signature = None
         pagination_confirmed = None
-
         # 分页模式说明（代码可能随功能变化而调整，注释仅供参考）：
         #   - bulk: 只请求第1页，完全信任API一次返回全部数据，不翻页不对比。适用于已确认不分页的API。
         #   - page: 固定请求 max_pages 页，适用于已确认支持分页且数据量大的API。
@@ -5079,68 +5082,90 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
             pages_to_try = [1]
         else:
             pages_to_try = range(1, max_pages + 1)
-
-        for page in pages_to_try:
-            try:
-                extra_cat_params = {k: v for k, v in cat.items() if k.startswith('_')}
-                result = api.get_tariff_list(
-                    prov_code, attr, t1, t2,
-                    page=page, limit=page_size,
-                    retry_times=retry_times,
-                    retry_base_ms=retry_base_ms,
-                    retry_max_ms=retry_max_ms,
-                    retry_jitter=retry_jitter,
-                    **extra_cat_params,
-                )
-            except Exception as e:
-                cat_failed = True
-                cat_fail_reason = str(e)[:100]
-                request_failures += 1
-                total_retries += getattr(api, '_last_retry_count', 0)
-                logger.warning(f'  分类 {cat_desc} 第{page}页请求失败: {e}')
-                break
-
-            total_retries += getattr(api, '_last_retry_count', 0)
-
-            if not result or not result.get('data'):
-                if page == 1:
+        # 分类级重试：请求级重试(retry_times 次)耗尽仍失败时，整分类指数退避后重跑。
+        # 参数复用 crawl.retry_* 配置（与请求级同源，指数退避+封顶+抖动）；
+        # 已抓页的条目经 seen_ids 去重，重跑不重复入库；失败常见形态为瞬时限流/抖动，隔几十秒重试几乎必成
+        cat_attempt = 0
+        while True:
+            for page in pages_to_try:
+                try:
+                    extra_cat_params = {k: v for k, v in cat.items() if k.startswith('_')}
+                    result = api.get_tariff_list(
+                        prov_code, attr, t1, t2,
+                        page=page, limit=page_size,
+                        retry_times=retry_times,
+                        retry_base_ms=retry_base_ms,
+                        retry_max_ms=retry_max_ms,
+                        retry_jitter=retry_jitter,
+                        **extra_cat_params,
+                    )
+                except Exception as e:
                     cat_failed = True
-                    cat_fail_reason = '第1页无数据'
-                break
-
-            beans = result['data'].get('beans') or []
-            if not beans:
-                break
-
-            pages_fetched = page
-
-            for bean in beans:
-                items = standardize_bean(bean, prov_short, prov_name, attr, t1, t2, cmcc_code=prov_code, carrier=carrier_key)
-                for item in items:
-                    if item['id'] not in seen_ids:
-                        seen_ids.add(item['id'])
-                        all_items.append(item)
-                        cat_items.append(item)
-
-            if pagination_mode == 'auto':
-                n = len(beans)
-                if n < page_size:
+                    cat_fail_reason = str(e)[:100]
+                    request_failures += 1
+                    total_retries += getattr(api, '_last_retry_count', 0)
+                    logger.warning(f'  分类 {cat_desc} 第{page}页请求失败: {e}')
                     break
-                if n > page_size:
+
+                total_retries += getattr(api, '_last_retry_count', 0)
+
+                if not result or not result.get('data'):
+                    if page == 1:
+                        cat_failed = True
+                        cat_fail_reason = '第1页无数据'
                     break
-                cur_sig = hashlib.md5(json.dumps(beans, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
-                if pagination_confirmed is None:
-                    prev_page_signature = cur_sig
-                else:
-                    if cur_sig == prev_page_signature:
+
+                beans = result['data'].get('beans') or []
+                if not beans:
+                    break
+
+                pages_fetched = page
+
+                for bean in beans:
+                    items = standardize_bean(bean, prov_short, prov_name, attr, t1, t2, cmcc_code=prov_code, carrier=carrier_key)
+                    for item in items:
+                        if item['id'] not in seen_ids:
+                            seen_ids.add(item['id'])
+                            all_items.append(item)
+                            cat_items.append(item)
+
+                if pagination_mode == 'auto':
+                    n = len(beans)
+                    if n < page_size:
                         break
-                    pagination_confirmed = True
-                    prev_page_signature = cur_sig
+                    if n > page_size:
+                        break
+                    cur_sig = hashlib.md5(json.dumps(beans, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+                    if pagination_confirmed is None:
+                        prev_page_signature = cur_sig
+                    else:
+                        if cur_sig == prev_page_signature:
+                            break
+                        pagination_confirmed = True
+                        prev_page_signature = cur_sig
 
-            if pagination_mode != 'bulk' and page < max_pages:
-                jitter_offset = page_interval_ms / 1000 * 0.2 * (2 * random.random() - 1)
-                wait = max(0.05, page_interval_ms / 1000 + jitter_offset)
-                time.sleep(wait)
+                if pagination_mode != 'bulk' and page < max_pages:
+                    jitter_offset = page_interval_ms / 1000 * 0.2 * (2 * random.random() - 1)
+                    wait = max(0.05, page_interval_ms / 1000 + jitter_offset)
+                    time.sleep(wait)
+
+            if not cat_failed:
+                break
+            # 请求级重试耗尽仍失败 → 分类级指数退避后整类重跑（“第1页无数据”同待遇）
+            cat_attempt += 1
+            if cat_attempt > retry_times:
+                break
+            backoff = min(retry_base_ms * (2 ** (cat_attempt - 1)), retry_max_ms) / 1000
+            backoff = max(0.1, backoff * (1 + retry_jitter * (2 * random.random() - 1)))
+            logger.warning(f'  分类 {cat_desc} 请求级重试耗尽，{backoff:.1f}s 后整类重试（第{cat_attempt}/{retry_times}轮）: {cat_fail_reason}')
+            time.sleep(backoff)
+            cat_items = []
+            cat_failed = False
+            cat_fail_reason = None
+            cat_start = time.time()
+            pages_fetched = 0
+            prev_page_signature = None
+            pagination_confirmed = None
 
         cat_cost_ms = int((time.time() - cat_start) * 1000)
         meta = f'耗时{cat_cost_ms / 1000:.2f}s'
@@ -5153,6 +5178,7 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
 
         if cat_failed:
             failed_categories.append(cat_desc)
+            failed_cat_keys.append({'attr': attr, 't1': t1, 't2': t2})
             logger.warning(f'  分类 {cat_desc} 采集失败 ({meta})')
         elif cat_items:
             logger.info(f'  分类 {cat_desc}: {len(cat_items)} 个套餐 ({meta})')
@@ -5187,6 +5213,7 @@ def crawl_province(api, prov, config, carrier_key='cmcc'):
         'total': len(all_items),
         'status': status,
         'failed_categories': failed_categories,
+        'failed_cat_keys': failed_cat_keys,
         'content_duplicate_ratio': compute_content_duplicate_ratio(all_items),
         'diag': province_diag,
     }
@@ -5657,6 +5684,23 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
                 failed_cats = data.get('failed_categories', [])
                 result['partial_warning'] = {'province': prov_name, 'failed_categories': failed_cats}
                 logger.warning(f'  {prov_name}: 部分分类采集失败({len(failed_cats)}个), 继续走正常流程')
+                # 失败分类沿用旧快照条目（数据无损、杜绝假下架）：
+                # ▸ 旧数据来源与快照对比同源（prov_storage.read_json：缓冲→本地缓存→远端，均可取到上一轮）；
+                # ▸ 仅填补失败分类的缺口，已成功分类的新条目一律不动；同 id 以本轮新抓为准；
+                # ▸ 合并后再做波动检查，避免缺分类造成的假骤降误拦
+                failed_keys = {(k.get('attr'), k.get('t1'), k.get('t2')) for k in data.get('failed_cat_keys', [])}
+                if failed_keys and old_items:
+                    fresh_ids = {it['id'] for it in items}
+                    restored = 0
+                    for old_it in old_items:
+                        if ((old_it.get('tariff_attr', ''), old_it.get('type1', ''), old_it.get('type2', '')) in failed_keys
+                                and old_it.get('id') not in fresh_ids):
+                            items.append(old_it)
+                            fresh_ids.add(old_it['id'])
+                            restored += 1
+                    if restored:
+                        new_count = len(items)
+                        logger.warning(f'  {prov_name}: 失败分类沿用旧条目 {restored} 条（合计 {new_count} 条）')
 
             vol = check_volatility(old_count, new_count, carrier_cfg)
             if vol['level'] != 'normal':
