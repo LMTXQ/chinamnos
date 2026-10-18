@@ -1542,15 +1542,15 @@ async function onUnban(id, email) {
   if (r.ok) loadTab();
 }
 
-/** 设置用户头衔（≤12 字中英文均可；留空恢复默认「平平无奇的路人」；资料卡展示） */
+/** 设置用户头衔（总长 ≤26 字中英文均可，多个用「｜」分隔前端拆成多枚小徽章；留空恢复默认「平平无奇的路人」；资料卡展示） */
 async function onSetTitle(id, email, cur) {
   const title = await admConfirm({
-    title: "设置头衔", message: `为 ${email} 设置展示头衔，将显示在其个人资料卡。`,
-    input: true, value: cur, placeholder: cur ? "留空恢复默认" : "如：资费通 · 卡界老炮（≤12 字）",
+    title: "设置头衔", message: `为 ${email} 设置展示头衔，将显示在其个人资料卡。多个头衔用「｜」分隔（如：元老｜赞助者）。`,
+    input: true, value: cur, placeholder: cur ? "留空恢复默认" : "如：资费通 · 卡界老炮（≤26 字）",
     okText: "保存头衔",
   });
   if (title === null) return;
-  if (title.length > 12) { toast("头衔不能超过 12 个字"); return; }
+  if (title.length > 26) { toast("头衔总长不能超过 26 个字"); return; }
   const r = await api.adminSetTitle(id, title.trim());
   toast(r.ok ? (title.trim() ? "头衔已设置" : "已恢复默认头衔") : (r.error || "操作失败"));
   if (r.ok) loadTab();

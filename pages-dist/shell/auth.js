@@ -65,6 +65,7 @@ const AUTH_CSS = `
 .auth-profile-head{display:flex;align-items:center;gap:14px;padding:14px;margin-bottom:10px;border-radius:12px;background:color-mix(in oklab,var(--surface-2) 55%,transparent);border:1px solid color-mix(in oklab,var(--line) 70%,transparent)}
 .auth-profile-name{font-size:16px;font-weight:700;color:var(--txt)}
 .auth-profile-title{display:inline-block;font-size:11px;font-weight:600;color:var(--acc);background:color-mix(in oklab,var(--acc) 12%,transparent);padding:2px 8px;border-radius:999px;margin-top:4px}
+.auth-profile-title + .auth-profile-title{margin-left:6px}
 .auth-profile-uid{font-size:11px;color:var(--sub);margin-top:2px;word-break:break-all}
 .auth-profile-bio{font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.6}
 .auth-profile-ct{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:13px;color:var(--txt);margin-bottom:8px}
@@ -129,6 +130,7 @@ const AUTH_CSS = `
 .auth-drop-head .ae{font-size:13px;font-weight:700;color:var(--txt);word-break:break-all}
 .auth-drop-head .ar{font-size:11px;color:var(--sub);margin-top:2px}
 .auth-drop-title{display:inline-block;font-size:10.5px;font-weight:600;color:var(--acc);background:color-mix(in oklab,var(--acc) 12%,transparent);padding:2px 8px;border-radius:999px}
+.auth-drop-title + .auth-drop-title{margin-left:6px}
 .auth-drop-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:none;background:none;color:var(--txt);font-size:13px;border-radius:9px;cursor:pointer;text-align:left;transition:background .15s}
 .auth-drop-item:hover{background:var(--surface-2)}
 .auth-drop-item svg{width:16px;height:16px;color:var(--sub);flex-shrink:0}
@@ -229,7 +231,8 @@ export const Auth = {
         : user.role === "admin"
           ? `<span class="auth-badge admin"><i data-icon="shield"></i>管理员</span>`
           : "";
-      const t = (user.title || "").trim() || DEFAULT_TITLE;
+      // 多头衔「｜」分隔（管理端约定）：顶栏空间有限仅显示第一段，资料卡/下拉展示全部
+      const t = (user.title || "").trim().split(/[｜|]/).map((s) => s.trim()).filter(Boolean)[0] || DEFAULT_TITLE;
       const titleBadge = `<span class="auth-badge title">${esc(t)}</span>`;
       container.innerHTML = `
         <span class="auth-area">${bellHTML()}
@@ -354,6 +357,11 @@ export const Auth = {
     if (!body) return;
     if (!r.ok || !r.data) { body.innerHTML = '<p class="hint">资料获取失败</p>'; return; }
     const p = r.data;
+    // 多头衔「｜」分隔：资料卡全量展示，逐段渲染为独立小徽章
+    const titleChips = (p.title || "").trim().split(/[｜|]/).map((s) => s.trim()).filter(Boolean);
+    const titleHtml = titleChips.length
+      ? titleChips.map((s) => `<span class="auth-profile-title">${esc(s)}</span>`).join("")
+      : `<span class="auth-profile-title">平平无奇的路人</span>`;
     const avatar = p.avatar_v
       ? `<div class="auth-profile-avatar"><img src="${esc(api.avatarUrl(p.id, p.avatar_v))}" alt=""></div>`
       : `<div class="auth-profile-avatar">${esc((p.nickname || "?").charAt(0).toUpperCase())}</div>`;
@@ -362,7 +370,7 @@ export const Auth = {
         ${avatar}
         <div style="min-width:0">
           <div class="auth-profile-name">${esc(p.nickname || "未设置昵称")}</div>
-          <div class="auth-profile-title">${esc(p.title || "平平无奇的路人")}</div>
+          <div>${titleHtml}</div>
           <div class="auth-profile-uid">UID: ${esc(p.id)}</div>
         </div>
       </div>
@@ -618,11 +626,12 @@ function openDrop(chip) {
   if (!user) return;
   const d = getDrop();
   const roleLabel = user.role === "owner" ? "站长" : user.role === "admin" ? "管理员" : "普通用户";
-  const customTitle = (user.title || "").trim();
+  const titleChips = (user.title || "").trim().split(/[｜|]/).map((s) => s.trim()).filter(Boolean)
+    .filter((s) => s !== "平平无奇的路人");
   d.innerHTML = `
     <div class="auth-drop-head">
       <div class="ae">${esc(user.nickname || "未设置昵称")}</div>
-      ${customTitle && customTitle !== "平平无奇的路人" ? `<div class="ar"><span class="auth-drop-title">${esc(customTitle)}</span></div>` : ""}
+      ${titleChips.length ? `<div class="ar">${titleChips.map((s) => `<span class="auth-drop-title">${esc(s)}</span>`).join("")}</div>` : ""}
       <div class="ar">${esc(user.email)}</div>
       <div class="ar">${roleLabel} · UID ${esc(user.id || "")}</div>
     </div>

@@ -277,11 +277,12 @@ export async function handleSetUserProfile(request: Request, env: Env, userId: s
 
 /**
  * POST /api/admin/users/:id/title  body: { title?: string }
- * 设置用户头衔（admin 及以上）：≤12 字、中英文均可，留空 = 恢复默认（存 null，
+ * 设置用户头衔（admin 及以上）：总长 ≤26 字、中英文均可，多个头衔用「｜」分隔
+ * （前端按分隔符拆成多枚小徽章渲染），留空 = 恢复默认（存 null，
  * 前端兜底显示「平平无奇的路人」）。头衔仅管理员/站长可设，展示于个人资料卡。
  * 管理员不可改 owner 的头衔。写 audit_log。
  */
-const TITLE_MAX = 12;
+const TITLE_MAX = 26;
 // 头衔过滤控制字符/换行，其余（含中文）放行
 const TITLE_BAD = /[\u0000-\u001f\u007f]/;
 
