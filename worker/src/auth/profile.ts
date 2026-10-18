@@ -101,6 +101,7 @@ export async function handlePublicProfile(request: Request, env: Env, uid: strin
     nickname: prof.nickname,
     bio: u?.bio || null,
     title: prof.title, // 未设置时前端兜底显示默认头衔
+    role: prof.role, // 职位（资料卡显示站长/管理员徽章；普通用户前端不渲染）
     contacts: readContacts(u?.contacts).filter((c) => c.pub).map((c) => ({ type: c.type, value: c.value })),
     avatar_v: prof.avatar_v,
   });
