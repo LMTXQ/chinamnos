@@ -4048,7 +4048,9 @@ class CloudflareStorage(StorageBackend):
                         files[ann_rel] = json.dumps(old_ann, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
             # 社区内容静态化兜底（acts/chats，同 announce 语义）：轻量轮 buffer 无烘焙数据，
             # 全量替换制下缺它 = 线上文件被删 → 前端回落 Worker API 前多一次 404
-            for bake_key in (f'{carrier_key}/acts.json', f'{carrier_key}/chats.json'):
+            # ▸ 目录名用 cardhub 口径（与 bake_community_data 产出的文件名一致）
+            hub_key = CARDHUB_CARRIER_MAP.get(carrier_key, carrier_key)
+            for bake_key in (f'{hub_key}/acts.json', f'{hub_key}/chats.json'):
                 bake_rel = f'{self.path_prefix}/{bake_key}'
                 if bake_rel not in files:
                     bake_manifest_key = f'/{bake_rel}'
@@ -4632,7 +4634,9 @@ class EdgeOneStorage(StorageBackend):
                     filled += 1
             # 社区内容静态化兜底（acts/chats，同 announce 语义）：轻量轮 buffer 无烘焙数据，
             # 整站替换制下缺它 = 线上文件被删 → 前端回落 Worker API 前多一次 404
-            for bake_key in (f'{carrier_key}/acts.json', f'{carrier_key}/chats.json'):
+            # ▸ 目录名用 cardhub 口径（与 bake_community_data 产出的文件名一致）
+            hub_key = CARDHUB_CARRIER_MAP.get(carrier_key, carrier_key)
+            for bake_key in (f'{hub_key}/acts.json', f'{hub_key}/chats.json'):
                 bake_rel = f'{self.path_prefix}/{bake_key}'
                 if bake_rel not in files:
                     try:
@@ -4734,6 +4738,11 @@ def _create_backend(name, config):
     if name == 'edgeone':
         return EdgeOneStorage(config)
     raise ValueError(f'不支持的存储通道: {name}, 可选: cloudflare/github/edgeone')
+
+
+# 资费采集口径 → cardhub 口径（activities/communities 体系：API 校验/前端提交/前端请求路径）。
+# acts/chats 社区数据的目录名与过滤值必须用 cardhub 口径；announce/snapshot/changelog 仍为资费口径，勿混用。
+CARDHUB_CARRIER_MAP = {'cmcc': 'cmcc', 'cucc': 'unicom', 'ctcc': 'telecom', 'cbn': 'cbn'}
 
 
 def _iter_seed_keys(carrier_keys):
@@ -4961,7 +4970,10 @@ def _bake_fetch(s, path):
 
 def bake_community_data(storage, config, carrier_keys=None):
     """社区内容静态化：拉取导出端点写 acts/chats/tools 快照进部署 buffer。
-    逐项尽力而为：任一端点/文件失败只跳过该项，不阻塞部署。"""
+    逐项尽力而为：任一端点/文件失败只跳过该项，不阻塞部署。
+    ▸ 目录名/过滤用 cardhub 口径（cmcc/unicom/telecom/cbn）——activities/communities 体系
+      （API 校验、前端提交表单、前端 CH_CARRIER_MAP 请求路径）全部是 cardhub 口径，
+      与资费采集口径（cucc/ctcc）不同；此处必须映射，否则前端 fetch 404 静默回落 API。"""
     if carrier_keys is None:
         carrier_keys = [k for k, v in (config.get('carriers') or {}).items() if v.get('enabled', True)]
     s = requests.Session()
@@ -4979,17 +4991,19 @@ def bake_community_data(storage, config, carrier_keys=None):
     chat_items = (chats or {}).get('items') or []
     gen = now_iso()
     for ck in carrier_keys:
+        # 资费口径 → cardhub 口径（文件目录名与条目过滤值同步映射）
+        hub = CARDHUB_CARRIER_MAP.get(ck, ck)
         # 只保留该运营商条目 + 全运营商/全站通用条目（carrier=''），与 API 视图同构，前端再按省过滤
-        sub_acts = [x for x in act_items if x.get('carrier') == ck or not x.get('carrier')]
-        sub_chats = [x for x in chat_items if x.get('carrier') == ck or not x.get('carrier')]
+        sub_acts = [x for x in act_items if x.get('carrier') == hub or not x.get('carrier')]
+        sub_chats = [x for x in chat_items if x.get('carrier') == hub or not x.get('carrier')]
         try:
-            storage.write_json(f'{ck}/acts.json', {'generated_at': gen, 'items': sub_acts})
+            storage.write_json(f'{hub}/acts.json', {'generated_at': gen, 'items': sub_acts})
         except Exception as e:
-            logger.warning(f'[bake] {ck}/acts.json 写入失败(不影响本次部署): {str(e)[:100]}')
+            logger.warning(f'[bake] {hub}/acts.json 写入失败(不影响本次部署): {str(e)[:100]}')
         try:
-            storage.write_json(f'{ck}/chats.json', {'generated_at': gen, 'items': sub_chats})
+            storage.write_json(f'{hub}/chats.json', {'generated_at': gen, 'items': sub_chats})
         except Exception as e:
-            logger.warning(f'[bake] {ck}/chats.json 写入失败(不影响本次部署): {str(e)[:100]}')
+            logger.warning(f'[bake] {hub}/chats.json 写入失败(不影响本次部署): {str(e)[:100]}')
     logger.info(f'[bake] 社区内容烘焙完成: acts={len(act_items)} chats={len(chat_items)} tools={len((tools or {}).get("items") or [])}')
 
 
