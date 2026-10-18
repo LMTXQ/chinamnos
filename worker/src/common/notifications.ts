@@ -1,6 +1,7 @@
 import type { Env } from './env';
 import { ERR, fail, ok } from './envelope';
 import { guard } from './auth';
+import { getSetting } from './settings';
 
 /* ── 站内通知中心（系统→用户 单向通知；发送者「用户管理组」为前端展示层概念） ──
    所有"系统→用户"事件统一入箱：审核结果（情报/社群/工具/帖子）、到期自动下架下展、
@@ -36,10 +37,24 @@ export async function markNotificationsReadByRef(env: Env, userId: string, refId
   } catch { /* 尽力而为 */ }
 }
 
+/** 通知保留天数（管理后台 settings 键 notification_retention_days，默认 30，范围 1~365） */
+async function getRetentionDays(env: Env): Promise<number> {
+  const raw = await getSetting<number>(env, 'notification_retention_days', 30);
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= 365 ? n : 30;
+}
+
 // GET /api/notifications：本人最近 50 条 + 未读数
+//   返回前顺手清理：删除本人已读且超过保留期的通知（读即清理，无需 cron；
+//   idx_notif_unread(user_id, read_at) 命中，单用户代价极小；未读不受影响）
 export async function handleNotificationsList(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
+
+  const days = await getRetentionDays(env);
+  await env.DB.prepare(
+    'DELETE FROM notifications WHERE user_id = ?1 AND read_at IS NOT NULL AND read_at < ?2',
+  ).bind(g.viewer.id, Date.now() - days * 86400_000).run();
 
   const rows = await env.DB.prepare(
     `SELECT id, kind, ref_id, title, body, created_at, read_at
@@ -50,6 +65,33 @@ export async function handleNotificationsList(request: Request, env: Env): Promi
   ).bind(g.viewer.id).first<{ c: number }>();
 
   return ok({ items: rows.results || [], unread: unread?.c ?? 0 });
+}
+
+// POST /api/notifications/delete  body: { id }
+//   删除本人单条通知（WHERE user_id 双保险，防越权删他人通知）
+export async function handleNotificationsDelete(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+
+  let body: Record<string, unknown> = {};
+  try { body = (await request.json()) as Record<string, unknown>; } catch { /* */ }
+  const id = typeof body.id === 'string' ? body.id : '';
+  if (!id) return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400, { field: 'id' });
+
+  await env.DB.prepare('DELETE FROM notifications WHERE user_id = ?1 AND id = ?2')
+    .bind(g.viewer.id, id).run();
+  return ok({ id });
+}
+
+// POST /api/notifications/clear-read
+//   清空本人全部已读通知（未读保留）
+export async function handleNotificationsClearRead(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+
+  await env.DB.prepare('DELETE FROM notifications WHERE user_id = ?1 AND read_at IS NOT NULL')
+    .bind(g.viewer.id).run();
+  return ok({ cleared: true });
 }
 
 // POST /api/notifications/read  body: { id?: string } 或 { all: true }

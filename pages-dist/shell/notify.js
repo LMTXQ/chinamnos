@@ -10,7 +10,7 @@
 "use strict";
 
 import { esc } from "./shell.js";
-import { icon, mountIcons } from "./ui.js";
+import { icon, mountIcons, toast } from "./ui.js";
 import { api } from "./api.js";
 
 /* kind → 图标 / 色系 / 来源标识 / 跳转目标（go 交给 Shell.navigate） */
@@ -49,6 +49,11 @@ const NTF_CSS = `
 .ntf-actions{display:flex;align-items:center;gap:8px}
 .ntf-markall{border:1px solid var(--line);background:var(--surface-2);color:var(--sub);font-size:12px;padding:5px 10px;border-radius:8px;cursor:pointer;transition:border-color .15s,color .15s}
 .ntf-markall:hover{border-color:var(--acc);color:var(--acc)}
+.ntf-clearread{border:1px solid var(--line);background:var(--surface-2);color:var(--sub);font-size:12px;padding:5px 10px;border-radius:8px;cursor:pointer;transition:border-color .15s,color .15s}
+.ntf-clearread:hover{border-color:var(--red);color:var(--red)}
+.ntf-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ntf-del{border:none;background:none;color:var(--red);font-size:12px;padding:4px 2px;cursor:pointer;opacity:.75;transition:opacity .15s}
+.ntf-del:hover{opacity:1;text-decoration:underline}
 .ntf-close{background:none;border:none;color:var(--sub);font-size:22px;line-height:1;cursor:pointer;transition:color .15s}
 .ntf-close:hover{color:var(--txt)}
 .ntf-list{overflow-y:auto;padding:8px 10px 12px}
@@ -137,6 +142,7 @@ function ensurePanel() {
       <span class="ntf-h1">${icon("bell")} 通知中心</span>
       <span class="ntf-actions">
         <button type="button" class="ntf-markall">全部已读</button>
+        <button type="button" class="ntf-clearread">清空已读</button>
         <button type="button" class="ntf-close" aria-label="关闭">&times;</button>
       </span>
     </div>
@@ -166,7 +172,10 @@ function renderList() {
         <span class="ntf-row1"><span class="ntf-title">${esc(n.title)}</span>${unread ? '<span class="ntf-unread-dot"></span>' : ""}</span>
         <span class="ntf-src">${esc(meta.src)} · ${fmtTime(n.created_at)}</span>
         ${n.body ? `<span class="ntf-body">${esc(n.body)}</span>` : ""}
-        ${open && meta.go ? `<button type="button" class="ntf-go" data-go="${esc(meta.go)}" data-chview="${esc(meta.chview || "")}">前往查看<i data-icon="arrowRight"></i></button>` : ""}
+        ${open ? `<span class="ntf-acts">
+          ${open && meta.go ? `<button type="button" class="ntf-go" data-go="${esc(meta.go)}" data-chview="${esc(meta.chview || "")}">前往查看<i data-icon="arrowRight"></i></button>` : ""}
+          <button type="button" class="ntf-del" data-del="${esc(n.id)}">删除</button>
+        </span>` : ""}
       </span>
     </div>`;
   }).join("");
@@ -203,6 +212,29 @@ async function onPanelClick(e) {
     }
     if (window.Shell && window.Shell.navigate) window.Shell.navigate(dest);
     else location.hash = dest;
+    return;
+  }
+  const del = e.target.closest(".ntf-del");
+  if (del) {
+    e.stopPropagation();
+    const id = del.dataset.del;
+    const n = items.find((x) => x.id === id);
+    const r = await api.request("/api/notifications/delete", { method: "POST", body: { id } });
+    if (r.ok) {
+      items = items.filter((x) => x.id !== id);
+      if (n && !n.read_at) { lastUnread = Math.max(0, lastUnread - 1); setDot(lastUnread > 0); }
+      openId = null;
+      renderList();
+    } else toast(r.error || "删除失败");
+    return;
+  }
+  if (e.target.closest(".ntf-clearread")) {
+    const r = await api.request("/api/notifications/clear-read", { method: "POST", body: {} });
+    if (r.ok) {
+      items = items.filter((n) => !n.read_at);
+      openId = null;
+      renderList();
+    } else toast(r.error || "清空失败");
     return;
   }
   if (e.target.closest(".ntf-markall")) {

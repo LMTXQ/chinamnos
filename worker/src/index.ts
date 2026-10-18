@@ -4,7 +4,7 @@ import { handleOptions, withCors } from './common/cors';
 import { cachedGet } from './common/cache';
 import { handleMeta, handleAboutTimeline, handleAboutThanks, handleAboutLinks } from './common/meta';
 import { handleNotices } from './common/notices';
-import { handleNotificationsList, handleNotificationsRead } from './common/notifications';
+import { handleNotificationsList, handleNotificationsRead, handleNotificationsDelete, handleNotificationsClearRead } from './common/notifications';
 import { hitLimit } from './common/ratelimit';
 import { TEMPLATES } from './mail/templates';
 import { notify } from './mail/notifier';
@@ -153,6 +153,10 @@ export default {
         resp = await handleNotificationsList(request, env); // 本人最近 50 条 + 未读数
       } else if (p === '/api/notifications/read' && m === 'POST') {
         resp = await handleNotificationsRead(request, env); // 单条/全部已读
+      } else if (p === '/api/notifications/delete' && m === 'POST') {
+        resp = await handleNotificationsDelete(request, env); // 单条删除
+      } else if (p === '/api/notifications/clear-read' && m === 'POST') {
+        resp = await handleNotificationsClearRead(request, env); // 清空已读
       } else if (p === '/api/mail/test' && m === 'POST') {
         resp = await handleMailTest(request, env);
       } else if (p === '/api/auth/send-code' && m === 'POST') {

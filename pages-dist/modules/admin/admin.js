@@ -1066,6 +1066,7 @@ const SETTING_DESC = {
   owner_email: "站长邮箱。注册该邮箱的账号自动获得 owner（站长）角色。",
   mail_daily_cap: "邮件系统每日发送总量上限，超出后当日暂停发送验证类邮件。",
   site_name: "站点名称，用于邮件标题与页面展示。",
+  notification_retention_days: "站内通知（铃铛）保留天数：已读通知超过该天数后，在本人下次打开通知面板时自动清除；未读通知不受影响、永久保留。整数 1~365，默认 30。保存后即时生效（无需等前端部署）。",
   cardhub_trade_merchants: "圈内卡商担保的推荐栏内容。填 JSON 字符串数组（如 [\"某某卡商·微信xxx\",\"某某卡商·QQ123\"]），最多 10 条，留空数组 [] 则详情页不显示推荐栏。推荐仅作参考，站点不为所推荐人承担保证。",
   ticket_apply_guarantor: "「毛遂自荐 · 申请成为卡商担保人」工单的申请模板。跳蚤市集「毛遂自荐」按钮会把此模板预填进工单表单（用户可修改后提交）。留空则使用系统内置的通用申请框架。模板建议控制在 500 字内（工单正文上限）。仅站长可修改。",
   email_domain_whitelist: "注册/登录邮箱域名白名单（前后台双重校验）。逗号分隔域名，如 qq.com,163.com,gmail.com,foxmail.com。留空 = 使用系统内置常见邮箱列表（QQ/163/126/Gmail/Outlook 等约 20 个）。⚠ 后端校验保存后立即生效——请确保你自己的邮箱域名在列表内，否则将无法登录！前端注册预校验提示走 Pages 静态快照，在下一轮采集部署后更新。仅站长可修改。",
@@ -1114,7 +1115,7 @@ const THANKS_CAT_KEY = { "任意打赏": "donor", "反馈建议": "feedback", "�
    注：全站公告 site_notice_* 已迁至「公告」页签编辑；跳蚤市集警告 cardhub_warning_* 已废弃
    （migration 0030 迁为推广条目并删除原键），两者经 SETTING_HIDDEN_KEYS 从设置页隐藏 */
 const SETTING_GROUPS = [
-  ["基础信息", ["site_name", "owner_email"]],
+  ["基础信息", ["site_name", "owner_email", "notification_retention_days"]],
   ["安全与准入", ["turnstile_enforced", "email_domain_whitelist", "mail_daily_cap"]],
   ["跳蚤市集", ["module_cardhub_enabled", "cardhub_trade_site_guarantee", "cardhub_trade_merchants"]],
   ["工单系统", ["ticket_apply_guarantor"]],

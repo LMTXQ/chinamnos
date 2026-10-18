@@ -22,6 +22,7 @@ const ALLOWED_KEYS = new Set([
   'site_notice_content',
   'promos',
   'promo_reswitch_enabled',
+  'notification_retention_days',
 ]);
 
 /** 白名单内尚未写入 DB 的新键的默认值（仅「空串即合法默认」的文本键；布尔/数值键的默认语义请走迁移 seed，避免误显开关状态） */
@@ -33,6 +34,7 @@ const DEFAULT_VALUES: Record<string, unknown> = {
   about_links: [], // 空数组 = 友情链接为空，关于页整个区块隐藏
   site_notice_title: '站点公告',
   site_notice_content: '',
+  notification_retention_days: 30,
   promos: [], // 推广列表：[{id,enabled,title,content,version,mode,scope{carriers,provinces,modules}}]（空=无推广；modules 命中=仅进入对应模块时弹）
 };
 
@@ -192,6 +194,12 @@ export async function handleUpdateSetting(request: Request, env: Env, key: strin
     }
     if (key === 'site_notice_content') {
       value = String(value ?? '').slice(0, 8000);
+    }
+    // 通知保留天数：整数 1~365
+    else if (key === 'notification_retention_days') {
+      const n = typeof value === 'number' ? value : Number(value);
+      if (!Number.isInteger(n) || n < 1 || n > 365) return fail(ERR.VALIDATION_ERROR, 'INVALID_VALUE', 400, { field: key });
+      value = n;
     }
     // 公告标题：单行短文本
     else if (key === 'site_notice_title') {
