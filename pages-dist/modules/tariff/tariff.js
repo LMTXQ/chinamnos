@@ -1425,7 +1425,7 @@ async function chatTabRefresh() {
     Auth.isLoggedIn() ? api.communitiesList(carrierKey, provName) : Promise.resolve(null),
   ]);
   if (chatStatic && Array.isArray(chatStatic.items)) {
-    chatState.items = chatStatic.items.filter((x) => !x.province || x.province === provName);
+    chatState.items = chatStatic.items; // 缓存 carrier 全量，省过滤统一在 chatFilteredItems（切省零网络）
     chatState.mine = (chatApi && chatApi.ok) ? (chatApi.data.mine || []) : [];
   } else if (chatApi && chatApi.ok) {
     chatState.items = chatApi.data.items || [];
@@ -1524,6 +1524,9 @@ function chatCardHTML(a) {
 /* 列表过滤（种类/范围 chips 下拉 + 关键词搜索，均客户端执行）：chatRenderBody 与搜索局部重绘共用 */
 function chatFilteredItems() {
   let items = chatState.items;
+  /* 省过滤在渲染层（切省零网络）：本省 + 本运营商全国 + 通用（province 空） */
+  const provName = chProvName();
+  items = items.filter((a) => !a.province || a.province === provName);
   if (chatState.typeFilter) items = items.filter((a) => (a.chat_type || "其他") === chatState.typeFilter);
   if (chatState.scope === "nat") items = items.filter((a) => !a.province);      // 全国·通用
   else if (chatState.scope === "prov") items = items.filter((a) => !!a.province); // 本省收录
