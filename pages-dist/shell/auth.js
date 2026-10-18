@@ -64,8 +64,8 @@ const AUTH_CSS = `
 .auth-profile-avatar img{width:56px;height:56px;border-radius:50%;object-fit:cover}
 .auth-profile-head{display:flex;align-items:center;gap:14px;padding:14px;margin-bottom:10px;border-radius:12px;background:color-mix(in oklab,var(--surface-2) 55%,transparent);border:1px solid color-mix(in oklab,var(--line) 70%,transparent)}
 .auth-profile-name{font-size:16px;font-weight:700;color:var(--txt)}
-.auth-profile-title{display:inline-block;font-size:11px;font-weight:600;color:var(--acc);background:color-mix(in oklab,var(--acc) 12%,transparent);padding:2px 8px;border-radius:999px;margin-top:4px}
-.auth-profile-title + .auth-profile-title{margin-left:6px}
+.auth-profile-badges{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin-top:4px;min-width:0}
+.auth-profile-title{display:inline-block;font-size:11px;font-weight:600;color:var(--acc);background:color-mix(in oklab,var(--acc) 12%,transparent);padding:2px 8px;border-radius:999px}
 .auth-profile-uid{font-size:11px;color:var(--sub);margin-top:2px;word-break:break-all}
 .auth-profile-bio{font-size:12.5px;color:var(--sub);margin-top:6px;line-height:1.6}
 .auth-profile-ct{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);font-size:13px;color:var(--txt);margin-bottom:8px}
@@ -357,6 +357,12 @@ export const Auth = {
     if (!body) return;
     if (!r.ok || !r.data) { body.innerHTML = '<p class="hint">资料获取失败</p>'; return; }
     const p = r.data;
+    // 职位徽章（与顶栏同款：站长金/管理员蓝，普通用户不显示），位于 UID 之前
+    const roleBadge = p.role === "owner"
+      ? `<span class="auth-badge owner"><i data-icon="shield"></i>站长</span>`
+      : p.role === "admin"
+        ? `<span class="auth-badge admin"><i data-icon="shield"></i>管理员</span>`
+        : "";
     // 多头衔「｜」分隔：资料卡全量展示，逐段渲染为独立小徽章
     const titleChips = (p.title || "").trim().split(/[｜|]/).map((s) => s.trim()).filter(Boolean);
     const titleHtml = titleChips.length
@@ -370,7 +376,7 @@ export const Auth = {
         ${avatar}
         <div style="min-width:0">
           <div class="auth-profile-name">${esc(p.nickname || "未设置昵称")}</div>
-          <div>${titleHtml}</div>
+          <div class="auth-profile-badges">${roleBadge}${titleHtml}</div>
           <div class="auth-profile-uid">UID: ${esc(p.id)}</div>
         </div>
       </div>

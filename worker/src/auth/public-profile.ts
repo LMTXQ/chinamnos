@@ -13,6 +13,7 @@ export interface PublicProfile {
   id: string;
   nickname: string | null;
   title: string | null;
+  role: string | null;
   avatar_v: number | null;
 }
 
@@ -31,10 +32,10 @@ export async function getPublicProfiles(env: Env, ids: string[]): Promise<Map<st
     const batch = uniq.slice(i, i + 100);
     const ph = batch.map(() => '?').join(',');
     const { results } = await env.DB.prepare(
-      `SELECT id, nickname, title, avatar_updated_at FROM users WHERE id IN (${ph})`,
-    ).bind(...batch).all<{ id: string; nickname: string | null; title: string | null; avatar_updated_at: number | null }>();
+      `SELECT id, nickname, title, role, avatar_updated_at FROM users WHERE id IN (${ph})`,
+    ).bind(...batch).all<{ id: string; nickname: string | null; title: string | null; role: string | null; avatar_updated_at: number | null }>();
     for (const u of results || []) {
-      map.set(u.id, { id: u.id, nickname: u.nickname, title: u.title, avatar_v: u.avatar_updated_at });
+      map.set(u.id, { id: u.id, nickname: u.nickname, title: u.title, role: u.role, avatar_v: u.avatar_updated_at });
     }
   }
   return map;
