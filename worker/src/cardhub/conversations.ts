@@ -66,15 +66,16 @@ export async function handleCreateConversation(request: Request, env: Env): Prom
   const masked = viewer.email.replace(/^(.).*(@.*)$/, '$1***$2');
   const buyerName = name || (profile?.nickname ?? '') || masked;
 
-  // 建对话 + 首条消息（事务）
-  await env.DB.prepare(
-    `INSERT INTO conversations (id, post_id, seller_id, buyer_user_id, buyer_email, buyer_name, status, msg_count, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open', 1, ?7, ?8)`,
-  ).bind(convId, postId, post.user_id, viewer.id || null, buyerEmail, buyerName, now, now).run();
-
-  await env.DB.prepare(
-    `INSERT INTO messages (id, conversation_id, sender_role, body, created_at) VALUES (?1, ?2, 'buyer', ?3, ?4)`,
-  ).bind(msgId, convId, bodyText, now).run();
+  // 建对话 + 首条消息（D1 batch 原子执行，避免首条成功第二条失败留下 0 消息会话）
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO conversations (id, post_id, seller_id, buyer_user_id, buyer_email, buyer_name, status, msg_count, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'open', 1, ?7, ?8)`,
+    ).bind(convId, postId, post.user_id, viewer.id || null, buyerEmail, buyerName, now, now),
+    env.DB.prepare(
+      `INSERT INTO messages (id, conversation_id, sender_role, body, created_at) VALUES (?1, ?2, 'buyer', ?3, ?4)`,
+    ).bind(msgId, convId, bodyText, now),
+  ]);
 
   // 通知卖家
   void notify(env, (await env.DB.prepare('SELECT email FROM users WHERE id = ?1').bind(post.user_id).first<{ email: string }>())?.email || '', 'conversation_new_message', { title: post.title, body: bodyText, sender: 'buyer' }).catch(() => {});

@@ -159,8 +159,6 @@ export default {
         resp = await handleSendCode(request, env);
       } else if (p === '/api/auth/login-params' && m === 'POST') {
         resp = await handleLoginParams(request, env);
-      } else if (p === '/api/auth/email-policy' && m === 'GET') {
-        resp = await handleEmailPolicy(request, env);
       } else if (p === '/api/auth/register' && m === 'POST') {
         resp = await handleRegister(request, env);
       } else if (p === '/api/auth/login' && m === 'POST') {
@@ -286,16 +284,16 @@ export default {
         } else if (p === '/api/admin/audit' && m === 'GET') {
           resp = await handleListAuditLogs(request, env);
         } else if (p === '/api/admin/activities' && m === 'GET') {
-        resp = await handleAdminActivityList(request, env);
-      } else if (m === 'GET' && /^\/api\/admin\/communities\/[^/]+\/proof$/.test(p)) {
-        resp = await handleCommunityProof(request, env, p.split('/')[4]);
-      } else if (m === 'POST' && /^\/api\/admin\/activities\/[^/]+\/review$/.test(p)) {
-        resp = await handleAdminActivityReview(request, env, p.split('/')[4]);
-      } else if (m === 'POST' && /^\/api\/admin\/activities\/[^/]+\/retire$/.test(p)) {
-        resp = await handleAdminActivityRetire(request, env, p.split('/')[4]);
-      } else if (m === 'DELETE' && /^\/api\/admin\/activities\/[^/]+$/.test(p)) {
-        resp = await handleAdminActivityDelete(request, env, p.split('/')[4]);
-      } else if (p === '/api/admin/stats' && m === 'GET') {
+          resp = await handleAdminActivityList(request, env);
+        } else if (m === 'GET' && /^\/api\/admin\/communities\/[^/]+\/proof$/.test(p)) {
+          resp = await handleCommunityProof(request, env, p.split('/')[4]);
+        } else if (m === 'POST' && /^\/api\/admin\/activities\/[^/]+\/review$/.test(p)) {
+          resp = await handleAdminActivityReview(request, env, p.split('/')[4]);
+        } else if (m === 'POST' && /^\/api\/admin\/activities\/[^/]+\/retire$/.test(p)) {
+          resp = await handleAdminActivityRetire(request, env, p.split('/')[4]);
+        } else if (m === 'DELETE' && /^\/api\/admin\/activities\/[^/]+$/.test(p)) {
+          resp = await handleAdminActivityDelete(request, env, p.split('/')[4]);
+        } else if (p === '/api/admin/stats' && m === 'GET') {
           resp = await handleStats(request, env);
         } else {
           resp = fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
@@ -303,7 +301,9 @@ export default {
       } else {
         resp = fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
       }
-    } catch {
+    } catch (e) {
+      // 统一兜底 500：错误详情落实时日志（Cloudflare 后台 Real-time Logs 可查），提升线上 500 可归因性
+      console.error('[worker] unhandled error:', e);
       resp = fail(ERR.INTERNAL_ERROR, 'INTERNAL_ERROR', 500);
     }
     return withCors(resp, request, env);
