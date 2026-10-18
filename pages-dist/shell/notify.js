@@ -27,7 +27,7 @@ const KIND_META = {
   post_rejected: { icon: "x",       cls: "no",   src: "用户管理组", go: "/cardhub", chview: "me" },
   post_closed:   { icon: "box",     cls: "warn", src: "用户管理组", go: "/cardhub", chview: "me" },
   post_expired:  { icon: "clock",   cls: "warn", src: "用户管理组", go: "/cardhub", chview: "me" },
-  dm_message:    { icon: "message", cls: "info", src: "交易对话",   go: "/cardhub", chview: "convs" },
+  dm_message:    { icon: "message", cls: "info", src: "会话消息",   go: "/cardhub", chview: "convs" },
 };
 
 /* ─────────────── 样式（一次性注入） ─────────────── */
