@@ -194,7 +194,7 @@ export async function handleCommunityCreate(request: Request, env: Env): Promise
       `INSERT INTO activities (id, mode, carrier, province, title, url, descr, chat_type, chat_id, status, anon, ends_at, submitted_by, created_at, qr_key, proof_key)
        VALUES (?1, 'chat', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, NULL, ?10, ?11, ?12, ?13)`,
     ).bind(
-      id, carrier, province, title, url || null, descr,
+      id, carrier, province, title, url, descr,
       chatType, chatId || null, anon, g.viewer.id, now, qrKey, proofKey,
     ).run();
   } catch (e) {
