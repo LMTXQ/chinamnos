@@ -2491,11 +2491,14 @@
   flex-wrap: wrap;
   margin-bottom: 14px;
 }
-.cl-meta-bar .cl-stats { margin-bottom: 0; flex: 1 1 auto; min-width: 0; }
-.cl-meta-bar .cl-attr-tabs { margin-bottom: 0; margin-left: auto; flex-wrap: nowrap; }
+.cl-meta-bar .cl-stats { margin-bottom: 0; flex: 1 1 auto; min-width: 0; } /* flex:1 占满剩余空间自然把 tabs 推到右缘——tabs 换行后无 auto 边距即天然靠左 */
+.cl-meta-bar .cl-attr-tabs { margin-bottom: 0; flex-wrap: nowrap; }
 .cl-meta-bar .cl-attr-tabs[hidden] { display: none; }
 @media (max-width: 640px) {
-  .cl-meta-bar .cl-attr-tabs { flex-basis: 100%; margin-left: 0; flex-wrap: wrap; order: 9; }
+  .cl-meta-bar .cl-attr-tabs { flex-basis: 100%; flex-wrap: wrap; order: 9; }
+  #view-changelog .toolbar .search-wrap { flex-basis: 100%; } /* 搜索框独占一行，四个筛选项整体换行 */
+  #clToggleAll span { display: none; } /* 空间不足：收起/展开按钮只留图标 */
+  #clToggleAll { padding-left: 9px; padding-right: 9px; }
 }
 .cl-attr-tabs {
   display: flex;

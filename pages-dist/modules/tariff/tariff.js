@@ -3065,6 +3065,7 @@ let clQMode = "all";               // all=名称+快照全部字段 / name=仅�
 let clAttr = "";                   // 范围筛选 code（""=全部），code 来自当前运营商 ATTR_MAP
 let clAttrPresence = [];           // 当前省变更记录中实际出现的 attr code——tabs 按此动态生成（同侧边栏 buildDynamicTabs 按数据过滤机制，而非全量 ATTR_MAP）
 let clExpandAll = false;           // 「全部展开」模式（显式开关：开启时批次+类型子卡片默认全开；标签显示下一步动作）
+let clCollapseArmed = false;       // 搜索进行中点「全部收起」时置位：收起优先于当前搜索词，搜索词一变即失效
 let clObserver = null;             // 上滑自动加载哨兵 observer
 
 /* 变更详情弹窗字段模式：false=全部字段+变化标注（默认） / true=仅看变化字段；
@@ -3200,21 +3201,30 @@ function clMoreBatch() {
   clDraw();
 }
 
+/** 「全部展开/收起」按钮文案随生效状态同步：搜索自动全开时也显示「全部收起」（clDraw 每次渲染调用） */
+function clSyncToggleBtn() {
+  const btn = $("clToggleAll");
+  if (!btn) return;
+  const open = clExpandAll || (!!clQ && !clCollapseArmed);
+  btn.innerHTML = icon(open ? "chevronsUp" : "chevronsDown") + "<span>全部" + (open ? "收起" : "展开") + "</span>";
+}
+
 /** 全部收起/展开（显式模式开关互换：展开=批次+类型子卡片默认全开；切换时清空单条记忆让模式接管） */
 function clToggleAll() {
   const box = $("changelogBox");
   if (!box) return;
-  if (clExpandAll) {
+  if (clExpandAll || (!!clQ && !clCollapseArmed)) { // 搜索自动全开也视为"当前全开" → 点击执行收起
     clExpandAll = false;
-    clForceCollapse = true; // 收起后新批次也保持收起
+    clForceCollapse = true;   // 收起后新批次也保持收起
+    clCollapseArmed = !!clQ;  // 搜索进行中收起：压过当前搜索词，词一变即失效
   } else {
     clExpandAll = true;
     clForceCollapse = false;
+    clCollapseArmed = false;
   }
   clOpenOverride.clear();
   clSecOverride.clear();
-  const btn = $("clToggleAll");
-  if (btn) btn.innerHTML = icon(clExpandAll ? "chevronsUp" : "chevronsDown") + "<span>全部" + (clExpandAll ? "收起" : "展开") + "</span>";
+  clSyncToggleBtn();
   clDraw();
 }
 
@@ -3358,6 +3368,7 @@ function renderChangelog() {
 /** 渲染时间轴（数据已就绪；加载更多/收展切换只走这里，不重新拉数据） */
 function clDraw() {
   const box = $("changelogBox");
+  clSyncToggleBtn(); // 搜索自动展开/清空/收起压制时同步按钮文案
   if (!box || !clView) return;
   const { logs: filtered, groups, clKey } = clView;
 
@@ -3379,11 +3390,11 @@ function clDraw() {
     const gc = { added: 0, removed: 0, changed: 0 };
     g.items.forEach(idx => { const l = filtered[idx]; gc[l.type] = (gc[l.type] || 0) + 1; });
 
-    // 展开状态优先级：用户单批次记忆 > 全部展开模式 > 搜索(视为重新展开,优先于收起模式) > 收起模式 > 默认仅最新批次（fresh）
+    // 展开状态优先级：用户单批次记忆 > 全部展开模式 > 搜索期收起压制 > 搜索(视为重新展开) > 收起模式 > 默认仅最新批次（fresh）
     const fresh = gi === 0;
     const open = clOpenOverride.has(tsKey) ? clOpenOverride.get(tsKey)
       : clExpandAll ? true
-      : (clQ ? true : clForceCollapse ? false : fresh);
+      : (clCollapseArmed ? false : clQ ? true : clForceCollapse ? false : fresh);
     // 折叠态色条：不用数字堆叠，一眼看出本轮变化的类型构成
     const bars =
       (gc.added ? '<i class="b-add" title="有新增"></i>' : "") +
@@ -3401,7 +3412,7 @@ function clDraw() {
       const cls = tp === "added" ? "add" : tp === "removed" ? "del" : "mod";
       const lbl = tp === "added" ? "新增" : tp === "removed" ? "下架" : "变更";
       const sk = tsKey + "|" + tp;
-      const secOpen = clSecOverride.has(sk) ? clSecOverride.get(sk) : (clExpandAll || !!clQ); // 搜索/全部展开时子卡片默认打开，用户单卡片记忆仍优先
+      const secOpen = clSecOverride.has(sk) ? clSecOverride.get(sk) : (clExpandAll || (!!clQ && !clCollapseArmed)); // 搜索/全部展开时子卡片默认打开，用户单卡片记忆仍优先
       html += `<div class="tl-sec-entry${secOpen ? " open" : ""}" data-stype="${tp}">`;
       html += `<div class="tl-sec-head" role="button" tabindex="0" aria-expanded="${secOpen}"><b>${lbl}</b><span class="tl-sec-chips"><span class="chip ${cls}">${gc[tp]} 项</span></span><span class="tl-sec-arrow"></span></div>`;
       html += '<div class="tl-sec-body"><div class="tl-chipbox">';
@@ -3740,7 +3751,7 @@ function initProvListeners() {
 
   /* 变更记录搜索：输入即时筛选（数据量小无需防抖）+ 模式切换（与资费列表同款交互） */
   const cSearchEl = $("cSearch");
-  if (cSearchEl) cSearchEl.addEventListener("input", () => { clQ = cSearchEl.value.trim().toLowerCase(); renderChangelog(); });
+  if (cSearchEl) cSearchEl.addEventListener("input", () => { clQ = cSearchEl.value.trim().toLowerCase(); clCollapseArmed = false; renderChangelog(); }); // 搜索词变化=新的搜索意图，清除收起压制
   const cQModeEl = $("cQMode");
   if (cQModeEl) {
     const syncClSearchMode = () => {
@@ -4504,7 +4515,7 @@ Shell.registerPage({
   id: "tariff",
   route: "/",
   onEnter: async function(root) {
-    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261019c");
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261020a");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">
@@ -4776,6 +4787,7 @@ Shell.registerPage({
     clAttr = "";
     clAttrPresence = [];
     clExpandAll = false;
+    clCollapseArmed = false;
     clForceCollapse = false;
     ATTR_MAP = {};
     TYPE1_MAP = {};
