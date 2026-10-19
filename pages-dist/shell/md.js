@@ -3,7 +3,8 @@
    ───────────────────────────────────────────────────────────────
    ▸ mdToSafeHtml(src, opts)：先全文 HTML 转义再套 md 语法，天然防 XSS
      语法：#~#### 标题 / **粗** / *斜* / `行内码` / [文字](链接) /
-       > 引用 / --- 分隔线 / - 与 1. 列表 / 独立成行图片外链 / ![alt](url)
+       > 引用 / --- 分隔线 / - 与 1. 列表 / | 表格 |（GFM 管道式，支持 :--- 对齐，
+       空表头自动省略 thead）/ 独立成行图片外链 / ![alt](url)
      链接仅允许 http/https/相对/#；opts.nofollow 时外链附 nofollow
    ▸ 图片外链走 isMdImageUrl 白名单（图片扩展名或已知图床域名，
      与在线沟通 isImageUrlLine 同一策略）；白名单内渲染
@@ -42,6 +43,29 @@ function mdInline(s, nofollow) {
     .replace(/`([^`\n]+)`/g, "<code>$1</code>");
 }
 
+/* ── GFM 管道式表格 ──
+   分隔行判定：|---|---|（冒号标注对齐 :--- / :---: / ---:；须含竖线，裸 --- 仍走分隔线） */
+function isTableDelim(line) {
+  if (!line.includes("|")) return false;
+  const cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  return cells.length >= 1 && cells.every((c) => /^:?-+:?$/.test(c));
+}
+
+/* 表行拆单元格：去首尾竖线后按 | 切分；\| 先换占位符再切分（escHtml 后原文不含 \x00，安全），
+   切分后还原为字面竖线，避免「x \| y」这类写法被误拆 */
+function splitTableRow(line) {
+  return line.replace(/^\|/, "").replace(/\|$/, "")
+    .replace(/\\\|/g, "\x00")
+    .split("|")
+    .map((c) => c.replace(/\x00/g, "|").trim());
+}
+
+/* 分隔行单元格 → 对齐方式（"" = 默认左对齐） */
+function tableAlign(c) {
+  const l = c.startsWith(":"), r = c.endsWith(":");
+  return l && r ? "center" : r ? "right" : l ? "left" : "";
+}
+
 /* 图片渲染：白名单内 → <img>（懒加载 + 不带 referer）；白名单外 → 降级为普通链接 */
 function mdImgHtml(url, alt, nofollow) {
   if (isMdImageUrl(url)) {
@@ -59,7 +83,8 @@ export function mdToSafeHtml(src, opts) {
   let quote = false; // 引用块开启中
   const closeList = () => { if (list) { html += "</" + list + ">"; list = null; } };
   const closeQuote = () => { if (quote) { html += "</blockquote>"; quote = false; } };
-  for (const raw of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     const line = raw.trim();
     if (!line) { closeList(); closeQuote(); continue; }
     let m;
@@ -72,6 +97,30 @@ export function mdToSafeHtml(src, opts) {
     if (isMdImageUrl(line)) {
       closeList(); closeQuote();
       html += mdImgHtml(line, "", nofollow);
+      continue;
+    }
+    /* 表格块：| 开头行 + 下一行分隔行 → 吞整个块渲染 <table>；
+       空表头（如「| | |」）自动省略 thead，适配「项目 | 说明」两列说明表 */
+    if (line.startsWith("|") && i + 1 < lines.length && isTableDelim(lines[i + 1].trim())) {
+      closeList(); closeQuote();
+      const aligns = splitTableRow(lines[i + 1].trim()).map(tableAlign);
+      const cell = (c, k, tag) => {
+        const a = aligns[k] ? ` style="text-align:${aligns[k]}"` : "";
+        return `<${tag}${a}>${mdInline(c, nofollow)}</${tag}>`;
+      };
+      const head = splitTableRow(line);
+      let tbl = '<table class="md-tbl">';
+      if (head.some((c) => c !== "")) {
+        tbl += "<thead><tr>" + head.map((c, k) => cell(c, k, "th")).join("") + "</tr></thead>";
+      }
+      let body = "";
+      i += 2;
+      while (i < lines.length && lines[i].trim().startsWith("|")) {
+        body += "<tr>" + splitTableRow(lines[i].trim()).map((c, k) => cell(c, k, "td")).join("") + "</tr>";
+        i++;
+      }
+      i--; // 抵消 for 的 i++，让外层从表格块后一行继续
+      html += tbl + "<tbody>" + body + "</tbody></table>";
       continue;
     }
     /* 引用（全文转义后 > 为 &gt;） */
@@ -126,7 +175,7 @@ export function mdCreateEditor(container, opts = {}) {
   const TOOLS = [
     ["h", "标题", "H"], ["b", "粗体", "B"], ["i", "斜体", "I"], ["code", "行内代码", "码"],
     ["link", "插入链接", "链"], ["ul", "无序列表", "•"], ["ol", "有序列表", "1."],
-    ["quote", "引用", "❝"], ["hr", "分隔线", "—"], ["img", "插入图片（图床外链）", "图"],
+    ["quote", "引用", "❝"], ["hr", "分隔线", "—"], ["tbl", "插入表格", "表格"], ["img", "插入图片（图床外链）", "图"],
   ];
   const root = document.createElement("div");
   root.className = "md-editor";
@@ -135,7 +184,7 @@ export function mdCreateEditor(container, opts = {}) {
       `<button type="button" class="md-tool" data-md="${k}" title="${title}">${label}</button>`).join("")}
       <button type="button" class="md-tool md-tool-preview" data-md="preview" title="预览渲染效果">预览</button>
     </div>
-    <textarea class="md-input" rows="${opts.rows || 10}" maxlength="${maxlen}" placeholder="${escHtml(opts.placeholder || "支持 Markdown：标题 / 粗斜体 / 链接 / 列表 / 引用 / 图片外链")}"></textarea>
+    <textarea class="md-input" rows="${opts.rows || 10}" maxlength="${maxlen}" placeholder="${escHtml(opts.placeholder || "支持 Markdown：标题 / 粗斜体 / 链接 / 列表 / 引用 / 表格 / 图片外链")}"></textarea>
     <div class="md-preview" hidden></div>
     <div class="md-foot"><span class="md-count"></span><span class="md-hint">Markdown · 图片支持图床外链</span></div>`;
   container.appendChild(root);
@@ -186,6 +235,7 @@ export function mdCreateEditor(container, opts = {}) {
     else if (k === "ol") linePrefix("1. ", "列表项");
     else if (k === "quote") linePrefix("> ", "引用内容");
     else if (k === "hr") linePrefix("---", "");
+    else if (k === "tbl") linePrefix("| 表头 | 表头 |\n|---|---|\n| 内容 | 内容 |\n", "");
     else if (k === "img") {
       if (typeof opts.onImage === "function") opts.onImage(handle);
       else wrapSel("![", "](https://)", "图片说明");

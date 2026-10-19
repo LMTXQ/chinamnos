@@ -1096,7 +1096,7 @@ const SETTING_BLOCK_META = {
   },
   site_notice_content: {
     counter: (t) => `已配置 <b>${t.length}</b> 字（上限 8000 字）`,
-    placeholder: "支持 Markdown：**加粗**、*斜体*、`代码`、[链接](https://…)、- 列表、# 标题&#10;&#10;写维护通知、新功能上线、规则变更等。保存后开启 site_notice_enabled 生效。",
+    placeholder: "支持 Markdown：**加粗**、*斜体*、`代码`、[链接](https://…)、- 列表、# 标题、| 表格 |（首行表头可留空，第二行 |---|---|）&#10;&#10;写维护通知、新功能上线、规则变更等。保存后开启 site_notice_enabled 生效。",
     hint: "所有人每日首次进入弹窗，可勾选「今日不再弹出」",
     saveText: "保存公告内容",
   },

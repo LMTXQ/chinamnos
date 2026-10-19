@@ -655,6 +655,42 @@ input[type="checkbox"].switch:checked::before {
   border-bottom: none;
 }
 
+/* ─────────────── Markdown 表格（md.js 渲染的 .md-tbl） ─────────────── */
+.md-tbl {
+  /* 窄容器（公告/推广弹窗）内横向滚动而非撑破布局 */
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: fit-content;
+  max-width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+  border: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+  border-radius: var(--r-md);
+  font-size: 0.95em;
+}
+.md-tbl th,
+.md-tbl td {
+  padding: 6px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 65%, transparent);
+  border-right: 1px solid color-mix(in oklab, var(--line) 65%, transparent);
+  text-align: left; /* 分隔行 :---: 对齐以单元格内联样式覆盖 */
+  overflow-wrap: anywhere;
+}
+.md-tbl th:last-child,
+.md-tbl td:last-child {
+  border-right: none;
+}
+.md-tbl th {
+  background: color-mix(in oklab, var(--surface-2) 97%, transparent);
+  font-weight: 600;
+  color: var(--sub);
+  white-space: nowrap;
+}
+.md-tbl tbody tr:last-child td {
+  border-bottom: none;
+}
+
 /* ─────────────── 侧边导航（Tabs 组件宿主） ─────────────── */
 .app-nav {
   position: relative;
