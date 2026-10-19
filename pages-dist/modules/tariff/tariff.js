@@ -3651,6 +3651,9 @@ function initProvListeners() {
     }
     chTabRefresh(true); // 省份变化 → 跳蚤市集 tab 重新探测（显隐与内容随省份联动，与 goProvince 同款）
     actTabRefreshAndRender(); // 情报酒馆列表随省份联动
+    annRenderIfActive(); // 公告列表随省份联动（本省过滤）——goProvince 有此三件套，选择器切换路径此前漏挂
+    chatRenderIfActive(); // 唠嗑聚落列表随省份联动
+    maybePromosOnSwitch(); // 切换省份：重新判定推广弹窗（命中新范围且未读才弹）
   });
   ["cType", "cT1", "cT2"].forEach(id => { const el = $(id); if (el) el.addEventListener("change", () => renderChangelog()); });
 }
@@ -4393,7 +4396,7 @@ Shell.registerPage({
   id: "tariff",
   route: "/",
   onEnter: async function(root) {
-    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261019a");
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261019b");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">
