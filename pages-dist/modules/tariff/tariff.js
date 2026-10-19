@@ -588,6 +588,10 @@ function goProvince(code) {
   annRenderIfActive(); // 公告列表随省份联动（本省过滤）
   chatRenderIfActive(); // 唠嗑聚落列表随省份联动
   maybePromosOnSwitch(); // 切换省份：重新判定推广弹窗（命中新范围且未读才弹）
+  /* 同 change 路径：非 active 页签的 DOM 靠下次进入重渲染，删除守卫防残留旧省内容 */
+  delete TAB_SHOWN["acts"];
+  delete TAB_SHOWN["chat"];
+  delete TAB_SHOWN["announce"];
 }
 
 /* ─────────────── 跳蚤市集 tab（复用 shell/post-view.js 渲染；动态探测显隐） ───────────────
@@ -3656,6 +3660,11 @@ function initProvListeners() {
     annRenderIfActive(); // 公告列表随省份联动（本省过滤）——goProvince 有此三件套，选择器切换路径此前漏挂
     chatRenderIfActive(); // 唠嗑聚落列表随省份联动
     maybePromosOnSwitch(); // 切换省份：重新判定推广弹窗（命中新范围且未读才弹）
+    /* 三页签的联动渲染仅在页签 active 时执行：切省时若停在其他页签，数据已更新但 DOM 残留旧省，
+       TAB_SHOWN 守卫会拦截下次进入的重渲染 → 强制删除，进页签必重渲染（同 chTabRefresh 的 cardhub 模式） */
+    delete TAB_SHOWN["acts"];
+    delete TAB_SHOWN["chat"];
+    delete TAB_SHOWN["announce"];
   });
   ["cType", "cT1", "cT2"].forEach(id => { const el = $(id); if (el) el.addEventListener("change", () => renderChangelog()); });
 }
