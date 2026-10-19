@@ -2483,12 +2483,23 @@
   }
 }
 
-/* 变更记录：范围筛选 tabs（动态生成自运营商 category_maps.attr，与侧边导航分类同源） */
+/* 统计条 + 范围 tabs 同行：统计靠左、tabs 靠右，窄屏 tabs 换行独占一行 */
+.cl-meta-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.cl-meta-bar .cl-stats { margin-bottom: 0; flex: 1 1 auto; min-width: 0; }
+.cl-meta-bar .cl-attr-tabs { margin-bottom: 0; margin-left: auto; flex-wrap: nowrap; }
+.cl-meta-bar .cl-attr-tabs[hidden] { display: none; }
+@media (max-width: 640px) {
+  .cl-meta-bar .cl-attr-tabs { flex-basis: 100%; margin-left: 0; flex-wrap: wrap; order: 9; }
+}
 .cl-attr-tabs {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 14px;
 }
 .cl-attr-tabs[hidden] { display: none; } /* display:flex 会盖过 UA 的 [hidden]，需显式还原 */
 .cl-attr-tab {

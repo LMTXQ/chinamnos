@@ -3282,6 +3282,8 @@ function renderChangelog() {
   const code = getProvCode();
   const typeFilter = $("cType") ? $("cType").value : "";
   const box = $("changelogBox");
+  const statsBar0 = $("clStats");
+  if (statsBar0) statsBar0.innerHTML = ""; // 重渲染先清统计条：加载态/空态/换省不残留旧数据
 
   // 省份尚未就绪（直链 #changelog 早于 STATS 加载完成时 value 为空）：
   // 不发无效请求，主动拉取 STATS 并经 fillProvSelects → 补渲染
@@ -3367,21 +3369,21 @@ function clDraw() {
   filtered.forEach(l => { cnt[l.type] = (cnt[l.type] || 0) + 1; });
 
   const chip = (cls, lbl, n) => `<span class="chip ${cls}">${lbl} ${n}</span>`;
-  let html = `<div class="cl-stats">共 <strong>${filtered.length}</strong> 条变更 · <strong>${groups.length}</strong> 个采集批次
-    <span class="cl-stat-chips">${chip("add", "新增", cnt.added || 0)}${chip("del", "下架", cnt.removed || 0)}${chip("mod", "变更", cnt.changed || 0)}</span></div>`;
+  const statsBar = $("clStats");
+  if (statsBar) statsBar.innerHTML = `共 <strong>${filtered.length}</strong> 条变更 · <strong>${groups.length}</strong> 个采集批次
+    <span class="cl-stat-chips">${chip("add", "新增", cnt.added || 0)}${chip("del", "下架", cnt.removed || 0)}${chip("mod", "变更", cnt.changed || 0)}</span>`;
 
-  html += '<div class="tl">';
+  let html = '<div class="tl">';
   shown.forEach((g, gi) => {
     const tsKey = String(g.ts ?? ("#" + gi));
     const gc = { added: 0, removed: 0, changed: 0 };
     g.items.forEach(idx => { const l = filtered[idx]; gc[l.type] = (gc[l.type] || 0) + 1; });
 
-    // 展开状态优先级：用户单批次记忆 > 全部展开模式 > 收起模式 > 搜索时默认全展开 > 默认仅最新批次（fresh）
+    // 展开状态优先级：用户单批次记忆 > 全部展开模式 > 搜索(视为重新展开,优先于收起模式) > 收起模式 > 默认仅最新批次（fresh）
     const fresh = gi === 0;
     const open = clOpenOverride.has(tsKey) ? clOpenOverride.get(tsKey)
       : clExpandAll ? true
-      : clForceCollapse ? false
-      : (clQ ? true : fresh);
+      : (clQ ? true : clForceCollapse ? false : fresh);
     // 折叠态色条：不用数字堆叠，一眼看出本轮变化的类型构成
     const bars =
       (gc.added ? '<i class="b-add" title="有新增"></i>' : "") +
@@ -4600,7 +4602,10 @@ Shell.registerPage({
         <select id="cT2" class="sel" style="width:auto"><option value="">全部类型</option></select>
         <button type="button" class="btn ghost" id="clToggleAll" title="全部收起/展开">${icon("chevronsDown")}<span>全部展开</span></button>
       </div>
-      <div id="clAttrTabs" class="cl-attr-tabs" hidden></div>
+      <div id="clMetaBar" class="cl-meta-bar">
+        <div id="clStats" class="cl-stats"></div>
+        <div id="clAttrTabs" class="cl-attr-tabs" hidden></div>
+      </div>
       <div id="changelogBox"><div class="loading">选择省份后加载变更记录…</div></div>
     </section>
 
