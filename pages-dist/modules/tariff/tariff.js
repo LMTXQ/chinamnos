@@ -3063,6 +3063,8 @@ let clForceCollapse = false;       // 「全部收起」后新批次也默认收
 let clQ = "";                      // 变更记录搜索关键词（小写，输入即时筛选）
 let clQMode = "all";               // all=名称+快照全部字段 / name=仅名称（会话内记忆，与资费同机制）
 let clAttr = "";                   // 范围筛选 code（""=全部），code 来自当前运营商 ATTR_MAP
+let clAttrPresence = [];           // 当前省变更记录中实际出现的 attr code——tabs 按此动态生成（同侧边栏 buildDynamicTabs 按数据过滤机制，而非全量 ATTR_MAP）
+let clExpandAll = false;           // 「全部展开」模式（显式开关：开启时批次+类型子卡片默认全开；标签显示下一步动作）
 let clObserver = null;             // 上滑自动加载哨兵 observer
 
 /* 变更详情弹窗字段模式：false=全部字段+变化标注（默认） / true=仅看变化字段；
@@ -3198,16 +3200,21 @@ function clMoreBatch() {
   clDraw();
 }
 
-/** 全部收起/展开（单按钮互换；清空记忆让默认规则接管） */
+/** 全部收起/展开（显式模式开关互换：展开=批次+类型子卡片默认全开；切换时清空单条记忆让模式接管） */
 function clToggleAll() {
   const box = $("changelogBox");
   if (!box) return;
-  const anyOpen = box.querySelectorAll(".tl-item.open").length > 0;
-  clForceCollapse = anyOpen;
+  if (clExpandAll) {
+    clExpandAll = false;
+    clForceCollapse = true; // 收起后新批次也保持收起
+  } else {
+    clExpandAll = true;
+    clForceCollapse = false;
+  }
   clOpenOverride.clear();
   clSecOverride.clear();
   const btn = $("clToggleAll");
-  if (btn) btn.innerHTML = icon(anyOpen ? "chevronsUp" : "chevronsDown") + "<span>全部" + (anyOpen ? "展开" : "收起") + "</span>";
+  if (btn) btn.innerHTML = icon(clExpandAll ? "chevronsUp" : "chevronsDown") + "<span>全部" + (clExpandAll ? "收起" : "展开") + "</span>";
   clDraw();
 }
 
@@ -3253,12 +3260,13 @@ function matchClSearch(l) {
   return false;
 }
 
-/** 范围筛选 tabs：动态生成自当前运营商 category_maps.attr（与侧边导航分类标签同源同序），
-    映射未就绪时整行隐藏；切运营商后旧选中 code 不在映射中则自动重置回「全部」 */
+/** 范围筛选 tabs：按当前省变更记录实际出现的 attr code 动态生成（同侧边栏 buildDynamicTabs
+    的按数据过滤机制，而非全量 ATTR_MAP——联通只有全网/本省数据时不会出现家庭资费 tab），
+    文案走 ATTR_MAP（缺失兜底「分类N」与导航同规则）；切省份/运营商后旧选中 code 不在集合中自动重置回「全部」 */
 function renderClAttrTabs() {
   const row = $("clAttrTabs");
   if (!row) return;
-  const codes = Object.keys(ATTR_MAP).sort();
+  const codes = clAttrPresence.slice().sort();
   if (!codes.length) { row.hidden = true; row.innerHTML = ""; return; }
   if (clAttr && !codes.includes(clAttr)) clAttr = "";
   const tab = (codeVal) => {
@@ -3295,6 +3303,9 @@ function renderChangelog() {
   box.innerHTML = '<div class="loading">加载变更记录…</div>';
   Promise.all([loadChangelog(code), loadSnapshot(code).catch(() => null)]).then(([cl, snap]) => {
     const logs = cl.logs || [];
+    const present = new Set();
+    logs.forEach(l => { const a = String(l.attr || ""); if (a) present.add(a); });
+    clAttrPresence = Array.from(present); // 范围 tabs 的动态数据源（按当前省实际记录）
     const itemMap = {};
     if (snap && snap.items) snap.items.forEach(it => { if (it.id) itemMap[it.id] = it; });
 
@@ -3365,9 +3376,12 @@ function clDraw() {
     const gc = { added: 0, removed: 0, changed: 0 };
     g.items.forEach(idx => { const l = filtered[idx]; gc[l.type] = (gc[l.type] || 0) + 1; });
 
-    // 展开状态：用户记忆优先；默认仅最新批次展开（fresh）
+    // 展开状态优先级：用户单批次记忆 > 全部展开模式 > 收起模式 > 搜索时默认全展开 > 默认仅最新批次（fresh）
     const fresh = gi === 0;
-    const open = clOpenOverride.has(tsKey) ? clOpenOverride.get(tsKey) : (clForceCollapse ? false : fresh);
+    const open = clOpenOverride.has(tsKey) ? clOpenOverride.get(tsKey)
+      : clExpandAll ? true
+      : clForceCollapse ? false
+      : (clQ ? true : fresh);
     // 折叠态色条：不用数字堆叠，一眼看出本轮变化的类型构成
     const bars =
       (gc.added ? '<i class="b-add" title="有新增"></i>' : "") +
@@ -3384,7 +3398,8 @@ function clDraw() {
       if (!gc[tp]) return;
       const cls = tp === "added" ? "add" : tp === "removed" ? "del" : "mod";
       const lbl = tp === "added" ? "新增" : tp === "removed" ? "下架" : "变更";
-      const secOpen = clSecOverride.get(tsKey + "|" + tp) === true;
+      const sk = tsKey + "|" + tp;
+      const secOpen = clSecOverride.has(sk) ? clSecOverride.get(sk) : (clExpandAll || !!clQ); // 搜索/全部展开时子卡片默认打开，用户单卡片记忆仍优先
       html += `<div class="tl-sec-entry${secOpen ? " open" : ""}" data-stype="${tp}">`;
       html += `<div class="tl-sec-head" role="button" tabindex="0" aria-expanded="${secOpen}"><b>${lbl}</b><span class="tl-sec-chips"><span class="chip ${cls}">${gc[tp]} 项</span></span><span class="tl-sec-arrow"></span></div>`;
       html += '<div class="tl-sec-body"><div class="tl-chipbox">';
@@ -4583,7 +4598,7 @@ Shell.registerPage({
         <select id="cType" class="sel" style="width:auto"><option value="">全部变更</option><option value="added">新增</option><option value="removed">下架</option><option value="changed">变更</option></select>
         <select id="cT1" class="sel" style="width:auto"><option value="">全部归属</option></select>
         <select id="cT2" class="sel" style="width:auto"><option value="">全部类型</option></select>
-        <button type="button" class="btn ghost" id="clToggleAll" title="全部收起/展开">${icon("chevronsDown")}<span>全部收起</span></button>
+        <button type="button" class="btn ghost" id="clToggleAll" title="全部收起/展开">${icon("chevronsDown")}<span>全部展开</span></button>
       </div>
       <div id="clAttrTabs" class="cl-attr-tabs" hidden></div>
       <div id="changelogBox"><div class="loading">选择省份后加载变更记录…</div></div>
@@ -4754,6 +4769,9 @@ Shell.registerPage({
     clQ = "";
     clQMode = "all";
     clAttr = "";
+    clAttrPresence = [];
+    clExpandAll = false;
+    clForceCollapse = false;
     ATTR_MAP = {};
     TYPE1_MAP = {};
     TYPE2_MAP = {};
