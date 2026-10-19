@@ -586,7 +586,7 @@ function goProvince(code) {
   chTabRefresh(true); // 省份变化 → 跳蚤市集 tab 重新探测（显隐与内容随省份联动）
   actTabRefreshAndRender(); // 情报酒馆列表随省份联动
   annRenderIfActive(); // 公告列表随省份联动（本省过滤）
-  chatRenderIfActive(); // 唠嗑聚落列表随省份联动
+  chatTabRefreshAndRender(); // 唠嗑聚落随省份联动（refetch，同上：API 兜底路径 items 为按省子集）
   maybePromosOnSwitch(); // 切换省份：重新判定推广弹窗（命中新范围且未读才弹）
   /* 同 change 路径：非 active 页签的 DOM 靠下次进入重渲染，删除守卫防残留旧省内容 */
   delete TAB_SHOWN["acts"];
@@ -3669,9 +3669,11 @@ function initProvListeners() {
       else if (id === "view-changelog") renderChangelog();
     }
     chTabRefresh(true); // 省份变化 → 跳蚤市集 tab 重新探测（显隐与内容随省份联动，与 goProvince 同款）
-    actTabRefreshAndRender(); // 情报酒馆列表随省份联动
+    actTabRefreshAndRender(); // 情报酒馆列表随省份联动（refetch：静态源按省过滤 + API 源服务端按省过滤，均需重拉）
     annRenderIfActive(); // 公告列表随省份联动（本省过滤）——goProvince 有此三件套，选择器切换路径此前漏挂
-    chatRenderIfActive(); // 唠嗑聚落列表随省份联动
+    /* 唠嗑聚落必须 refetch 而非纯重渲染：API 兜底路径下 chatState.items 是按省服务端过滤的子集，
+       静态路径缺失（如本地无烘焙文件）时切省拿旧省子集过滤 → 恒为空 */
+    chatTabRefreshAndRender();
     maybePromosOnSwitch(); // 切换省份：重新判定推广弹窗（命中新范围且未读才弹）
     /* 三页签的联动渲染仅在页签 active 时执行：切省时若停在其他页签，数据已更新但 DOM 残留旧省，
        TAB_SHOWN 守卫会拦截下次进入的重渲染 → 强制删除，进页签必重渲染（同 chTabRefresh 的 cardhub 模式） */
