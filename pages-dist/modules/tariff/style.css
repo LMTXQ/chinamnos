@@ -175,8 +175,11 @@
   list-style: none;
   margin: 0;
   padding: 6px;
-  max-height: 320px;
+  max-height: min(320px, calc(100dvh - 150px));
   overflow-y: auto;
+  overscroll-behavior: contain;      /* 滚到列表边缘不再链接到页面滚动，避免"滚不动"手感 */
+  -webkit-overflow-scrolling: touch; /* iOS 触摸滚动动量 */
+  touch-action: pan-y;               /* 移动端明确纵向拖拽意图 */
 }
 .prov-mode {
   flex: none;
@@ -265,12 +268,12 @@
   background: rgba(0, 0, 0, .28);
   color: #fff;
 }
-/* 选中态：大区渐变底 + 白字 + ✓（--ica/--icb 由卡片内联注入） */
+/* 选中态：运营商主题色渐变底（--acc/--acc-deep 由 JS 按运营商注入）+ 白字 + ✓ */
 .prov-list.grid .prov-opt.sel {
-  border-color: var(--ica);
-  background: linear-gradient(150deg, var(--ica) 0%, var(--icb) 100%);
+  border-color: var(--acc);
+  background: linear-gradient(150deg, var(--acc) 0%, var(--acc-deep) 100%);
   color: #fff;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
+  box-shadow: 0 4px 12px color-mix(in oklab, var(--acc) 35%, transparent);
 }
 .prov-list.grid .prov-opt.sel .pv-nm { color: #fff; font-weight: 700; }
 .prov-list.grid .prov-opt.sel .pv-ct { color: rgba(255, 255, 255, .92); }

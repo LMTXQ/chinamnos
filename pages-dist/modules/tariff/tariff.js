@@ -3608,7 +3608,11 @@ function buildProvPicker(el) {
     setOpen(false);
     el.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  document.addEventListener("click", e => { if (open && !el.contains(e.target)) setOpen(false); });
+  document.addEventListener("click", e => {
+    /* composedPath 而非 contains：modeBtn 切换图标会替换自身 innerHTML，原始点击 target
+       （旧 svg）被移出 DOM 游离，contains(游离节点)=false 会误判外点导致面板闪关 */
+    if (open && !e.composedPath().includes(el)) setOpen(false);
+  });
 
   el.setOptions = (opts, defVal) => {
     options = opts || [];
@@ -4389,7 +4393,7 @@ Shell.registerPage({
   id: "tariff",
   route: "/",
   onEnter: async function(root) {
-    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css");
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261019a");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">
