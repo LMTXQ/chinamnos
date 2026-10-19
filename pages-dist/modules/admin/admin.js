@@ -36,7 +36,7 @@ const TABS = [
 /* ── 显示名映射 ── */
 const STATUS_LABELS = { pending: "待审核", open: "在售中", rejected: "已拒绝", closed: "已下架", expired: "已过期" };
 const BOARD_LABELS = { lost: "求购", found: "出让", rent_out: "出租", rent_want: "求租" };
-const CARRIER_LABELS = { cmcc: "移动", unicom: "联通", telecom: "电信", cbn: "广电" };
+const CARRIER_LABELS = { cmcc: "移动", cucc: "联通", ctcc: "电信", cbn: "广电" };
 const ROLE_LABELS = { owner: "站长", admin: "管理员", user: "普通用户" };
 const ACTION_LABELS = {
   review_post: "审核通过", reject_post: "审核拒绝", close_post: "下架帖子", delete_post: "删除帖子",

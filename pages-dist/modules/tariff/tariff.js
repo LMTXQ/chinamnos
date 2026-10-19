@@ -597,9 +597,9 @@ function goProvince(code) {
 /* ─────────────── 跳蚤市集 tab（复用 shell/post-view.js 渲染；动态探测显隐） ───────────────
    ▸ 数据：现有公开列表接口（服务端筛选 carrier/province，全部板块混排，置顶优先）
    ▸ 显隐：站长关闭跳蚤市集（/api/meta module_cardhub_enabled）或该运营商+省份无帖 → tab 隐藏
-   ▸ 编码映射：资费 cmcc/cucc/ctcc/cbn ↔ 号卡 cmcc/unicom/telecom/cbn；省份用中文名（号卡库存中文名）
+   ▸ 编码统一：全站运营商标识已统一为资费口径 cmcc/cucc/ctcc/cbn（2026-10 迁移，数据库与烘焙文件同步）；
+     省份用中文名（号卡库存中文名）
    ▸ 互动边界：详情为只读导流快照——复制/登录可用，在线沟通/收藏等引导去跳蚤市集 */
-const CH_CARRIER_MAP = { cmcc: "cmcc", cucc: "unicom", ctcc: "telecom", cbn: "cbn" };
 const chState = {
   enabled: null,        // null=未探测 meta；false=跳蚤市集被站长关闭
   available: false,     // 当前运营商+省份有无可展示帖
@@ -647,7 +647,7 @@ async function chEnsureSchema() {
 
 /* 探测：meta 开关 → 拉一页列表 → 有帖才有 tab。返回 available */
 async function chProbe(force) {
-  const carrierKey = CH_CARRIER_MAP[currentCarrier] || "";
+  const carrierKey = currentCarrier;
   const provName = chProvName();
   const sig = carrierKey + "|" + provName;
   if (!force && chState.probedSig === sig) return chState.available;
@@ -790,7 +790,7 @@ function actDraftClear(mode) {
 
 let actProvPending = false; // 直链 #acts 时 STATS 未就绪的补加载守卫（同 annProvPending 模式）
 async function actTabRefresh() {
-  const carrierKey = CH_CARRIER_MAP[currentCarrier] || "";
+  const carrierKey = currentCarrier;
   let provName = chProvName();
   /* 直链 #acts 且 STATS 未就绪：主动拉取 stats 并填充省份后重取省名（否则列表只会命中全国条目） */
   if (!provName && !STATS && !actProvPending) {
@@ -1302,7 +1302,7 @@ async function actSubmit() {
   }
   const r = await api.activityCreate({
     mode: actState.mode,
-    carrier: guide && f.allCarriers ? "" : (CH_CARRIER_MAP[currentCarrier] || ""),
+    carrier: guide && f.allCarriers ? "" : currentCarrier,
     province: f.scope === "nat" ? "" : provName,
     title,
     url: url || undefined,
@@ -1419,7 +1419,7 @@ const chatState = {
 
 let chatProvPending = false; // 直链 #chat 时 STATS 未就绪的补加载守卫（同 acts/announce 模式）
 async function chatTabRefresh() {
-  const carrierKey = CH_CARRIER_MAP[currentCarrier] || "";
+  const carrierKey = currentCarrier;
   let provName = chProvName();
   if (!provName && !STATS && !chatProvPending) {
     chatProvPending = true;
@@ -1702,7 +1702,7 @@ async function chatSubmit() {
   if (f.scope === "prov" && !provName) { toast("省份未就绪，请稍后再试"); return; }
   const body = {
     chat_type: f.type, scope: f.scope,
-    carrier: CH_CARRIER_MAP[currentCarrier] || "",
+    carrier: currentCarrier,
     province: provName,
     title, url, chat_id: chatId, descr: (f.descr || "").trim(),
     anon: !!f.anon,

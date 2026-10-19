@@ -56,8 +56,8 @@ export interface BoardDef {
 
 export const CARRIERS = [
   { id: 'cmcc', name: '中国移动' },
-  { id: 'unicom', name: '中国联通' },
-  { id: 'telecom', name: '中国电信' },
+  { id: 'cucc', name: '中国联通' },
+  { id: 'ctcc', name: '中国电信' },
   { id: 'cbn', name: '中国广电' },
 ];
 
