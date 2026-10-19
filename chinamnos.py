@@ -3997,6 +3997,23 @@ class CloudflareStorage(StorageBackend):
                 f'(HTTP {resp.status_code}): {resp.text}'
             )
 
+    def _buffer_local_sync(self, rel_path, content):
+        """buffer 数据文件回写本地前端目录（{frontend_dir}/{rel_path}）：github_only 拉取是清空式
+        替换且仓库不含 data 文件，回写保证 localhost 测试环境与线上部署完全同源
+        （快照/变更/公告/公共配置/烘焙一视同仁）。尽力而为：失败仅告警，不影响部署。"""
+        prefix = f'{self.path_prefix}/'
+        if not rel_path.startswith(prefix) or not self.frontend_dir:
+            return
+        try:
+            fpath = os.path.join(os.path.abspath(self.frontend_dir), rel_path)
+            os.makedirs(os.path.dirname(fpath), exist_ok=True)
+            tmp = fpath + '.tmp'
+            with open(tmp, 'wb') as f:
+                f.write(content)
+            os.replace(tmp, fpath)
+        except Exception as e:
+            logger.warning(f'Cloudflare: 本地数据副本 {rel_path} 回写失败(不影响部署): {str(e)[:80]}')
+
     def commit(self, message='auto update', skip_unchanged_download=False):
         self._ensure_project()
 
@@ -4005,6 +4022,7 @@ class CloudflareStorage(StorageBackend):
             files.update(_collect_frontend_files(self.frontend_dir, self.frontend_source))
         for rel_path, content in self._buffer.items():
             files[rel_path] = content
+            self._buffer_local_sync(rel_path, content)
         self._inject_routes(files)
 
         cached_manifest = {}
@@ -4966,22 +4984,6 @@ def _bake_fetch(s, path):
     return None
 
 
-def _bake_local_copy(frontend_dir, rel_key, data):
-    """烘焙文件同步写一份到本地前端目录（data/{rel_key}）：write_json 只落远端存储，
-    本地 pages-dist/data 的社区文件原本依赖部署前 GitHub 拉取覆盖——frontend_source 为
-    local_only 或当轮拉取未跑时本地缺文件，localhost 静态源 404 全程走 API 兜底。
-    尽力而为：失败仅告警，不影响部署。"""
-    try:
-        fpath = os.path.join(os.path.abspath(frontend_dir), 'data', rel_key)
-        os.makedirs(os.path.dirname(fpath), exist_ok=True)
-        tmp = fpath + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
-        os.replace(tmp, fpath)
-    except Exception as e:
-        logger.warning(f'[bake] 本地副本 {rel_key} 写入失败(不影响部署): {str(e)[:80]}')
-
-
 def bake_community_data(storage, config, carrier_keys=None):
     """社区内容静态化：拉取导出端点写 acts/chats/tools 快照进部署 buffer。
     逐项尽力而为：任一端点/文件失败只跳过该项，不阻塞部署。
@@ -4993,17 +4995,12 @@ def bake_community_data(storage, config, carrier_keys=None):
     acts = _bake_fetch(s, '/api/export/acts')
     chats = _bake_fetch(s, '/api/export/chats')
     tools = _bake_fetch(s, '/api/export/navlinks')
-    # 本地前端目录（与 frontend_source.frontend_dir 同源，默认 ./pages-dist）：烘焙副本落本地，
-    # 保证 localhost 测试环境与线上同源（write_json 只落远端，本地原本拿不到这些文件）
-    frontend_dir = ((config.get('storage') or {}).get('frontend_source') or {}).get('frontend_dir') or './pages-dist'
 
     if tools is not None:
-        payload = {'generated_at': now_iso(), 'items': tools.get('items') or []}
         try:
-            storage.write_json('tools.json', payload)
+            storage.write_json('tools.json', {'generated_at': now_iso(), 'items': tools.get('items') or []})
         except Exception as e:
             logger.warning(f'[bake] tools.json 写入失败(不影响本次部署): {str(e)[:100]}')
-        _bake_local_copy(frontend_dir, 'tools.json', payload)
 
     act_items = (acts or {}).get('items') or []
     chat_items = (chats or {}).get('items') or []
@@ -5018,12 +5015,10 @@ def bake_community_data(storage, config, carrier_keys=None):
             storage.write_json(f'{hub}/acts.json', {'generated_at': gen, 'items': sub_acts})
         except Exception as e:
             logger.warning(f'[bake] {hub}/acts.json 写入失败(不影响本次部署): {str(e)[:100]}')
-        _bake_local_copy(frontend_dir, f'{hub}/acts.json', {'generated_at': gen, 'items': sub_acts})
         try:
             storage.write_json(f'{hub}/chats.json', {'generated_at': gen, 'items': sub_chats})
         except Exception as e:
             logger.warning(f'[bake] {hub}/chats.json 写入失败(不影响本次部署): {str(e)[:100]}')
-        _bake_local_copy(frontend_dir, f'{hub}/chats.json', {'generated_at': gen, 'items': sub_chats})
     logger.info(f'[bake] 社区内容烘焙完成: acts={len(act_items)} chats={len(chat_items)} tools={len((tools or {}).get("items") or [])}')
 
 
