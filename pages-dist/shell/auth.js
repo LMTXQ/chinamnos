@@ -649,9 +649,11 @@ function openDrop(chip) {
   mountIcons(d);
   const rect = chip.getBoundingClientRect();
   d.style.top = (rect.bottom + 6) + "px";
-  d.style.left = (rect.right - d.offsetWidth - 0) + "px";
-  // 再校正一次（offsetWidth 在 display:none 时为 0）
+  /* 先加 .open 并把 left 归零再测宽：fixed 无宽元素是 shrink-to-fit，可用宽 = 视口宽 − left，
+     若带着旧 left（或尚未校正的错误 left）测宽，宽度会被挤压到 min-width 托底值，
+     导致首开宽度 ≠ 自然宽、下次打开时"漂移"。归零后测得自然宽再定位，首开即正确 */
   d.classList.add("open");
+  d.style.left = "0px";
   const dw = d.offsetWidth;
   let left = rect.right - dw;
   if (left < 8) left = 8;
