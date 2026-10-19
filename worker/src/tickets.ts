@@ -21,11 +21,10 @@ const APPLY_TYPES: Record<string, { category: string; label: string; settingKey:
   cardhub_guarantor: { category: '毛遂自荐', label: '卡商担保人', settingKey: 'ticket_apply_guarantor' },
 };
 
-// GET /api/tickets/apply-template?type=cardhub_guarantor：取自荐申请模板（登录用户）
+// GET /api/tickets/apply-template?type=cardhub_guarantor：取自荐申请模板
+// 公开只读端点（模板人人一样、无敏感信息）：采集端无 token 可拉取烘焙进 public-config.json 快照，
+// 前端读快照、缺失时回落本接口；故不做登录校验
 export async function handleTicketApplyTemplate(request: Request, env: Env): Promise<Response> {
-  const g = await guard(request, env, 'user');
-  if (g instanceof Response) return g;
-
   const type = new URL(request.url).searchParams.get('type') || '';
   const def = APPLY_TYPES[type];
   if (!def) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);

@@ -4877,6 +4877,7 @@ _PUBLIC_CONFIG_SOURCES = [
     ('notices',      '/api/notices',                       'direct'),
     ('email_policy', '/api/auth/email-policy',             'direct'),
     ('schema',       '/api/cardhub/schema',                'direct'),
+    ('ticket_apply_guarantor', '/api/tickets/apply-template?type=cardhub_guarantor', 'direct'),
     ('about',        '/api/about/timeline',                'timeline'),
     ('about',        '/api/about/thanks',                  'thanks'),
     ('about',        '/api/about/links',                   'links'),

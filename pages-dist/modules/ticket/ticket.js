@@ -13,6 +13,7 @@ import { icon, mountIcons, toast, withPending, showPageLoading, hidePageLoading 
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
+import { getPubConfig } from "../../shell/pubcfg.js";
 
 const CATEGORIES = ["举报", "申诉", "建议", "咨询", "毛遂自荐", "其他"];
 const OPEN_QUOTA = 3;
@@ -275,9 +276,19 @@ async function tkApplyPrefill() {
   let type = "";
   try { type = (JSON.parse(raw) || {}).type || ""; } catch { return; }
   if (!type) return;
-  const r = await api.request(`/api/tickets/apply-template?type=${encodeURIComponent(type)}`);
-  if (!r.ok) { toast(r.error || "申请模板加载失败，请手动选择分类提交"); return; }
-  const { category, label, template } = r.data;
+  /* 快照优先（data/public-config.json 的 ticket_apply_guarantor，下一轮采集更新）；缺失或类型不符回落 Worker 接口 */
+  let data = null;
+  try {
+    const pc = await getPubConfig();
+    const baked = pc && pc.ticket_apply_guarantor;
+    if (baked && baked.type === type) data = baked;
+  } catch { /* 快照不可用时回落接口 */ }
+  if (!data) {
+    const r = await api.request(`/api/tickets/apply-template?type=${encodeURIComponent(type)}`);
+    if (!r.ok) { toast(r.error || "申请模板加载失败，请手动选择分类提交"); return; }
+    data = r.data;
+  }
+  const { category, label, template } = data;
   S.view = "new";
   S.form = {
     category: category || "毛遂自荐", scope: "all", target: "",
