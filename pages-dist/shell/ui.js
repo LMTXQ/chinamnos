@@ -9,6 +9,7 @@
 /* ─────────────── SVG 图标系统（24×24, stroke 风格） ─────────────── */
 const ICONS = {
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chevronDown: '<path d="M6 9l6 6 6-6"/>',
   chart: '<path d="M4 20h16M7 16v-5M12 16V7M17 16v-8"/>',
@@ -98,6 +99,23 @@ export function mountIcons(root) {
   (root || document).querySelectorAll("i[data-icon]").forEach((el) => {
     el.outerHTML = icon(el.dataset.icon, el.className || "");
   });
+}
+
+/** 窄屏下拉面板防溢出：打开时把面板水平居中夹到视口内（两侧留 margin），宽屏(>maxPx)清除内联样式恢复默认锚定。
+ *  host=面板的定位父级（position:relative），pop=absolute 子面板；调用时机=面板刚置为可见后。
+ *  用 getBoundingClientRect 换算偏移而非 position:fixed——顶栏 backdrop-filter 会成为 fixed 后代的
+ *  包含块，fixed 定位在玻璃顶栏内不可靠。 */
+export function clampPopToViewport(host, pop, maxPx = 640, margin = 12) {
+  pop.style.left = "";
+  pop.style.right = "";
+  const vw = document.documentElement.clientWidth;
+  if (vw > maxPx) return;
+  const hr = host.getBoundingClientRect();
+  const pw = pop.offsetWidth;
+  if (!pw) return;
+  const target = Math.max(margin, Math.min((vw - pw) / 2, vw - pw - margin));
+  pop.style.right = "auto";
+  pop.style.left = (target - hr.left) + "px";
 }
 
 /* ─────────────── Toast 轻提示 ─────────────── */

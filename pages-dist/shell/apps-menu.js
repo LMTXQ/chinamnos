@@ -11,7 +11,7 @@
 "use strict";
 
 import { Shell } from "./shell.js";
-import { icon, mountIcons } from "./ui.js";
+import { icon, mountIcons, clampPopToViewport } from "./ui.js";
 import { Auth } from "./auth.js";
 import { api } from "./api.js";
 
@@ -51,10 +51,12 @@ export function mountAppsMenu(slotEl, currentId) {
   mountIcons(slotEl);
 
   const toggle = slotEl.querySelector("[data-am-toggle]");
+  const dropdown = slotEl.querySelector(".apps-dropdown");
   toggle.addEventListener("click", (e) => {
     e.stopPropagation();
     const open = slotEl.classList.toggle("open");
     toggle.setAttribute("aria-expanded", String(open));
+    if (open) clampPopToViewport(slotEl, dropdown); // 窄屏视口水平居中夹紧，防跑出屏幕
   });
 
   slotEl.querySelectorAll("[data-am-route]").forEach((b) => {

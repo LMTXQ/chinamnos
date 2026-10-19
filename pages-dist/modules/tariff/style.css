@@ -170,18 +170,55 @@
   font-size: 13px;
   font-family: inherit;
 }
-/* 卡片网格（借鉴 hunan-tariff-site）：手机 3 列起随面板宽度自适应 4~5 列，31 省一屏全览 */
+/* 列表/网格双模式容器：视图切换由搜索框右侧 .prov-mode 图标按钮控制（localStorage 记忆） */
 .prov-list {
   list-style: none;
   margin: 0;
-  padding: 8px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
-  gap: 6px;
+  padding: 6px;
   max-height: 320px;
   overflow-y: auto;
 }
-.prov-opt {
+.prov-mode {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--sub);
+  cursor: pointer;
+  transition: color .15s var(--ease), border-color .15s var(--ease);
+}
+.prov-mode:hover { color: var(--acc); border-color: color-mix(in oklab, var(--acc) 55%, var(--line)); }
+.prov-mode svg { width: 14px; height: 14px; }
+
+/* ── 列表模式（原版样式）：省名一行一条 ── */
+.prov-list.list { padding: 5px; }
+.prov-list.list .prov-opt {
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 13.5px;
+  color: var(--txt);
+  cursor: pointer;
+  transition: background-color .12s;
+}
+.prov-list.list .prov-opt:hover, .prov-list.list .prov-opt.hl { background: color-mix(in oklab, var(--acc) 12%, transparent); }
+.prov-list.list .prov-opt.sel {
+  color: var(--acc);
+  font-weight: 600;
+  background: color-mix(in oklab, var(--acc) 10%, transparent);
+}
+
+/* ── 网格模式（借鉴 hunan-tariff-site）：手机 3 列起随面板宽度自适应 4~5 列，31 省一屏全览 ── */
+.prov-list.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 6px;
+  padding: 8px;
+}
+.prov-list.grid .prov-opt {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -199,7 +236,7 @@
   cursor: pointer;
   transition: border-color .15s var(--ease), background-color .15s var(--ease), box-shadow .15s var(--ease);
 }
-.prov-opt:hover, .prov-opt.hl { border-color: color-mix(in oklab, var(--acc) 55%, var(--line)); }
+.prov-list.grid .prov-opt:hover, .prov-list.grid .prov-opt.hl { border-color: color-mix(in oklab, var(--acc) 55%, var(--line)); }
 .pv-nm {
   max-width: 100%;
   font-size: 13px;
@@ -229,17 +266,18 @@
   color: #fff;
 }
 /* 选中态：大区渐变底 + 白字 + ✓（--ica/--icb 由卡片内联注入） */
-.prov-opt.sel {
+.prov-list.grid .prov-opt.sel {
   border-color: var(--ica);
   background: linear-gradient(150deg, var(--ica) 0%, var(--icb) 100%);
   color: #fff;
   box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
 }
-.prov-opt.sel .pv-nm { color: #fff; font-weight: 700; }
-.prov-opt.sel .pv-ct { color: rgba(255, 255, 255, .92); }
-.prov-opt.sel .pv-dot { background: rgba(255, 255, 255, .85); }
-.prov-opt.sel .pv-ck { display: flex; }
-.prov-empty { grid-column: 1 / -1; padding: 12px 10px; font-size: 12.5px; color: var(--sub); text-align: center; }
+.prov-list.grid .prov-opt.sel .pv-nm { color: #fff; font-weight: 700; }
+.prov-list.grid .prov-opt.sel .pv-ct { color: rgba(255, 255, 255, .92); }
+.prov-list.grid .prov-opt.sel .pv-dot { background: rgba(255, 255, 255, .85); }
+.prov-list.grid .prov-opt.sel .pv-ck { display: flex; }
+.prov-list.grid .prov-empty { grid-column: 1 / -1; }
+.prov-empty { padding: 12px 10px; font-size: 12.5px; color: var(--sub); text-align: center; list-style: none; }
 
 /* 收藏计数徽章 */
 .fav-badge {

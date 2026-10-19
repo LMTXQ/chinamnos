@@ -13,7 +13,7 @@
 "use strict";
 
 import { Shell, esc, fetchTimeout, theme, ensureStylesheet } from "../../shell/shell.js";
-import { icon, mountIcons, Tabs, initFX, toast, PAGE_LOADING_MIN_MS } from "../../shell/ui.js";
+import { icon, mountIcons, Tabs, initFX, toast, PAGE_LOADING_MIN_MS, clampPopToViewport } from "../../shell/ui.js";
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
@@ -3518,14 +3518,19 @@ function buildProvPicker(el) {
   if (!el || el.dataset.picker) return;
   el.dataset.picker = "1";
   el.classList.add("prov-picker");
+  /* 视图模式：grid=彩色卡片网格 / list=纵向列表（原版样式），搜索框右侧图标切换并记忆 */
+  const MODE_KEY = "chinamnos_prov_picker_view";
+  let mode = "grid";
+  try { mode = localStorage.getItem(MODE_KEY) === "list" ? "list" : "grid"; } catch { /* 隐私模式忽略 */ }
   el.innerHTML =
     `<button type="button" class="prov-toggle" aria-haspopup="listbox" aria-expanded="false"><span class="prov-cur">请选择</span>${icon("chevronDown")}</button>` +
-    `<div class="prov-pop" hidden><div class="prov-search-wrap">${icon("search")}<input type="text" class="prov-search" placeholder="搜索省份…" enterkeyhint="search"></div><ul class="prov-list" role="listbox"></ul></div>`;
+    `<div class="prov-pop" hidden><div class="prov-search-wrap">${icon("search")}<input type="text" class="prov-search" placeholder="搜索省份…" enterkeyhint="search"><button type="button" class="prov-mode" aria-label="切换视图"></button></div><ul class="prov-list" role="listbox"></ul></div>`;
   const toggle = el.querySelector(".prov-toggle");
   const pop = el.querySelector(".prov-pop");
   const search = el.querySelector(".prov-search");
   const list = el.querySelector(".prov-list");
   const cur = el.querySelector(".prov-cur");
+  const modeBtn = el.querySelector(".prov-mode");
   let options = [];
   let value = "";
   let open = false;
@@ -3535,8 +3540,15 @@ function buildProvPicker(el) {
     const k = (kw || "").trim().toLowerCase();
     const shown = k ? options.filter(o => o.name.toLowerCase().includes(k) || o.code.toLowerCase().includes(k)) : options;
     if (!shown.length) { list.innerHTML = `<li class="prov-empty">无匹配省份</li>`; return; }
-    /* 卡片网格：省名 + 大区色点 + 该省条数（STATS.provinces 自带 total.tariffs）；
+    if (mode === "list") {
+      /* 列表模式 = 原版样式：省名一行一条 */
+      list.className = "prov-list list";
+      list.innerHTML = shown.map(o => `<li role="option" aria-selected="${o.code === value}" class="prov-opt${o.code === value ? " sel" : ""}" data-code="${esc(o.code)}">${esc(o.name)}</li>`).join("");
+      return;
+    }
+    /* 网格模式：省名 + 大区色点 + 该省条数（STATS.provinces 自带 total.tariffs）；
        .prov-opt 类名保留供键盘导航（↑↓/Enter）命中，sel 选中态由样式渲染渐变底 */
+    list.className = "prov-list grid";
     list.innerHTML = shown.map(o => {
       const c = REGION_COLOR[PROV_REGION[o.name] || "其他"] || REGION_COLOR["其他"];
       const cnt = o.total && Number.isFinite(o.total.tariffs) ? fmt(o.total.tariffs) : "—";
@@ -3547,12 +3559,28 @@ function buildProvPicker(el) {
         `<span class="pv-ck">✓</span></li>`;
     }).join("");
   }
+  const paintMode = () => {
+    modeBtn.innerHTML = icon(mode === "grid" ? "list" : "grid"); // 图标=点按后将切到的视图
+    modeBtn.title = mode === "grid" ? "切换为列表视图" : "切换为网格视图";
+  };
+  modeBtn.addEventListener("click", () => {
+    mode = mode === "grid" ? "list" : "grid";
+    try { localStorage.setItem(MODE_KEY, mode); } catch { /* */ }
+    paintMode();
+    renderList(search.value);
+  });
+  paintMode();
   function setOpen(v) {
     open = v;
     pop.hidden = !v;
     el.classList.toggle("open", v);
     toggle.setAttribute("aria-expanded", v ? "true" : "false");
-    if (v) { search.value = ""; renderList(""); setTimeout(() => search.focus(), 0); }
+    if (v) {
+      search.value = "";
+      renderList("");
+      clampPopToViewport(el, pop); // 窄屏视口水平居中夹紧，防跑出屏幕
+      setTimeout(() => search.focus(), 0);
+    }
   }
   toggle.addEventListener("click", e => { e.stopPropagation(); setOpen(!open); });
   search.addEventListener("input", () => renderList(search.value));
