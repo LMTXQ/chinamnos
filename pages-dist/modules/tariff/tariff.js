@@ -3060,6 +3060,9 @@ let clView = null;        // 变更日志视图数据：{ logs, itemMap, groups,
 const clOpenOverride = new Map();  // 批次 ts → bool（展开记忆，重渲染不弹回）
 const clSecOverride = new Map();   // ts|type → bool（类型子卡片展开记忆）
 let clForceCollapse = false;       // 「全部收起」后新批次也默认收起
+let clQ = "";                      // 变更记录搜索关键词（小写，输入即时筛选）
+let clQMode = "all";               // all=名称+快照全部字段 / name=仅名称（会话内记忆，与资费同机制）
+let clAttr = "";                   // 范围筛选 code（""=全部），code 来自当前运营商 ATTR_MAP
 let clObserver = null;             // 上滑自动加载哨兵 observer
 
 /* 变更详情弹窗字段模式：false=全部字段+变化标注（默认） / true=仅看变化字段；
@@ -3236,6 +3239,37 @@ function fillClFilters() {
   if (keep2 && TYPE2_MAP[keep2]) sel2.value = keep2;
 }
 
+/** 变更记录搜索匹配：all=名称+快照全部字段值（与资费「搜索全部内容」同规则）/ name=仅名称 */
+function matchClSearch(l) {
+  if (String(l.name || "").toLowerCase().includes(clQ)) return true;
+  if (clQMode === "name") return false;
+  const snap = l.snapshot;
+  if (snap && typeof snap === "object") {
+    for (const k in snap) {
+      const v = snap[k];
+      if (v != null && String(v).toLowerCase().includes(clQ)) return true;
+    }
+  }
+  return false;
+}
+
+/** 范围筛选 tabs：动态生成自当前运营商 category_maps.attr（与侧边导航分类标签同源同序），
+    映射未就绪时整行隐藏；切运营商后旧选中 code 不在映射中则自动重置回「全部」 */
+function renderClAttrTabs() {
+  const row = $("clAttrTabs");
+  if (!row) return;
+  const codes = Object.keys(ATTR_MAP).sort();
+  if (!codes.length) { row.hidden = true; row.innerHTML = ""; return; }
+  if (clAttr && !codes.includes(clAttr)) clAttr = "";
+  const tab = (codeVal) => {
+    const label = codeVal ? (ATTR_MAP[codeVal] || ("分类" + codeVal)) : "全部";
+    const on = codeVal ? clAttr === codeVal : !clAttr;
+    return `<button type="button" class="cl-attr-tab${on ? " on" : ""}" data-attr="${esc(codeVal)}"${on ? ' aria-pressed="true"' : ""}>${esc(label)}</button>`;
+  };
+  row.hidden = false;
+  row.innerHTML = tab("") + codes.map(tab).join("");
+}
+
 function renderChangelog() {
   const code = getProvCode();
   const typeFilter = $("cType") ? $("cType").value : "";
@@ -3267,17 +3301,21 @@ function renderChangelog() {
     if (!logs.length) {
       box.innerHTML = '<div class="empty">暂无变更记录</div>';
       clView = null;
+      renderClAttrTabs(); // 映射就绪时仍刷新 tabs，避免残留上一省的选中态
       return;
     }
 
-    // 筛选（内存过滤）：变更类型 + 归属 + 资费类型 三条件 AND；不符合的条目不参与分组 → 所在批次无符合项时整组自然隐藏
+    // 筛选（内存过滤）：变更类型 + 归属 + 资费类型 + 范围 + 搜索词 五条件 AND；不符合的条目不参与分组 → 所在批次无符合项时整组自然隐藏
     fillClFilters();
+    renderClAttrTabs();
     const t1Filter = $("cT1") ? $("cT1").value : "";
     const t2Filter = $("cT2") ? $("cT2").value : "";
     const filtered = logs.filter(l =>
       (!typeFilter || l.type === typeFilter) &&
       (!t1Filter || String(l.t1 || "") === t1Filter) &&
-      (!t2Filter || String(l.t2 || "") === t2Filter));
+      (!t2Filter || String(l.t2 || "") === t2Filter) &&
+      (!clAttr || String(l.attr || "") === clAttr) &&
+      (!clQ || matchClSearch(l)));
     if (!filtered.length) {
       box.innerHTML = `<div class="empty">当前筛选下没有匹配的变更记录（共 ${logs.length} 条记录被过滤）</div>`;
       clView = null;
@@ -3295,7 +3333,7 @@ function renderChangelog() {
       g.items.push(idx);
     });
 
-    const clKey = code + "_" + typeFilter + "_" + t1Filter + "_" + t2Filter;
+    const clKey = code + "_" + typeFilter + "_" + t1Filter + "_" + t2Filter + "_" + clAttr + "_" + clQMode + "_" + clQ;
     if (!clPageState[clKey]) clPageState[clKey] = 6;
     clView = { logs: filtered, itemMap, groups, clKey };
     clDraw();
@@ -3682,6 +3720,33 @@ function initProvListeners() {
     delete TAB_SHOWN["announce"];
   });
   ["cType", "cT1", "cT2"].forEach(id => { const el = $(id); if (el) el.addEventListener("change", () => renderChangelog()); });
+
+  /* 变更记录搜索：输入即时筛选（数据量小无需防抖）+ 模式切换（与资费列表同款交互） */
+  const cSearchEl = $("cSearch");
+  if (cSearchEl) cSearchEl.addEventListener("input", () => { clQ = cSearchEl.value.trim().toLowerCase(); renderChangelog(); });
+  const cQModeEl = $("cQMode");
+  if (cQModeEl) {
+    const syncClSearchMode = () => {
+      cQModeEl.textContent = clQMode === "name" ? "仅名称" : "全部";
+      cQModeEl.classList.toggle("name-mode", clQMode === "name");
+      if (cSearchEl) cSearchEl.placeholder = clQMode === "name" ? "搜索资费名称…" : "搜索名称/资费标准/说明…";
+    };
+    syncClSearchMode();
+    cQModeEl.addEventListener("click", () => {
+      clQMode = clQMode === "name" ? "all" : "name";
+      syncClSearchMode();
+      if (clQ) renderChangelog(); // 有关键词才需重筛，无则仅切模式（与资费同款）
+    });
+  }
+  /* 范围 tabs：事件委托，点击即筛选（tabs 由 renderClAttrTabs 动态重建） */
+  const clAttrTabsEl = $("clAttrTabs");
+  if (clAttrTabsEl) clAttrTabsEl.addEventListener("click", e => {
+    const btn = e.target.closest(".cl-attr-tab");
+    if (!btn) return;
+    clAttr = btn.dataset.attr || "";
+    renderClAttrTabs();
+    renderChangelog();
+  });
 }
 
 /* ─────────────── 检测资费变化 ─────────────── */
@@ -4514,11 +4579,13 @@ Shell.registerPage({
       <h1 class="page-title">变更日志</h1>
       <p class="page-sub">资费套餐增删改时间线</p>
       <div class="toolbar htl">
+        <div class="search-wrap"><button type="button" class="search-mode-btn" id="cQMode" title="切换搜索范围：全部内容（名称+字段） / 仅名称">全部</button><input type="search" id="cSearch" class="search-box" placeholder="搜索名称/资费标准/说明…"><kbd class="search-kbd" title="按 / 快速聚焦">/</kbd></div>
         <select id="cType" class="sel" style="width:auto"><option value="">全部变更</option><option value="added">新增</option><option value="removed">下架</option><option value="changed">变更</option></select>
         <select id="cT1" class="sel" style="width:auto"><option value="">全部归属</option></select>
         <select id="cT2" class="sel" style="width:auto"><option value="">全部类型</option></select>
         <button type="button" class="btn ghost" id="clToggleAll" title="全部收起/展开">${icon("chevronsDown")}<span>全部收起</span></button>
       </div>
+      <div id="clAttrTabs" class="cl-attr-tabs" hidden></div>
       <div id="changelogBox"><div class="loading">选择省份后加载变更记录…</div></div>
     </section>
 
@@ -4684,6 +4751,9 @@ Shell.registerPage({
     Object.keys(TAB_SHOWN).forEach(function(k) { delete TAB_SHOWN[k]; });
     Object.keys(listState).forEach(function(k) { delete listState[k]; });
     Object.keys(clPageState).forEach(function(k) { delete clPageState[k]; });
+    clQ = "";
+    clQMode = "all";
+    clAttr = "";
     ATTR_MAP = {};
     TYPE1_MAP = {};
     TYPE2_MAP = {};

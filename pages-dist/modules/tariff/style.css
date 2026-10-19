@@ -2483,6 +2483,34 @@
   }
 }
 
+/* 变更记录：范围筛选 tabs（动态生成自运营商 category_maps.attr，与侧边导航分类同源） */
+.cl-attr-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.cl-attr-tabs[hidden] { display: none; } /* display:flex 会盖过 UA 的 [hidden]，需显式还原 */
+.cl-attr-tab {
+  appearance: none;
+  padding: 5px 14px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--sub);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.cl-attr-tab:hover { color: var(--acc); border-color: color-mix(in oklab, var(--acc) 55%, var(--line)); }
+.cl-attr-tab.on {
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
 .search-wrap {
   position: relative;
   flex: 1 1 220px;
