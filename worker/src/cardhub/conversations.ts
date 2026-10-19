@@ -46,12 +46,15 @@ export async function handleCreateConversation(request: Request, env: Env): Prom
   ).bind(buyerEmail).first<{ c: number }>();
   if ((openCount?.c ?? 0) >= 5) return fail(40903, 'CONVERSATION_CAP', 409);
 
-  // 唯一性：(post, 登录买家) 唯一——重复发起不消耗每日限额
+  // 唯一性：(post, 登录买家) 唯一——重复发起不消耗每日限额；已删除（隐藏）的会话在此找回并清除隐藏标记
   const existing = await env.DB.prepare(
     'SELECT id FROM conversations WHERE post_id = ?1 AND buyer_user_id = ?2',
   ).bind(postId, viewer.id).first<{ id: string }>();
 
-  if (existing) return fail(40902, 'CONVERSATION_EXISTS', 409, { id: existing.id });
+  if (existing) {
+    await env.DB.prepare('UPDATE conversations SET hidden_buyer = 0 WHERE id = ?1').bind(existing.id).run();
+    return fail(40902, 'CONVERSATION_EXISTS', 409, { id: existing.id });
+  }
 
   // 每日新交易会话限额：20 个/天（重复发起走上面 40902 分支不消耗）
   const rl = await hitLimit(env, `conv:start:${viewer.id}`, 20, 86400);
@@ -103,14 +106,20 @@ export async function handleDmCreate(request: Request, env: Env, uid: string): P
   ).bind(uid).first<{ id: string }>();
   if (!target) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
 
-  // 复用既有 open 私信会话（双向匹配），不消耗每日限额
+  // 复用既有 open 私信会话（双向匹配），不消耗每日限额；已删除（隐藏）的会话在此找回并清除发起方标记
   const existing = await env.DB.prepare(
-    `SELECT id FROM conversations
+    `SELECT id, seller_id FROM conversations
      WHERE kind = 'dm' AND status = 'open'
        AND ((seller_id = ?1 AND buyer_user_id = ?2) OR (seller_id = ?2 AND buyer_user_id = ?1))
      LIMIT 1`,
-  ).bind(uid, me.id).first<{ id: string }>();
-  if (existing) return ok({ id: existing.id, reused: true });
+  ).bind(uid, me.id).first<{ id: string; seller_id: string }>();
+  if (existing) {
+    const mineSeller = existing.seller_id === me.id;
+    await env.DB.prepare(
+      `UPDATE conversations SET ${mineSeller ? 'hidden_seller' : 'hidden_buyer'} = 0 WHERE id = ?1`,
+    ).bind(existing.id).run();
+    return ok({ id: existing.id, reused: true });
+  }
 
   // 每天最多发起 3 个新私信会话
   const rl = await hitLimit(env, `dm:start:${me.id}`, 3, 86400);
@@ -125,6 +134,28 @@ export async function handleDmCreate(request: Request, env: Env, uid: string): P
   ).bind(convId, uid, me.id, me.email, profile?.nickname ?? '', now, now).run();
 
   return ok({ id: convId, reused: false });
+}
+
+// POST /api/cardhub/conversations/:id/hide：从我的会话列表移除（微信式隐藏）
+//   参与人各自标记自己的视角，对方列表与聊天记录完全不受影响；
+//   对方发新消息会清双方标记使会话重新出现；主动复用会话（dm/帖子在线沟通）清发起方标记
+export async function handleConversationHide(request: Request, env: Env, convId: string): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+
+  const conv = await env.DB.prepare(
+    'SELECT seller_id, buyer_user_id FROM conversations WHERE id = ?1',
+  ).bind(convId).first<{ seller_id: string; buyer_user_id: string | null }>();
+  if (!conv) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
+
+  const isSeller = g.viewer.id === conv.seller_id;
+  const isBuyer = g.viewer.id === conv.buyer_user_id;
+  if (!isSeller && !isBuyer) return fail(ERR.FORBIDDEN, 'FORBIDDEN', 403);
+
+  await env.DB.prepare(
+    `UPDATE conversations SET ${isSeller ? 'hidden_seller' : 'hidden_buyer'} = 1 WHERE id = ?1`,
+  ).bind(convId).run();
+  return ok({ hidden: true });
 }
 
 // GET /api/admin/conversations?user_id=：站长专用——查看任意用户参与的会话列表

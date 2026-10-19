@@ -35,7 +35,7 @@ export async function handleMyConversations(request: Request, env: Env): Promise
             p.title AS post_title,
             CASE WHEN c.seller_id = ?1 THEN 'seller' ELSE 'buyer' END AS my_role
      FROM conversations c LEFT JOIN posts p ON c.post_id = p.id
-     WHERE c.seller_id = ?1 OR c.buyer_user_id = ?1
+     WHERE (c.seller_id = ?1 AND c.hidden_seller = 0) OR (c.buyer_user_id = ?1 AND c.hidden_buyer = 0)
      ORDER BY c.updated_at DESC LIMIT 100`,
   ).bind(g.viewer.id).all();
 
@@ -132,12 +132,15 @@ export async function handleReplyMessage(request: Request, env: Env, convId: str
 
   const senderRole = isSeller ? 'seller' : 'buyer';
   const now = Date.now();
-  await env.DB.prepare(
-    `INSERT INTO messages (id, conversation_id, sender_role, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)`,
-  ).bind(ulid(), convId, senderRole, text, now).run();
-  await env.DB.prepare(
-    `UPDATE conversations SET msg_count = msg_count + 1, updated_at = ?1 WHERE id = ?2`,
-  ).bind(now, convId).run();
+  // 新消息清双方隐藏标记（微信式：删除会话后对方回复，会话重新出现在双方列表）
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO messages (id, conversation_id, sender_role, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)`,
+    ).bind(ulid(), convId, senderRole, text, now),
+    env.DB.prepare(
+      `UPDATE conversations SET msg_count = msg_count + 1, updated_at = ?1, hidden_seller = 0, hidden_buyer = 0 WHERE id = ?2`,
+    ).bind(now, convId),
+  ]);
 
   const plain = stripImageUrlLines(text); // 图片 URL 不进邮件/站内通知正文
   const otherUid = (isSeller ? conv.buyer_user_id : (kind === 'dm' ? conv.seller_id : conv.post_owner)) as string | null;

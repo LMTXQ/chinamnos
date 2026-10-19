@@ -28,7 +28,7 @@ import { handleMyPosts } from './cardhub/me-posts';
 import { handleMyDeals } from './cardhub/me-deals';
 import { handleClosePost, handleWithdrawPost, handleResubmitPost, handleDeletePost, handleUpdatePost } from './cardhub/post-actions';
 import { handleAdminPostDetail } from './admin/posts';
-import { handleCreateConversation, handleDmCreate, handleAdminConvList } from './cardhub/conversations';
+import { handleCreateConversation, handleDmCreate, handleAdminConvList, handleConversationHide } from './cardhub/conversations';
 import { handleMyConversations, handleReplyMessage, handleConversationDetail } from './cardhub/conversation-messages';
 import { handleCreateRelayRequest } from './cardhub/relay-requests';
 import { handleFavoriteToggle, handleMyFavorites } from './cardhub/favorites';
@@ -223,6 +223,8 @@ export default {
           resp = await handleConversationDetail(request, env, p.split('/')[4]);
         } else if (m === 'POST' && /^\/api\/cardhub\/conversations\/[^/]+\/messages$/.test(p)) {
           resp = await handleReplyMessage(request, env, p.split('/')[4]);
+        } else if (m === 'POST' && /^\/api\/cardhub\/conversations\/[^/]+\/hide$/.test(p)) {
+          resp = await handleConversationHide(request, env, p.split('/')[4]);
         } else if (p === '/api/cardhub/relay-requests' && m === 'POST') {
           resp = await handleCreateRelayRequest(request, env);
         } else if (p === '/api/cardhub/me/favorites' && m === 'GET') {

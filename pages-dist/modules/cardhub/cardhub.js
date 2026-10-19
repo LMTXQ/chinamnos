@@ -1439,6 +1439,7 @@ function convListHTML(items) {
         <span class="ch-conv-side-hint">${c.status === "open" ? (near ? "即将用完" : "条消息额度") : "已关闭"}</span>
         <span class="ch-card-arrow">${icon("arrowRight")}</span>
       </span>
+      <span class="ch-conv-del" data-act="hideConv" data-id="${esc(c.id)}" role="button" title="从我的会话列表移除（对方不受影响）">${icon("trash")}</span>
     </button>`;
   }).join("");
 }
@@ -1815,6 +1816,17 @@ async function onRootClick(e) {
   if (a === "backBoard") { S.view = "board"; render(); return; }
   /* 会话收件箱：打开对话 / 返回列表 / 发送回复 / 图片引导弹窗（外链图床方案） */
   if (a === "openConv") { openConv(actEl.dataset.id); return; }
+  if (a === "hideConv") {
+    /* 会话删除（微信式隐藏）：仅从我的列表移除，对方不受影响；对方新消息/主动复用会话时重新出现 */
+    const id = actEl.dataset.id || "";
+    if (!confirm("将该会话从你的列表移除？\n· 对方的列表与聊天记录不受影响\n· 对方回复新消息时会话会重新出现")) return;
+    const r = await api.convHide(id);
+    if (!r.ok) { toast(r.error || "移除失败"); return; }
+    S.convList = (S.convList || []).filter((c) => c.id !== id);
+    renderConvListRegion();
+    toast("已从会话列表移除");
+    return;
+  }
   if (a === "backConvs") { S.view = "convs"; S.convDetail = null; S.convList = null; render(); loadConvs(); return; }
   if (a === "convSend") { withPending(actEl, () => sendConvMsg()); return; }
   if (a === "convImgGuide") { openImageHostGuide(); return; }

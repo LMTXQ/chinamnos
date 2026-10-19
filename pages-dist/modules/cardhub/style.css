@@ -1793,6 +1793,23 @@
 .ch-conv-side-hint { font-size: 11px; color: var(--sub); }
 .ch-conv-item .ch-card-arrow { color: var(--sub); }
 .ch-conv-item .ch-card-arrow svg { width: 16px; height: 16px; }
+/* 会话删除（微信式隐藏）：低透明度垃圾桶，悬停转红；点击仅移除自己视角，对方不受影响 */
+.ch-conv-del {
+  flex: none;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 2px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--sub);
+  opacity: .4;
+  cursor: pointer;
+  transition: opacity .15s var(--ease), color .15s var(--ease), background-color .15s var(--ease);
+}
+.ch-conv-del:hover { opacity: 1; color: var(--red); background: color-mix(in oklab, var(--red) 10%, transparent); }
+.ch-conv-del svg { width: 14px; height: 14px; }
 /* 会话列表工具栏：搜索框 + 发起方筛选（左组贴排布，对齐情报酒馆工具栏约定） */
 .ch-conv-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .ch-conv-toolbar .inp { flex: 1 1 220px; max-width: 340px; }
