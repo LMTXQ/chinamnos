@@ -199,9 +199,11 @@
 .prov-mode:hover { color: var(--acc); border-color: color-mix(in oklab, var(--acc) 55%, var(--line)); }
 .prov-mode svg { width: 14px; height: 14px; }
 
-/* ── 列表模式（原版样式）：省名一行一条 ── */
-.prov-list.list { padding: 5px; }
-.prov-list.list .prov-opt {
+/* ── 列表模式（原版样式）：省名一行一条。
+   ⚠ 修饰类名用 pv-mode-* 前缀：曾用 "list" 撞上下方 .list 资费列表组件（overflow:hidden，
+   同特异性靠后覆盖）致列表模式无滚动条；grid 亦有同类撞名风险，一并加前缀 ── */
+.prov-list.pv-mode-list { padding: 5px; }
+.prov-list.pv-mode-list .prov-opt {
   padding: 7px 10px;
   border-radius: 7px;
   font-size: 13.5px;
@@ -209,21 +211,21 @@
   cursor: pointer;
   transition: background-color .12s;
 }
-.prov-list.list .prov-opt:hover, .prov-list.list .prov-opt.hl { background: color-mix(in oklab, var(--acc) 12%, transparent); }
-.prov-list.list .prov-opt.sel {
+.prov-list.pv-mode-list .prov-opt:hover, .prov-list.pv-mode-list .prov-opt.hl { background: color-mix(in oklab, var(--acc) 12%, transparent); }
+.prov-list.pv-mode-list .prov-opt.sel {
   color: var(--acc);
   font-weight: 600;
   background: color-mix(in oklab, var(--acc) 10%, transparent);
 }
 
 /* ── 网格模式（借鉴 hunan-tariff-site）：手机 3 列起随面板宽度自适应 4~5 列，31 省一屏全览 ── */
-.prov-list.grid {
+.prov-list.pv-mode-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
   gap: 6px;
   padding: 8px;
 }
-.prov-list.grid .prov-opt {
+.prov-list.pv-mode-grid .prov-opt {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -241,7 +243,7 @@
   cursor: pointer;
   transition: border-color .15s var(--ease), background-color .15s var(--ease), box-shadow .15s var(--ease);
 }
-.prov-list.grid .prov-opt:hover, .prov-list.grid .prov-opt.hl { border-color: color-mix(in oklab, var(--acc) 55%, var(--line)); }
+.prov-list.pv-mode-grid .prov-opt:hover, .prov-list.pv-mode-grid .prov-opt.hl { border-color: color-mix(in oklab, var(--acc) 55%, var(--line)); }
 .pv-nm {
   max-width: 100%;
   font-size: 13px;
@@ -271,17 +273,17 @@
   color: #fff;
 }
 /* 选中态：运营商主题色渐变底（--acc/--acc-deep 由 JS 按运营商注入）+ 白字 + ✓ */
-.prov-list.grid .prov-opt.sel {
+.prov-list.pv-mode-grid .prov-opt.sel {
   border-color: var(--acc);
   background: linear-gradient(150deg, var(--acc) 0%, var(--acc-deep) 100%);
   color: #fff;
   box-shadow: 0 4px 12px color-mix(in oklab, var(--acc) 35%, transparent);
 }
-.prov-list.grid .prov-opt.sel .pv-nm { color: #fff; font-weight: 700; }
-.prov-list.grid .prov-opt.sel .pv-ct { color: rgba(255, 255, 255, .92); }
-.prov-list.grid .prov-opt.sel .pv-dot { background: rgba(255, 255, 255, .85); }
-.prov-list.grid .prov-opt.sel .pv-ck { display: flex; }
-.prov-list.grid .prov-empty { grid-column: 1 / -1; }
+.prov-list.pv-mode-grid .prov-opt.sel .pv-nm { color: #fff; font-weight: 700; }
+.prov-list.pv-mode-grid .prov-opt.sel .pv-ct { color: rgba(255, 255, 255, .92); }
+.prov-list.pv-mode-grid .prov-opt.sel .pv-dot { background: rgba(255, 255, 255, .85); }
+.prov-list.pv-mode-grid .prov-opt.sel .pv-ck { display: flex; }
+.prov-list.pv-mode-grid .prov-empty { grid-column: 1 / -1; }
 .prov-empty { padding: 12px 10px; font-size: 12.5px; color: var(--sub); text-align: center; list-style: none; }
 
 /* 收藏计数徽章 */

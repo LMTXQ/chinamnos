@@ -3541,14 +3541,16 @@ function buildProvPicker(el) {
     const shown = k ? options.filter(o => o.name.toLowerCase().includes(k) || o.code.toLowerCase().includes(k)) : options;
     if (!shown.length) { list.innerHTML = `<li class="prov-empty">无匹配省份</li>`; return; }
     if (mode === "list") {
-      /* 列表模式 = 原版样式：省名一行一条 */
-      list.className = "prov-list list";
+      /* 列表模式 = 原版样式：省名一行一条。
+         类名用 pv-mode-* 前缀：曾用 "list" 撞上 .list 资费列表组件的 overflow:hidden
+         （同特异性靠后覆盖），导致列表模式无滚动条且不可滚 */
+      list.className = "prov-list pv-mode-list";
       list.innerHTML = shown.map(o => `<li role="option" aria-selected="${o.code === value}" class="prov-opt${o.code === value ? " sel" : ""}" data-code="${esc(o.code)}">${esc(o.name)}</li>`).join("");
       return;
     }
     /* 网格模式：省名 + 大区色点 + 该省条数（STATS.provinces 自带 total.tariffs）；
        .prov-opt 类名保留供键盘导航（↑↓/Enter）命中，sel 选中态由样式渲染渐变底 */
-    list.className = "prov-list grid";
+    list.className = "prov-list pv-mode-grid";
     list.innerHTML = shown.map(o => {
       const c = REGION_COLOR[PROV_REGION[o.name] || "其他"] || REGION_COLOR["其他"];
       const cnt = o.total && Number.isFinite(o.total.tariffs) ? fmt(o.total.tariffs) : "—";
@@ -4396,7 +4398,7 @@ Shell.registerPage({
   id: "tariff",
   route: "/",
   onEnter: async function(root) {
-    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261019b");
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261019c");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">
