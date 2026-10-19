@@ -763,7 +763,7 @@ const ACT_MODE_LABELS = { official: "官方活动", guide: "个人攻略" };
 const ACT_MD_MAX = 10000;  // 攻略正文上限（与后端 MD_MAX 对齐）
 const ACT_DRAFT_KEYS = { official: "act_official", guide: "act_guide" };
 const actState = {
-  items: [], mine: [], favItems: [], favLoaded: false, panelOpen: false, mode: "official", filter: "", q: "", scope: "", editor: null,
+  items: [], mine: [], favItems: [], favLoaded: false, panelOpen: false, mode: "official", filter: "", q: "", scope: "", editor: null, loadFailed: false,
   form: { title: "", url: "", scope: "prov", descr: "", ends: "", qr: null, allCarriers: false, content: "", anon: false },
 };
 
@@ -812,9 +812,16 @@ async function actTabRefresh() {
   if (actStatic && Array.isArray(actStatic.items)) {
     actState.items = actStatic.items.filter((x) => !x.province || x.province === provName);
     actState.mine = (actApi && actApi.ok) ? (actApi.data.mine || []) : [];
+    actState.loadFailed = false;
   } else if (actApi && actApi.ok) {
     actState.items = actApi.data.items || [];
     actState.mine = actApi.data.mine || [];
+    actState.loadFailed = false;
+  } else {
+    /* 双源皆败（静态拉取失败且未登录/接口失败）：必须清空陈旧条目——否则切省后
+       标题已是新省、列表残留旧省数据，用户看到「标题变了数据没变」的错位 */
+    actState.items = [];
+    actState.loadFailed = true;
   }
   actState.favItems = (fr && fr.ok) ? (fr.data.items || []) : [];
   actState.favLoaded = Auth.isLoggedIn();
@@ -1109,7 +1116,7 @@ function actRenderList() {
   const items = actFilteredItems();
   const emptyTip = favView
     ? (actState.favLoaded ? "暂无收藏，点击情报卡片上的「收藏」按钮即可保存到这里" : "登录后可收藏感兴趣的情报")
-    : `暂无${esc(provName)}的情报，欢迎投稿第一条！`;
+    : (actState.loadFailed ? "情报加载失败，请检查网络后下拉刷新或稍后再试" : `暂无${esc(provName)}的情报，欢迎投稿第一条！`);
   const q = actState.q.trim();
   el.innerHTML = items.length
     ? `<div class="act-list">${items.map(actCardHTML).join("")}</div>`
@@ -1406,7 +1413,7 @@ function actOnBodyClick(e) {
    ▸ 无截止时间（社群长期有效）；可选匿名展示（公众侧匿名 chip，管理组审核可见）；提交者实名/匿名（点头像看资料卡） */
 const CHAT_TYPES = ["论坛", "QQ群", "微信群", "贴吧", "纸飞机", "其他"];
 const chatState = {
-  items: [], mine: [], panelOpen: false, q: "", typeFilter: "", scope: "",
+  items: [], mine: [], panelOpen: false, q: "", typeFilter: "", scope: "", loadFailed: false,
   form: { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", anon: false, qr: null, proof: null },
 };
 
@@ -1431,9 +1438,15 @@ async function chatTabRefresh() {
   if (chatStatic && Array.isArray(chatStatic.items)) {
     chatState.items = chatStatic.items; // 缓存 carrier 全量，省过滤统一在 chatFilteredItems（切省零网络）
     chatState.mine = (chatApi && chatApi.ok) ? (chatApi.data.mine || []) : [];
+    chatState.loadFailed = false;
   } else if (chatApi && chatApi.ok) {
     chatState.items = chatApi.data.items || [];
     chatState.mine = chatApi.data.mine || [];
+    chatState.loadFailed = false;
+  } else {
+    /* 双源皆败：清空陈旧条目（同情报酒馆，防「标题新省、列表旧省」错位） */
+    chatState.items = [];
+    chatState.loadFailed = true;
   }
 }
 function chatTabRefreshAndRender() {
@@ -1548,7 +1561,7 @@ function chatRenderList() {
   const q = chatState.q.trim();
   el.innerHTML = items.length
     ? `<div class="act-list">${items.map(chatCardHTML).join("")}</div>`
-    : `<div class="empty" style="padding:32px;text-align:center">${(q || chatState.typeFilter) ? "没有匹配的社群，试试调整搜索词或种类筛选" : `暂无${esc(provName)}的社群，欢迎收录第一条！`}</div>`;
+    : `<div class="empty" style="padding:32px;text-align:center">${(q || chatState.typeFilter) ? "没有匹配的社群，试试调整搜索词或种类筛选" : (chatState.loadFailed ? "社群加载失败，请检查网络后稍后再试" : `暂无${esc(provName)}的社群，欢迎收录第一条！`)}</div>`;
   mountIcons(el);
 }
 
