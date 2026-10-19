@@ -3496,7 +3496,24 @@ function initTheme() {
 }
 
 /* ─────────────── 省份选择器（带搜索过滤，替代原生 select） ───────────────
-   保留 #gProv 的 value 属性读写与 change 事件，与既有调用点兼容 */
+   保留 #gProv 的 value 属性读写与 change 事件，与既有调用点兼容
+   ▸ 面板内为彩色卡片网格（借鉴 hunan-tariff-site）：大区配色色点 + 该省资费条数，
+     选中态渐变底 + ✓；31 省一屏全览，替代纵向长列表 */
+const PROV_REGION = {
+  北京: "华北", 天津: "华北", 河北: "华北", 山西: "华北", 内蒙古: "华北",
+  辽宁: "东北", 吉林: "东北", 黑龙江: "东北",
+  上海: "华东", 江苏: "华东", 浙江: "华东", 安徽: "华东", 福建: "华东", 江西: "华东", 山东: "华东",
+  河南: "华中", 湖北: "华中", 湖南: "华中",
+  广东: "华南", 广西: "华南", 海南: "华南",
+  重庆: "西南", 四川: "西南", 贵州: "西南", 云南: "西南", 西藏: "西南",
+  陕西: "西北", 甘肃: "西北", 青海: "西北", 宁夏: "西北", 新疆: "西北",
+};
+const REGION_COLOR = {
+  华北: ["#6366f1", "#8b8cf7"], 东北: ["#0ea5e9", "#5cc8ff"], 华东: ["#14b8a6", "#5ee9a4"],
+  华中: ["#f59e0b", "#ffcf70"], 华南: ["#ec4899", "#ff8ec4"], 西南: ["#8b5cf6", "#b79cff"],
+  西北: ["#ef4444", "#ff8a95"], 其他: ["#64748b", "#94a3b8"], // 全网/深圳等无大区归属的兜底
+};
+
 function buildProvPicker(el) {
   if (!el || el.dataset.picker) return;
   el.dataset.picker = "1";
@@ -3517,7 +3534,18 @@ function buildProvPicker(el) {
   function renderList(kw) {
     const k = (kw || "").trim().toLowerCase();
     const shown = k ? options.filter(o => o.name.toLowerCase().includes(k) || o.code.toLowerCase().includes(k)) : options;
-    list.innerHTML = shown.map(o => `<li role="option" class="prov-opt${o.code === value ? " sel" : ""}" data-code="${esc(o.code)}">${esc(o.name)}</li>`).join("") || `<li class="prov-empty">无匹配省份</li>`;
+    if (!shown.length) { list.innerHTML = `<li class="prov-empty">无匹配省份</li>`; return; }
+    /* 卡片网格：省名 + 大区色点 + 该省条数（STATS.provinces 自带 total.tariffs）；
+       .prov-opt 类名保留供键盘导航（↑↓/Enter）命中，sel 选中态由样式渲染渐变底 */
+    list.innerHTML = shown.map(o => {
+      const c = REGION_COLOR[PROV_REGION[o.name] || "其他"] || REGION_COLOR["其他"];
+      const cnt = o.total && Number.isFinite(o.total.tariffs) ? fmt(o.total.tariffs) : "—";
+      return `<li role="option" aria-selected="${o.code === value}" class="prov-opt${o.code === value ? " sel" : ""}" data-code="${esc(o.code)}"` +
+        ` style="--ica:${c[0]};--icb:${c[1]}" title="${esc(o.name)} · ${PROV_REGION[o.name] || "其他"} · ${cnt} 条资费">` +
+        `<span class="pv-nm">${esc(o.name)}</span>` +
+        `<span class="pv-sub"><i class="pv-dot"></i><span class="pv-ct">${cnt}</span></span>` +
+        `<span class="pv-ck">✓</span></li>`;
+    }).join("");
   }
   function setOpen(v) {
     open = v;

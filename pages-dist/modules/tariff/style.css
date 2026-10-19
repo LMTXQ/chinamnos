@@ -144,7 +144,7 @@
   top: calc(100% + 6px);
   right: 0;
   z-index: 210;
-  width: min(280px, calc(100vw - 40px));
+  width: min(380px, calc(100vw - 40px));
   background: var(--glass-strong, var(--surface));
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -170,22 +170,76 @@
   font-size: 13px;
   font-family: inherit;
 }
-.prov-list { list-style: none; margin: 0; padding: 5px; max-height: 300px; overflow-y: auto; }
+/* 卡片网格（借鉴 hunan-tariff-site）：手机 3 列起随面板宽度自适应 4~5 列，31 省一屏全览 */
+.prov-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
 .prov-opt {
-  padding: 7px 10px;
-  border-radius: 7px;
-  font-size: 13.5px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 52px;
+  padding: 8px 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--surface-2) 55%, transparent);
   color: var(--txt);
+  font-size: 13px;
+  text-align: center;
   cursor: pointer;
-  transition: background-color .12s;
+  transition: border-color .15s var(--ease), background-color .15s var(--ease), box-shadow .15s var(--ease);
 }
-.prov-opt:hover, .prov-opt.hl { background: color-mix(in oklab, var(--acc) 12%, transparent); }
-.prov-opt.sel {
-  color: var(--acc);
+.prov-opt:hover, .prov-opt.hl { border-color: color-mix(in oklab, var(--acc) 55%, var(--line)); }
+.pv-nm {
+  max-width: 100%;
+  font-size: 13px;
   font-weight: 600;
-  background: color-mix(in oklab, var(--acc) 10%, transparent);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.prov-empty { padding: 12px 10px; font-size: 12.5px; color: var(--sub); text-align: center; }
+.pv-sub { display: flex; align-items: center; gap: 4px; opacity: .85; }
+.pv-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: linear-gradient(135deg, var(--ica), var(--icb)); }
+.pv-ct { font-size: 10px; color: var(--sub); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+.pv-ck {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  background: rgba(0, 0, 0, .28);
+  color: #fff;
+}
+/* 选中态：大区渐变底 + 白字 + ✓（--ica/--icb 由卡片内联注入） */
+.prov-opt.sel {
+  border-color: var(--ica);
+  background: linear-gradient(150deg, var(--ica) 0%, var(--icb) 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
+}
+.prov-opt.sel .pv-nm { color: #fff; font-weight: 700; }
+.prov-opt.sel .pv-ct { color: rgba(255, 255, 255, .92); }
+.prov-opt.sel .pv-dot { background: rgba(255, 255, 255, .85); }
+.prov-opt.sel .pv-ck { display: flex; }
+.prov-empty { grid-column: 1 / -1; padding: 12px 10px; font-size: 12.5px; color: var(--sub); text-align: center; }
 
 /* 收藏计数徽章 */
 .fav-badge {
