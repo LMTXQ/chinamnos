@@ -55,10 +55,24 @@ export async function handleGetSettings(request: Request, env: Env): Promise<Res
   return ok({ items: filled });
 }
 
+/** 公告/推广类键：管理员（admin）亦可修改——2026-10-20 站长决策：全站公告与推广的日常运营
+ *  对管理员开放，站长保留全部键的修改权；其余键（安全/准入/卡商推荐/关于页等）仍仅 owner */
+const ADMIN_EDITABLE_KEYS = new Set([
+  'site_notice_enabled',
+  'site_notice_title',
+  'site_notice_content',
+  'promos',
+  'promo_reswitch_enabled',
+]);
+
 // PUT /api/admin/settings/:key：更新设置
+// 权限分级：读取门槛 admin（owner 天然通过）；非 ADMIN_EDITABLE_KEYS 的键仍要求 owner
 export async function handleUpdateSetting(request: Request, env: Env, key: string): Promise<Response> {
-  const g = await guard(request, env, 'owner');
+  const g = await guard(request, env, 'admin');
   if (g instanceof Response) return g;
+  if (g.viewer.role !== 'owner' && !ADMIN_EDITABLE_KEYS.has(key)) {
+    return fail(ERR.FORBIDDEN, 'FORBIDDEN', 403);
+  }
 
   if (!ALLOWED_KEYS.has(key)) return fail(ERR.VALIDATION_ERROR, 'INVALID_KEY', 400);
 
