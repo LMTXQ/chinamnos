@@ -61,9 +61,8 @@ export async function handleCreatePost(request: Request, env: Env): Promise<Resp
   // 恒以服务端校验结果为准写入/清除，防客户端在 extra 里伪造 trade_guarantors 刷统计
   const guarantors = await validateTradeGuarantors(env, body.trade_guarantors, tradeMethods);
   if (guarantors.error) return fail(ERR.VALIDATION_ERROR, guarantors.error, 400, { field: 'trade_guarantors' });
-  const extraRec = extra as Record<string, unknown>;
-  if (guarantors.names.length) extraRec.trade_guarantors = guarantors.names;
-  else delete extraRec.trade_guarantors;
+  if (guarantors.names.length) (extra as Record<string, unknown>).trade_guarantors = guarantors.names;
+  else delete (extra as Record<string, unknown>).trade_guarantors;
 
   // 证明材料：出让(found)/出租(rent_out) 必须二选一——上传 1~3 张照片，或指定管理员实名审核
   // 选「管理员审核」时：该帖仅由站长或该管理员审核，队列特别提醒未上传资料

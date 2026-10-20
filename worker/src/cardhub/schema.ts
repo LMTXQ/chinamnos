@@ -366,11 +366,12 @@ export async function getSchema(env: Env) {
   const adminRows = await env.DB.prepare(
     `SELECT id, nickname FROM users WHERE role IN ('admin', 'owner') AND status = 'active' ORDER BY nickname ASC`,
   ).all<{ id: string; nickname: string | null }>();
-  // 担保人热度统计：上架中帖子 extra.$.trade_guarantors（字符串数组）逐元素聚合计数。
-  // extra 恒由后端 JSON.stringify 写入，json_valid + NULL 短路仅兜底历史脏数据（json_each(NULL) = 0 行，不抛错）
+  // 担保人热度统计：上架中帖子 extra_json.$.trade_guarantors（字符串数组）逐元素聚合计数。
+  // 列名为 extra_json（与 projection.ts safeJson 同源）；extra 恒由后端 JSON.stringify 写入，
+  // json_valid + NULL 短路仅兜底历史脏数据（json_each(NULL) = 0 行，不抛错）
   const statsRows = await env.DB.prepare(
     `SELECT je.value AS name, COUNT(*) AS c
-     FROM posts, json_each(CASE WHEN json_valid(posts.extra) THEN json_extract(posts.extra, '$.trade_guarantors') END) je
+     FROM posts, json_each(CASE WHEN json_valid(posts.extra_json) THEN json_extract(posts.extra_json, '$.trade_guarantors') END) je
      WHERE posts.status = 'open'
      GROUP BY je.value`,
   ).all<{ name: string; c: number }>();
