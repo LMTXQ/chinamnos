@@ -111,16 +111,35 @@ export async function handleUpdatePost(request: Request, env: Env, id: string): 
   if (!TTL_OPTIONS.includes(ttlDays)) return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400, { field: 'ttl_days' });
   /* 联系渠道校验由 parseContactChannels 统一承担（新字段优先 / 旧单选推导，枚举外即 error） */
 
-  // 交易方式（多选，选填）：值 ∈ TRADE_METHODS、去重；选「站长中转」必须同时选「站点担保」
+  // 交易方式（多选，选填）：常规板块值 ∈ TRADE_METHODS；市集专用 platform/direct（同创建规则）
   const rawTrades = Array.isArray(body.trade_methods) ? body.trade_methods : [];
   const tradeMethods: string[] = [];
-  for (const t of rawTrades) {
-    const ts = typeof t === 'string' ? t.trim() : '';
-    if (!VALID_TRADES.has(ts)) return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400, { field: 'trade_methods' });
-    if (!tradeMethods.includes(ts)) tradeMethods.push(ts);
-  }
-  if (channels.value.allowRelay && !tradeMethods.includes('site')) {
-    return fail(ERR.VALIDATION_ERROR, 'TRADE_SITE_REQUIRED', 400, { field: 'trade_methods' });
+  const isMarketBoard = post.board === 'market';
+  if (isMarketBoard) {
+    for (const t of rawTrades) {
+      const ts = typeof t === 'string' ? t.trim() : '';
+      if (ts !== 'platform' && ts !== 'direct') return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400, { field: 'trade_methods' });
+      if (!tradeMethods.includes(ts)) tradeMethods.push(ts);
+    }
+    if (tradeMethods.includes('platform')) {
+      const mu = typeof extraRec.market_url === 'string' ? (extraRec.market_url as string).trim() : '';
+      if (!/^https?:\/\/.+/i.test(mu)) return fail(ERR.VALIDATION_ERROR, 'MARKET_URL_REQUIRED', 400, { field: 'market_url' });
+      extraRec.market_url = mu;
+    } else {
+      delete extraRec.market_url;
+    }
+    if (tradeMethods.includes('direct') && !channels.value.allowChat && !(Array.isArray(body.contacts) && body.contacts.length)) {
+      return fail(ERR.VALIDATION_ERROR, 'MARKET_CONTACT_REQUIRED', 400, { field: 'contacts' });
+    }
+  } else {
+    for (const t of rawTrades) {
+      const ts = typeof t === 'string' ? t.trim() : '';
+      if (!VALID_TRADES.has(ts)) return fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400, { field: 'trade_methods' });
+      if (!tradeMethods.includes(ts)) tradeMethods.push(ts);
+    }
+    if (channels.value.allowRelay && !tradeMethods.includes('site')) {
+      return fail(ERR.VALIDATION_ERROR, 'TRADE_SITE_REQUIRED', 400, { field: 'trade_methods' });
+    }
   }
   if (tradeMethods.length) extraRec.trade_methods = tradeMethods;
 

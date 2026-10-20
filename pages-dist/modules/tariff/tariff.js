@@ -274,6 +274,7 @@ function t1ViewId(code) { return "t1_" + code; }
 
 let _loadingShownAt = 0;   // 最短显示时长 PAGE_LOADING_MIN_MS 由 ui.js 提供
 let _loadingHideTimer = 0;
+let deepLinkLoading = false;   // 深链跳转遮罩持有：跳转链（切运营商→切省→切页签→拉快照）中途数据管线的 hideLoading 不释放，由消费完成/超时统一释放
 function showLoading(text) {
   const el = $("dataLoading");
   if (!el) return;
@@ -284,12 +285,26 @@ function showLoading(text) {
   el.classList.add("show");
 }
 function hideLoading() {
+  if (deepLinkLoading) return;   // 深链遮罩由 deepLoadingHide 释放（管线的提前 hide 会造成遮罩闪烁）
   const el = $("dataLoading");
   if (!el || !_loadingShownAt) return;
   const wait = Math.max(0, PAGE_LOADING_MIN_MS - (Date.now() - _loadingShownAt));
   _loadingShownAt = 0;
   if (!wait) { el.classList.remove("show"); return; }
   _loadingHideTimer = setTimeout(() => el.classList.remove("show"), wait);
+}
+function deepLoadingShow() { deepLinkLoading = true; showLoading("正在打开分享内容…"); }
+function deepLoadingHide() { deepLinkLoading = false; hideLoading(); }
+/* 深链切省（#gProv 是自定义 picker，非 select）：返回 true=已就绪；false=未就绪（picker 未构建/该运营商无此省）。
+   设值成功才 dispatch change（联动 saveProvCode + 清 listState + 视图内重载） */
+function deepSwitchProv(prov) {
+  if (getProvCode() === prov) return true;
+  const picker = $("gProv");
+  if (!picker || !picker.setOptions) return false;   // picker 未由 fillProvSelects 构建前不动它（裸 div 设值只会污染省份记忆）
+  picker.value = prov;
+  if (getProvCode() !== prov) return false;   // 该运营商无此省（旧链接）：不 dispatch，避免每 500ms 重渲染风暴
+  picker.dispatchEvent(new Event("change"));
+  return false;
 }
 
 /** 统计数值写入：<num-ticker> 走滚动动画，其余直接写文本 */
@@ -903,7 +918,8 @@ function actCardHTML(a) {
     : `<span class="act-badge act-all">通用</span><span class="act-badge ${a.province ? "act-prov" : "act-nat"}">${a.province ? esc(a.province) : "全国"}</span>`;
   const mainAct = guide
     ? `<button type="button" class="btn primary sm" data-act="actDetail" data-id="${esc(a.id)}"><i data-icon="list"></i>查看攻略</button>`
-    : `<a class="btn primary sm act-go" href="${esc(a.url || "#")}" target="_blank" rel="noopener noreferrer">参与活动<i data-icon="external"></i></a>`;
+    : `<a class="btn primary sm act-go" href="${esc(a.url || "#")}" target="_blank" rel="noopener noreferrer">参与活动<i data-icon="external"></i></a>
+      <button type="button" class="btn ghost sm" data-act="actDetail" data-id="${esc(a.id)}" title="弹窗查看活动详情（描述/全部链接/二维码/分享）"><i data-icon="info"></i>详情</button>`;
   const linkChips = links.slice(0, 3).map((l) =>
     `<a class="act-link-chip" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer nofollow" title="${esc(l.label)}"><i data-icon="external"></i>${esc(l.label)}</a>`).join("");
   const moreChip = links.length > 3
@@ -928,6 +944,7 @@ function actCardHTML(a) {
       ${a.has_qr ? `<button type="button" class="btn ghost sm" data-act="actQr" data-id="${esc(a.id)}" data-title="${esc(a.title)}" title="查看二维码"><i data-icon="qr"></i>二维码</button>` : ""}
       ${!guide && a.url ? `<button type="button" class="btn ghost sm" data-act="actCopyLink" data-url="${esc(a.url)}" title="复制活动链接"><i data-icon="copy"></i>复制</button>` : ""}
       <button type="button" class="btn ghost sm" data-act="actFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该情报反馈或举报（工单中心）"><i data-icon="message"></i>反馈</button>
+      <button type="button" class="btn ghost sm" data-act="actShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本帖（复制链接或唤起系统分享）"><i data-icon="share"></i>分享</button>
       <button type="button" class="btn ghost sm act-fav-btn${a.favorited ? " act-faved" : ""}" data-act="actFav" data-id="${esc(a.id)}" title="${a.favorited ? "取消收藏" : "收藏到我的收藏"}"><i data-icon="${a.favorited ? "starFill" : "star"}"></i>${a.favorited ? "已收藏" : "收藏"}</button>
       ${isAdmin ? `<button type="button" class="btn ghost sm" data-act="actPinToggle" data-id="${esc(a.id)}" data-pinned="${a.pinned ? 1 : 0}" title="${a.pinned ? "取消置顶" : "置顶展示在列表最前（仅管理组可见此按钮）"}"><i data-icon="${a.pinned ? "chevronsDown" : "chevronsUp"}"></i>${a.pinned ? "取消置顶" : "置顶"}</button>` : ""}
     </div>
@@ -1394,6 +1411,9 @@ function actOnBodyClick(e) {
     actCopyLink(actEl, actEl.dataset.url);
   } else if (a === "actFeedback") {
     actFeedback(actEl.dataset.title, actEl.dataset.url);
+  } else if (a === "actShare") {
+    /* 列表卡片分享：官方活动卡直接跳外链不进详情弹窗，必须在此提供分享入口（弹窗内同名按钮走 __MODAL_ACT__） */
+    shareLink({ title: actEl.dataset.title || "情报酒馆", text: "来自情报酒馆的一条分享", hash: "act_" + currentCarrier + "_" + getProvCode() + "_" + encodeURIComponent(actEl.dataset.id || "") });
   } else if (a === "actFav") {
     if (!Auth.isLoggedIn()) { toast("请先登录后再收藏"); Auth.openLogin(); return; }
     api.activityFavoriteToggle(actEl.dataset.id).then((r) => {
@@ -1541,6 +1561,7 @@ function chatCardHTML(a) {
       ${a.chat_id && a.url ? `<button type="button" class="btn ghost sm" data-act="chatCopyId" data-id="${esc(a.chat_id)}" title="复制群号/账号"><i data-icon="copy"></i>复制群号</button>` : ""}
       ${a.has_qr ? `<button type="button" class="btn ghost sm" data-act="chatQr" data-id="${esc(a.id)}" data-title="${esc(a.title)}" title="查看群二维码"><i data-icon="qr"></i>二维码</button>` : ""}
       <button type="button" class="btn ghost sm" data-act="chatFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该社群反馈或举报（工单中心）"><i data-icon="message"></i>反馈</button>
+      <button type="button" class="btn ghost sm" data-act="chatShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本收录（复制链接或唤起系统分享）"><i data-icon="share"></i>分享</button>
     </div>
   </div>`;
 }
@@ -1785,6 +1806,9 @@ function chatOnBodyClick(e) {
     actCopyLink(actEl, actEl.dataset.id);
   } else if (a === "chatFeedback") {
     actFeedback(actEl.dataset.title, actEl.dataset.url);
+  } else if (a === "chatShare") {
+    /* 分享本收录：深链带运营商+省（社群卡片按省过滤，跨范围打开看不到条目） */
+    shareLink({ title: actEl.dataset.title || "唠嗑聚落", text: "来自唠嗑聚落的一条社群收录", hash: "chat_" + currentCarrier + "_" + getProvCode() + "_" + encodeURIComponent(actEl.dataset.id || "") });
   }
 }
 
@@ -1823,6 +1847,38 @@ function readQrFile(file) {
     img.onerror = () => { URL.revokeObjectURL(url); reject("图片读取失败"); };
     img.src = url;
   });
+}
+
+/* ─────────────── 页面级数据引导 ───────────────
+   资费监控下任何子菜单（变更记录/公告/酒馆/唠嗑/监控/关于…）直链进入时，顶栏快照状态、
+   运营商切换、省份选择器、动态页签都必须就绪——此前只有 #overview 走 renderOverview 全链路，
+   其余直链顶栏永远停在「加载中…」。本函数仅做页面级公共引导（幂等可并发，localStorage 缓存命中时零请求），
+   总览面板渲染仍归 renderOverview 自有链路，互不影响 */
+let bootstrapPromise = null;
+function ensureTariffBootstrapped() {
+  if (STATS && ACTIVE_CARRIERS.length) return Promise.resolve(STATS);
+  if (bootstrapPromise) return bootstrapPromise;
+  bootstrapPromise = loadStats().then(s => {
+    bootstrapPromise = null;
+    renderCarrierSwitch(s.all_carriers);
+    if (!ACTIVE_CARRIERS.length) { $("updateTime").textContent = "-"; return s; }   // 全站未启用运营商：保持空态
+    if (!ACTIVE_CARRIERS.includes(currentCarrier)) { switchCarrier(ACTIVE_CARRIERS[0]); return s; }   // 当前运营商未启用：switchCarrier 自行引导（回总览）
+    applyBrandIdentity(CARRIER_BRAND[currentCarrier]); // 骨架为静态默认值，恢复当前运营商 logo/标题
+    fillProvSelects();
+    chTabRefresh(true); // 跳蚤市集 tab 显隐探测（须在 fillProvSelects 之后，同 renderOverview）
+    annPrefetch();      // 预拉当前运营商公告：未读红点 + 进 tab 零等待
+    updateOfficialLink();
+    buildDynamicTabs(s);
+    const todayAdd = Object.values(s.today || {}).reduce((sum, c) => sum + (c && c.added ? c.added : 0), 0);
+    const todayRm = Object.values(s.today || {}).reduce((sum, c) => sum + (c && c.removed ? c.removed : 0), 0);
+    setStat("stNational", s.total_unique == null ? "-" : s.total_unique);
+    setStat("stTodayAdd", todayAdd);
+    setStat("stTodayRm", todayRm);
+    $("updateTime").textContent = fmtTime(s.crawl_time);
+    renderHealth(s);
+    return s;
+  }).catch(() => { bootstrapPromise = null; });
+  return bootstrapPromise;
 }
 
 /* ─────────────── 数据总览 ─────────────── */
@@ -2421,12 +2477,14 @@ function bindListSection(type1Code) {
     const copyBtn = t.closest(".copy-btn");
     if (copyBtn && section.contains(copyBtn)) {
       e.stopPropagation();
-      /* 分享本条资费：深链 plan_<运营商>_<省>_<方案编号（回退名称）>，定位键与深链消费端一致 */
+      /* 分享本条资费：深链 plan_<运营商>_<省>_<页签code>_<方案编号（回退名称）>。
+         页签维度 = 条目的 tariff_attr（1=各省通用 / 2=本省专属），与所在 section 的 type1Code 一致——
+         注意不要取 it.type1（那是资费大类 个人/政企，另一个维度，取错会导致深链打开错误页签） */
       if (copyBtn.dataset.planShare) {
         const s1 = getListState(type1Code + "_" + getProvCode());
         const it1 = (s1.items || []).find(x => String(x.id) === String(copyBtn.dataset.planShare));
         const key = it1 ? ((it1.fields && it1.fields["方案编号"]) || it1.name || "") : (copyBtn.dataset.shareKey || "");
-        shareLink({ title: (it1 && it1.name) || "资费条目", text: "一条资费详情", hash: "plan_" + currentCarrier + "_" + getProvCode() + "_" + encodeURIComponent(key) });
+        shareLink({ title: (it1 && it1.name) || "资费条目", text: "一条资费详情", hash: "plan_" + currentCarrier + "_" + getProvCode() + "_" + type1Code + "_" + encodeURIComponent(key) });
         return;
       }
       const cid = copyBtn.dataset.copyId;
@@ -4055,7 +4113,7 @@ function initTariff() {
 
   /* 弹窗内分享按钮分发（顶层 dialog，tab 级委托捕获不到） */
   window.__MODAL_ACT__ = {
-    actShare: (el) => shareLink({ title: el.dataset.title || "情报酒馆", text: "来自情报酒馆的一条分享", hash: "act_" + encodeURIComponent(el.dataset.id || "") }),
+    actShare: (el) => shareLink({ title: el.dataset.title || "情报酒馆", text: "来自情报酒馆的一条分享", hash: "act_" + currentCarrier + "_" + getProvCode() + "_" + encodeURIComponent(el.dataset.id || "") }),
     clShare: () => {
       const log = clModalLog;
       if (log) shareLink({ title: log.name || "变更记录", text: "一条资费变更记录", hash: "cl_" + currentCarrier + "_" + getProvCode() + "_" + String(log.ts ?? "") + "_" + encodeURIComponent(log.name || "") });
@@ -4068,19 +4126,20 @@ function initTariff() {
   var staticTabs = ["overview","changelog","announce","monitor","cardhub","acts","chat","notices","about"];
   if (staticTabs.includes(raw)) {
     goTab(raw);
+    if (raw !== "overview") ensureTariffBootstrapped();   // 子菜单直链：页面级快照引导（顶栏状态/运营商切换/省份选择器/动态页签）
   } else if (raw.startsWith("t1_")) {
     pendingTab = raw;
-    goTab("overview");
+    goTab("overview");   // renderOverview 自有全链路引导，pendingTab 由 stats 就绪路径消费
   } else if (/^(act|chat|ann|cl|plan)_/.test(raw)) {
-    handleDeepLink(raw);
+    handleDeepLink(raw);   // 条目深链自带引导（含切运营商/省）
   } else {
     goTab("overview");
   }
 }
 
 /* ─────────────── 条目级深链（分享落地） ───────────────
-   #act_<id>                       情报酒馆帖详情弹窗
-   #chat_<id>                      唠嗑聚落卡片定位高亮
+   #act_<carrier>_<prov>_<id>      情报酒馆帖详情弹窗（切运营商/省后打开；旧格式 act_<id> 兼容，落当前运营商/省）
+   #chat_<carrier>_<prov>_<id>     唠嗑聚落卡片定位高亮（同上；旧格式 chat_<id> 兼容）
    #ann_<carrier>_<id>             运营公告条目展开定位（自动切运营商）
    #cl_<carrier>_<prov>_<ts>_<name(URI编码)>   变更记录：切运营商/省份 + 按名称过滤 + 弹该条详情
    #plan_<carrier>_<prov>_<方案编号(URI编码)>   资费列表：切运营商/省份 + 全分类搜索过滤该方案
@@ -4091,13 +4150,41 @@ function handleDeepLink(raw) {
   const m = raw.match(/^(act|chat|ann|cl|plan)_(.+)$/);
   if (!m) { goTab("overview"); return; }
   const kind = m[1], rest = m[2];
+  /* act_/chat_ 新格式前两段 = 运营商/省代码：条目按运营商+省过滤，不切范围的话跨范围打开看不到条目 */
+  const scopeParts = rest.split("_");
+  const hasScope = scopeParts.length >= 3 && /^[a-z]{2,4}$/.test(scopeParts[0]) && /^[a-z]{2,6}$/.test(scopeParts[1]);
+  /* 带范围深链统一消费：引导数据管线 → 切运营商 → 切省 → consume(id) 返回 true 表示已落地 */
+  function consumeWithScope(consume) {
+    const carrier = scopeParts[0], prov = scopeParts[1];
+    const id = decodeURIComponent(scopeParts.slice(2).join("_"));
+    goTab("overview");
+    deepLoadingShow();
+    pollDeep(() => {
+      if (!ACTIVE_CARRIERS.length) { loadStats().catch(() => {}); return false; }
+      if (currentCarrier !== carrier) { switchCarrier(carrier); return false; }
+      if (!deepSwitchProv(prov)) return false;
+      return consume(id);
+    }, () => deepLoadingHide());
+  }
   if (kind === "act") {
+    if (hasScope) {
+      consumeWithScope((id) => { goTab("acts"); actOpenDetail(id); return true; });   // 详情弹窗独立拉接口，自带加载态
+      return;
+    }
     goTab("acts");
-    actOpenDetail(decodeURIComponent(rest));   // 详情弹窗独立拉接口，不依赖列表
+    actOpenDetail(decodeURIComponent(rest));   // 旧格式：详情弹窗独立拉接口，不依赖列表
     return;
   }
   if (kind === "chat") {
-    goTab("chat");
+    if (hasScope) {
+      consumeWithScope((id) => {
+        goTab("chat");   // 幂等（TAB_SHOWN 拦截重复渲染），列表异步拉取后出现卡片
+        const el = document.querySelector(`[data-chat-id="${CSS.escape(id)}"]`);
+        if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("deep-hit"); return true; }
+        return false;   // 列表加载中 / 该范围无此条目（至超时停留）
+      });
+      return;
+    }
     pendingDeep = { kind: "chat", id: decodeURIComponent(rest) };
     pollDeep(() => { const el = document.querySelector(`[data-chat-id="${CSS.escape(pendingDeep.id)}"]`); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("deep-hit"); pendingDeep = null; return true; } return chatState.items.length > 0; });
     return;
@@ -4106,74 +4193,111 @@ function handleDeepLink(raw) {
     const sep = rest.indexOf("_");
     const carrier = sep > 0 ? rest.slice(0, sep) : "";
     pendingAnnId = decodeURIComponent(sep > 0 ? rest.slice(sep + 1) : rest);
-    if (carrier && carrier !== currentCarrier) switchCarrier(carrier);
-    goTab("announce");
-    annTabRefresh().then(() => { if (pendingAnnId) annRenderBody(); });
+    if (!carrier) {
+      goTab("announce");
+      annTabRefresh().then(() => { if (pendingAnnId) annRenderBody(); });
+      return;
+    }
+    /* 全新进站 ACTIVE_CARRIERS=[]，前置 switchCarrier 会被守卫拦截成 no-op：
+       先 goTab("overview") 引导数据管线，轮询等运营商就绪后切目标运营商，再进公告 tab */
+    goTab("overview");
+    deepLoadingShow();
+    pollDeep(() => {
+      if (!ACTIVE_CARRIERS.length) { loadStats().catch(() => {}); return false; }
+      if (currentCarrier !== carrier) { switchCarrier(carrier); return false; }
+      goTab("announce");
+      annTabRefresh().then(() => { if (pendingAnnId) annRenderBody(); });
+      return true;
+    }, () => deepLoadingHide());
     return;
   }
   if (kind === "cl") {
     const parts = rest.split("_");
     if (parts.length < 4) { goTab("changelog"); return; }
-    const carrier = parts[0], prov = parts[1], ts = Number(parts[2]);
-    const name = decodeURIComponent(parts.slice(3).join("_")).toLowerCase();
-    if (!/^[a-z]+$/.test(carrier) || !/^[a-z]{2,6}$/.test(prov) || !Number.isFinite(ts)) { goTab("changelog"); return; }
-    if (carrier !== currentCarrier) switchCarrier(carrier);
-    goProvince(prov);
-    goTab("changelog");
-    pendingDeep = { kind: "cl", ts, name };
-    pollDeep(() => {
-      const logs = (clView && Array.isArray(clView.logs)) ? clView.logs : [];
-      const hit = logs.find((l) => String(l.ts) === String(ts) && String(l.name || "").toLowerCase() === name);
-      if (hit) { if (clQ !== name) { clQ = name; } renderChangelog(); openClModal(hit); pendingDeep = null; return true; }
-      return false;
-    });
-    return;
-  }
-  if (kind === "plan") {
-    const parts = rest.split("_");
-    if (parts.length < 3) { goTab("overview"); return; }
     const carrier = parts[0], prov = parts[1];
-    const planNo = decodeURIComponent(parts.slice(2).join("_"));
-    if (!/^[a-z]+$/.test(carrier) || !/^[a-z]{2,6}$/.test(prov)) { goTab("overview"); return; }
-    if (carrier !== currentCarrier) switchCarrier(carrier);
-    goProvince(prov);
+    const ts = parts[2];   // log.ts 为 ISO 字符串（含冒号），原样字符串比较，禁止 Number()（NaN 必败）
+    const name = decodeURIComponent(parts.slice(3).join("_")).toLowerCase();
+    if (!/^[a-z]+$/.test(carrier) || !/^[a-z]{2,6}$/.test(prov) || !ts) { goTab("changelog"); return; }
+    pendingDeep = { kind: "cl", carrier, prov, ts, name, label: decodeURIComponent(parts.slice(3).join("_")) };
+    /* 全新进站（分享链接直达）时 ACTIVE_CARRIERS=[]：前置 switchCarrier 是 no-op、省份选择器未构建——
+       先 goTab("overview") 引导数据管线，再分阶段消费：等运营商就绪 → 切运营商 → 切省 → 进变更记录 tab 匹配 */
     goTab("overview");
-    pendingDeep = { kind: "plan", plan: planNo.toLowerCase() };
+    deepLoadingShow();
     pollDeep(() => {
-      const codes = Object.keys(TYPE1_MAP || {});
-      if (!codes.length) return false;
-      let hitView = "";
-      for (const t1Code of codes) {
-        const s = getListState(t1Code + "_" + getProvCode());
-        s.q = pendingDeep.plan; s.page = 1;
-        drawList(t1Code, getProvCode());
-        const st = getListState(t1Code + "_" + getProvCode());
-        if (st.total == null || st.total > 0) { if (!hitView) hitView = t1Code; }
-      }
-      if (hitView) {
-        const searchEl = $(t1Id(hitView, "search"));
-        if (searchEl) searchEl.value = pendingDeep.plan;
-        const first = document.querySelector(`#view-${t1ViewId(hitView)} .res-row, #view-${t1ViewId(hitView)} .plan-card, #view-${t1ViewId(hitView)} [data-plan]`);
-        if (first) first.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (!ACTIVE_CARRIERS.length) { loadStats().catch(() => {}); return false; }
+      if (currentCarrier !== pendingDeep.carrier) { switchCarrier(pendingDeep.carrier); return false; }
+      if (!deepSwitchProv(pendingDeep.prov)) return false;
+      if (navTabs && navTabs.active !== "changelog") { goTab("changelog"); return false; }
+      /* 深链过滤词同步回填搜索框：列表被过滤但搜索框空白会反直觉（用户不知为何只剩一条） */
+      const cSearchEl = $("cSearch");
+      if (cSearchEl && cSearchEl.value !== pendingDeep.label) cSearchEl.value = pendingDeep.label;
+      const logs = (clView && Array.isArray(clView.logs)) ? clView.logs : [];
+      const hit = logs.find((l) => String(l.ts) === pendingDeep.ts && String(l.name || "").toLowerCase() === pendingDeep.name);
+      if (hit) {
+        if (clQ !== pendingDeep.name) { clQ = pendingDeep.name; renderChangelog(); }   // 过滤聚焦该条目所在批次
+        openClModal(hit);
         pendingDeep = null;
         return true;
       }
-      return false;
-    });
+      return false;   // 数据加载中 / 该省快照无此条目（至超时停留）
+    }, () => deepLoadingHide());
+    return;
+  }
+  if (kind === "plan") {
+    /* plan_<运营商>_<省>_<页签code(tariff_attr)>_<方案编号（回退名称）>：
+       页签维度 = 条目 tariff_attr（1=各省通用 / 2=本省专属），快照按省一份、文件内按该字段区分 */
+    const parts = rest.split("_");
+    if (parts.length < 4) { goTab("overview"); return; }
+    const carrier = parts[0], prov = parts[1], t1Code = parts[2];
+    const planNo = decodeURIComponent(parts.slice(3).join("_")).toLowerCase();
+    if (!/^[a-z]+$/.test(carrier) || !/^[a-z]{2,6}$/.test(prov) || !/^[a-z0-9]+$/.test(t1Code)) { goTab("overview"); return; }
+    pendingDeep = { kind: "plan", carrier, prov, t1: t1Code, plan: planNo, label: decodeURIComponent(parts.slice(3).join("_")) };
+    /* 全新进站（分享链接直达）时 ACTIVE_CARRIERS=[]：前置 switchCarrier 是 no-op、省份选择器未构建、
+       动态页签不存在、renderOverview 数据管线全程未跑——必须先 goTab("overview") 引导
+       （loadStats → renderCarrierSwitch → 默认运营商加载），再分阶段消费：
+       等运营商就绪 → 切目标运营商（switchCarrier 内部重载 stats/页签/选择器）→ 等新映射 → 切省 → 进列表页签定位 */
+    goTab("overview");
+    deepLoadingShow();
+    pollDeep(() => {
+      if (!ACTIVE_CARRIERS.length) { loadStats().catch(() => {}); return false; }
+      if (currentCarrier !== pendingDeep.carrier) { switchCarrier(pendingDeep.carrier); return false; }
+      if (!ATTR_MAP[pendingDeep.t1]) return false;   // 目标运营商分类映射随 renderOverview→loadStats 异步填充
+      if (!deepSwitchProv(pendingDeep.prov)) return false;
+      const s = getListState(pendingDeep.t1 + "_" + getProvCode());
+      if (s.q !== pendingDeep.plan) { s.q = pendingDeep.plan; s.qMode = "all"; s.page = 1; }
+      goTab("t1_" + pendingDeep.t1);   // 幂等：TAB_SHOWN 拦截重复渲染，首次 renderList 走 loadSnapshot 异步
+      /* 深链过滤词同步回填搜索框：列表被过滤但搜索框空白会反直觉（用户不知为何只剩几条）。
+         每轮幂等回填（视图/工具栏由 buildDynamicTabs 构建，晚于首帧），程序赋值不触发 input 事件 */
+      const qEl = $(t1Id(pendingDeep.t1, "search"));
+      if (qEl && qEl.value !== pendingDeep.label) qEl.value = pendingDeep.label;
+      const listEl = $(t1Id(pendingDeep.t1, "list"));
+      /* 列表形态两种都要认：卡片模式 = article.tcard，列表模式（默认）= div.item */
+      const hasItem = listEl && listEl.querySelector(".tcard, .item, article, .res-row");
+      if (hasItem) {
+        pendingDeep = null;
+        setTimeout(() => hasItem.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
+        return true;
+      }
+      return false;   // 快照加载中，下轮再看（10s 上限）
+    }, () => deepLoadingHide());
     return;
   }
   goTab("overview");
 }
 
-/* 深链轮询兜底：数据未就绪时每 500ms 重试（最多 20 次 = 10s），fn 返回 true 表示已消费 */
-function pollDeep(fn) {
+/* 深链轮询兜底：数据未就绪时每 150ms 重试（最多 66 次 ≈ 10s 上限），fn 返回 true 表示已消费。
+   间隔取小值：条目渲染完成后最多再等 150ms 才被发现撤遮罩——500ms 粒度下「数据已好、遮罩压着」的空窗体感明显 */
+function pollDeep(fn, onEnd) {
   let n = 0;
   const t = setInterval(() => {
     n++;
     let done = false;
     try { done = fn(); } catch { done = false; }
-    if (done || n >= 20) clearInterval(t);
-  }, 500);
+    if (done || n >= 66) {
+      clearInterval(t);
+      if (onEnd) { try { onEnd(done); } catch { /* 释放失败不影响收尾 */ } }
+    }
+  }, 150);
 }
 
 /* ─────────────── 关于页 · 项目历程时间轴（站长在管理中心 about_timeline 配置；内置节点已 seed 进 settings，清空=隐藏区块）
@@ -4948,5 +5072,6 @@ Shell.registerPage({
     TYPE1_MAP = {};
     TYPE2_MAP = {};
     pendingTab = null;
+    deepLinkLoading = false;   // 深链遮罩随页面 DOM 销毁；复位持有标志，防止残留拦截下次进入的 hideLoading
   }
 });

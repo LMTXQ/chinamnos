@@ -216,6 +216,13 @@
 .ch-bc-rent-want {
   background: linear-gradient(135deg, var(--purple), color-mix(in oklab, var(--purple) 70%, var(--acc-deep)));
 }
+/* 车队/市集板块色块：此前缺失导致卡片左侧透明、白色图标不可见（看起来「没有头像」） */
+.ch-bc-fleet {
+  background: linear-gradient(135deg, var(--red), color-mix(in oklab, var(--red) 70%, var(--acc-deep)));
+}
+.ch-bc-market {
+  background: linear-gradient(135deg, var(--acc), color-mix(in oklab, var(--acc) 65%, var(--acc-2)));
+}
 .ch-card-main {
   flex: 1;
   min-width: 0;
@@ -1871,20 +1878,28 @@
 .ch-fm-field .inp.error { border-color: #e5484d; }
 .ch-fm-field textarea.inp { resize: vertical; min-height: 72px; }
 
-/* ─────────────── 市集弹窗（market 板块图文详情） ─────────────── */
+/* ─────────────── 市集弹窗（market 板块图文详情） ───────────────
+   分层排版：头部（范围徽章 + 品类胶囊 / 标题 / 发布信息）→ 覆盖声明条 → 图文正文 → 交易面板 → 操作区 */
 .mk-mask { z-index: 1010; }
 .mk-modal {
   width: min(680px, 100%); max-height: 82vh; overflow-y: auto;
-  text-align: left; display: block;
+  text-align: left; display: block; padding: 22px 24px;
 }
-.mk-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.mk-head { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.mk-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .mk-badge {
-  font-size: 12px; padding: 2px 10px; border-radius: 999px;
+  font-size: 12px; padding: 3px 11px; border-radius: 999px;
   background: var(--surface-3); color: var(--sub); border: 1px solid var(--line);
 }
-.mk-badge.mk-all { color: var(--acc); border-color: color-mix(in oklab, var(--acc) 45%, transparent); }
-.mk-title { font-size: 17px; font-weight: 800; margin: 0 0 12px; color: var(--txt); }
-.mk-md { font-size: 14px; line-height: 1.75; color: var(--txt); word-break: break-word; }
+/* 范围主徽章：单一=主题色描边；综合=主题色实底（一眼区分两种模式） */
+.mk-badge.mk-scope { font-weight: 700; background: color-mix(in oklab, var(--acc) 9%, var(--surface)); color: var(--acc); border-color: color-mix(in oklab, var(--acc) 45%, transparent); }
+.mk-badge.mk-scope.mk-all { background: var(--acc); color: #fff; border-color: var(--acc); }
+.mk-badge.mk-kind { color: var(--txt); }
+.mk-title { font-size: 20px; font-weight: 800; margin: 0 0 6px; color: var(--txt); line-height: 1.35; }
+.mk-meta { font-size: 12px; color: var(--sub); }
+.mk-note { margin: 12px 0 0; padding: 9px 13px; border-radius: var(--r-md); background: color-mix(in oklab, var(--amber) 10%, transparent); border: 1px solid color-mix(in oklab, var(--amber) 30%, transparent); color: var(--txt); font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.mk-note svg { width: 14px; height: 14px; color: var(--amber); flex: none; }
+.mk-md { font-size: 14px; line-height: 1.75; color: var(--txt); word-break: break-word; padding-top: 14px; }
 .mk-md img { max-width: 100%; border-radius: 10px; margin: 8px 0; display: block; }
 .mk-md a { color: var(--acc); text-decoration: underline; }
 .mk-md h1, .mk-md h2, .mk-md h3, .mk-md h4 { font-size: 15px; font-weight: 700; margin: 14px 0 6px; }
@@ -1892,8 +1907,23 @@
 .mk-md ul, .mk-md ol { padding-left: 20px; margin: 6px 0; }
 .mk-md blockquote { margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--line); color: var(--sub); }
 .mk-md code { background: var(--surface-3); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
-.mk-meta { margin-top: 14px; font-size: 12px; color: var(--sub); }
-.mk-actions { margin-top: 10px; display: flex; gap: 8px; justify-content: flex-end; }
+/* 交易面板：浅底圆角块内聚「前往平台」按钮与联系方式芯片，与正文形成分区 */
+.mk-trade {
+  margin-top: 16px; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
+  display: grid; gap: 9px;
+}
+.mk-trade-t { font-size: 12px; font-weight: 700; color: var(--sub); letter-spacing: 2px; }
+.mk-trade-body { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mk-contact { display: flex; flex-wrap: wrap; gap: 6px; }
+.mk-ct { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r-full); font-size: 12px; color: var(--txt); background: var(--surface); }
+.mk-ct svg { width: 13px; height: 13px; }
+.mk-ct.dim { color: var(--sub); }
+/* 市集卡片：回收权益范围徽章（主题色描边区分） */
+.ch-chip-scope { color: var(--acc-deep); border: 1px solid color-mix(in oklab, var(--acc) 35%, transparent); }
+.ch-chip-more { cursor: pointer; color: var(--sub); }
+.mk-actions { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+.mk-actions-l { display: flex; gap: 8px; }
 .mk-fav.on { color: var(--amber); }
 
 /* ─────────────── 会话收件箱（卖家视角） ─────────────── */

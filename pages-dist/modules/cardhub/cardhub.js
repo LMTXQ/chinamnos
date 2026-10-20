@@ -175,6 +175,8 @@ async function loadBoardPage() {
     carrier: f.carrier || undefined,
     province: f.province || undefined,
     city: f.city || undefined,
+    // 市集板块专属：回收权益范围（单一/综合）下推服务端（extra_json.market_scope）
+    scope: S.board === "market" ? (f.scope || undefined) : undefined,
     q: f.q || undefined,
     page: S.listPage,
     pageSize: 20,
@@ -464,7 +466,7 @@ function renderOverviewView() {
       return p;
     });
     latest = list.length
-      ? `<div class="ch-list">${list.map((p, i) => renderListCard(S.schema, p, { tilt: true, index: i })).join("")}</div>`
+      ? `<div class="ch-list">${list.map((p, i) => renderListCard(S.schema, p, { tilt: true, index: i, author: p.author })).join("")}</div>`
       : `<div class="ch-empty"><div class="ch-empty-ic">${icon("box")}</div><div class="ch-empty-t">还没有信息</div><div class="ch-empty-s">点「发布信息」发第一条</div></div>`;
   }
 
@@ -495,6 +497,12 @@ function renderBoardView() {
   <p class="page-sub">用户自由发布 · 先审后公开展示 · 联系方式由发布者设定可见范围</p>
 
   <div class="panel ch-filter-bar">
+    ${board.id === "market" ? `
+    <select class="sel ch-filter-sel" data-filter="scope" aria-label="回收权益范围">
+      <option value="">全部范围</option>
+      <option value="单一" ${f.scope === "单一" ? "selected" : ""}>单一权益</option>
+      <option value="综合" ${f.scope === "综合" ? "selected" : ""}>综合回收</option>
+    </select>` : `
     <select class="sel ch-filter-sel" data-filter="carrier" aria-label="运营商">
       <option value="">全部运营商</option>
       ${S.schema.carriers.map((c) => `<option value="${c[0]}" ${f.carrier === c[0] ? "selected" : ""}>${esc(c[1])}</option>`).join("")}
@@ -506,9 +514,9 @@ function renderBoardView() {
     <select class="sel ch-filter-sel" data-filter="city" aria-label="城市" ${!f.province ? "disabled" : ""}>
       <option value="">${f.province ? "全部城市" : "先选省份"}</option>
       ${cities.map((c) => `<option ${f.city === c ? "selected" : ""}>${esc(c)}</option>`).join("")}
-    </select>
-    <div class="search-box ch-search"><input type="search" class="inp" id="chSearch" placeholder="搜索标题 / 描述 / 套餐关键词…" value="${esc(f.q)}"></div>
-    <button class="btn ghost" data-act="clearFilter" ${!(f.carrier || f.province || f.city || f.q) ? "disabled" : ""}><i data-icon="x"></i>清除</button>
+    </select>`}
+    <div class="search-box ch-search"><input type="search" class="inp" id="chSearch" placeholder="${board.id === "market" ? "搜索市集标题 / 介绍 / 回收品类…" : "搜索标题 / 描述 / 套餐关键词…"}" value="${esc(f.q)}"></div>
+    <button class="btn ghost" data-act="clearFilter" ${!(f.carrier || f.province || f.city || f.q || f.scope) ? "disabled" : ""}><i data-icon="x"></i>清除</button>
   </div>
 
   <div id="chList">${listHTML()}</div>
@@ -545,7 +553,7 @@ function listHTML() {
     </span>`;
   return `
 <div class="ch-count">共 <strong>${bl.total}</strong> 条 · 第 ${bl.page}/${totalPages} 页${totalPages > 1 ? pager : ""}</div>
-<div class="ch-list">${list.map((p, i) => renderListCard(S.schema, p, { tilt: true, index: i })).join("")}</div>`;
+<div class="ch-list">${list.map((p, i) => renderListCard(S.schema, p, { tilt: true, index: i, author: p.author })).join("")}</div>`;
 }
 
 /* multiItems / policyChip / remainTag 已迁 shell/post-view.js 共享模块 */
@@ -685,16 +693,35 @@ function formFieldsHTML() {
   ${editMode && (board.id === "found" || board.id === "rent_out") ? `
   <div class="ch-fg"><label>证明材料</label><div class="inp ch-lock">保持原样（编辑内容不影响已上传的证明材料）</div></div>` : ""}
 
-  <div class="ch-form-sep">交易方式 <span class="hint">允许多选 · 仅供参考</span></div>
-  <div class="ch-trade-grid" id="chTradeGrid">${isMarket ? "" : tradeGridHTML()}</div>
+  <div class="ch-form-sep">交易方式 <span class="hint">${isMarket ? "选择你的市集交易方式，可多选" : "允许多选 · 仅供参考"}</span></div>
+  <div class="ch-trade-grid" id="chTradeGrid">${isMarket ? marketTradeGridHTML() : tradeGridHTML()}</div>
   <div id="chGuarBox">${!isMarket && (S.formTrade || []).includes("merchant") ? guarBoxHTML() : ""}</div>
+  ${isMarket ? `
+  <div class="ch-fg" id="chMarketUrlRow" style="display:${(S.formTrade || []).includes("platform") ? "" : "none"}"><label>跳转链接 <b class="ch-req">*</b> <span class="hint">平台交易入口：买家点击前往你的回收页 / 店铺下单</span></label>
+    <input type="text" class="inp" id="chMarketUrl" maxlength="300" placeholder="https://…" value="${esc(S.formMarketUrl || "")}"></div>
+  <div id="chMarketContactRow" style="display:${(S.formTrade || []).includes("direct") ? "" : "none"}">
+    <div class="ch-form-sep">联系方式 <span class="hint">一对一交易：至少填一条直接联系方式，或开启「在线沟通」</span></div>
+    <div class="ch-fg" id="chChatRow">
+      <label>直接联系方式</label>
+      <div class="ch-contacts-list" id="chContactsList">${contactRowsHTML()}</div>
+      <button type="button" class="btn ghost sm" data-act="addContact" style="margin-top:6px">+ 添加一条联系方式</button>
+    </div>
+    <div class="ch-fg"><label>互动渠道 <span class="hint">买家在帖子内发起站内会话</span></label>
+      <div class="ch-trade-grid" id="chChannelGrid">
+        <label class="ch-trade-card ${S.formAllowChat ? "active" : ""}" data-channel="chat">
+          <input type="checkbox" data-channel-id="chat" ${S.formAllowChat ? "checked" : ""}>
+          <span class="ch-trade-name">在线沟通</span>
+          <span class="ch-trade-desc">站内会话：买家发起沟通，消息直达你的收件箱与邮箱</span>
+        </label>
+      </div></div>
+  </div>` : ``}
 
-  ${isMarket ? "" : `
+  ${!isMarket ? `
   <div class="ch-form-sep">联系方式设置 <span class="hint">谁可见 + 互动渠道，可自由组合</span></div>
   <div class="ch-fg"><label>联系方式可见范围 <b class="ch-req">*</b> <span class="hint">决定谁能看到你填写的直接联系方式</span></label>
     <div class="ch-policy-grid" id="chVisGrid">${visGridHTML(vis)}</div></div>
   <div class="ch-fg"><label>互动渠道 <span class="hint">选填 · 可多选；「不展示」时至少开启一项，否则买家无法联系你</span></label>
-    <div class="ch-trade-grid" id="chChannelGrid">${channelGridHTML()}</div></div>`}
+    <div class="ch-trade-grid" id="chChannelGrid">${channelGridHTML()}</div></div>` : ""}
 
   ${isMarket ? "" : `
   <div class="ch-fg" id="chChatRow">
@@ -830,6 +857,29 @@ function tradeGridHTML() {
     )
     .join("") +
     `<div class="ch-trade-note">${icon("info")} 交易方式允许多选，仅供参考，具体交易方式请与交易方实际协商。</div>`;
+}
+
+/* 市集交易方式（板块专属，不与常规板块的 site/merchant 等混用）：
+   platform=平台交易（放跳转链接）；direct=一对一交易（放联系方式或开在线沟通） */
+function marketTradeGridHTML() {
+  const sel = S.formTrade || [];
+  const card = (id, name, desc) => `
+  <label class="ch-trade-card ${sel.includes(id) ? "active" : ""}" data-trade="${id}">
+    <input type="checkbox" data-trade-id="${id}" ${sel.includes(id) ? "checked" : ""}>
+    <span class="ch-trade-name">${esc(name)}</span>
+    <span class="ch-trade-desc">${esc(desc)}</span>
+  </label>`;
+  return card("platform", "平台交易", "放跳转链接：买家点击前往你的回收页 / 店铺下单") +
+    card("direct", "一对一交易", "放联系方式或开启站内在线沟通，双方直接洽谈");
+}
+
+/* 市集交易方式联动：勾「平台交易」显跳转链接行；勾「一对一交易」显联系方式+在线沟通区 */
+function syncMarketTradeRows() {
+  const t = S.formTrade || [];
+  const urlRow = $("chMarketUrlRow");
+  if (urlRow) urlRow.style.display = t.includes("platform") ? "" : "none";
+  const ctRow = $("chMarketContactRow");
+  if (ctRow) ctRow.style.display = t.includes("direct") ? "" : "none";
 }
 
 /* ─────────────── 发帖担保人选择（勾选「圈内卡商担保」后展开） ───────────────
@@ -1090,6 +1140,8 @@ const POST_ERR_CN = {
   GUARANTOR_NEEDS_MERCHANT: "选择担保人需先勾选交易方式「圈内卡商担保」",
   GUARANTOR_NOT_IN_POOL: "所选担保人已不在站长推荐列表中，请刷新后重新选择",
   PENDING_QUOTA_EXCEEDED: "待审核帖子已达 3 条上限，请等待审核结果后再发布",
+  MARKET_URL_REQUIRED: "勾选「平台交易」需填写合法跳转链接（http/https 开头）",
+  MARKET_CONTACT_REQUIRED: "勾选「一对一交易」需至少填写一条联系方式或开启「在线沟通」",
 };
 function postErrCN(r, board) {
   const msg = r && r.error;
@@ -1163,6 +1215,7 @@ function enterEditMode(p) {
   setV("chFProvince", p.province);
   setV("chFCity", p.city);
   setV("chFTtl", p.ttlDays || 30);
+  setV("chMarketUrl", p.extra ? p.extra.market_url : "");   // 市集平台交易链接（非市集表单无此控件，setV 判空安全）
   for (const fd of (board ? board.fields : [])) {
     if (fd.type === "multi" || fd.type === "tags") continue;
     setV("chX_" + fd.key, p.extra ? p.extra[fd.key] : "");
@@ -1198,9 +1251,16 @@ async function collectAndSubmit() {
   const extra = {};
   let fmtBad = false; // int/multi 数值格式错误（区别于必填缺失）
   for (const fd of board.fields) {
-    /* 条件显示字段：showIf 未命中（tags 草稿无交集）时不收集，与后端剔除逻辑对齐 */
+    /* 条件显示字段：showIf 未命中时不收集，与后端剔除逻辑对齐。
+       判定与渲染端 applyShowIf 同规则：优先 tags 草稿，无草稿回退 select/input 当前值——
+       市集 market_scope 等单选键不在 formTags 里，只读草稿会让条件字段被永久跳过
+       （「单一」模式提交缺 market_kind，被后端 required 拒绝报「[回收品类]项校验不通过」） */
     if (fd.showIf) {
-      const sel = S.formTags[fd.showIf.key] || [];
+      let sel = S.formTags[fd.showIf.key];
+      if (!sel) {
+        const elV = $("chX_" + fd.showIf.key);
+        sel = elV && elV.value ? [elV.value] : [];
+      }
       if (!fd.showIf.any.some((x) => sel.includes(x))) continue;
     }
     /* tags 类型：纯标签多选（草稿驱动，无输入框） */
@@ -1244,15 +1304,21 @@ async function collectAndSubmit() {
     extra[fd.key] = v;
   }
 
-  /* 多渠道联系方式设置：可见范围（单选）+ 互动渠道（多选开关） */
+  /* 多渠道联系方式设置：可见范围（单选）+ 互动渠道（多选开关）；市集无可见范围区（恒公开） */
   const visEl = document.querySelector('input[name="chVis"]:checked');
-  const vis = visEl ? visEl.value : "public";
+  const vis = isMarket ? "public" : (visEl ? visEl.value : "public");
   const allowChat = !!document.querySelector('#chChannelGrid input[data-channel-id="chat"]:checked');
   const allowRelay = !!document.querySelector('#chChannelGrid input[data-channel-id="relay"]:checked');
   const tradeMethods = Array.from(document.querySelectorAll("#chTradeGrid input[data-trade-id]:checked")).map((i) => i.dataset.tradeId);
   if (allowRelay && !tradeMethods.includes("site")) {
     toast("开启「站长中转」需先在交易方式勾选「站点担保」");
     return;
+  }
+  /* 市集交易方式校验：平台交易必须给合法跳转链接 */
+  if (isMarket && tradeMethods.includes("platform")) {
+    const mu = val("chMarketUrl");
+    if (!/^https?:\/\/.+/i.test(mu)) { mark("chMarketUrl", true); errs.push(1); }
+    else extra.market_url = mu;
   }
   /* 旧 contact_policy 兼容值（青龙推送窗口期后端推导兜底用） */
   const legacyPolicy = vis === "hidden" ? (allowChat ? "relay_online" : "relay_owner") : vis;
@@ -1269,6 +1335,11 @@ async function collectAndSubmit() {
   if (needChat && !contacts.length) errs.push(1);
   if (needChannel) {
     toast("「不展示」直接联系方式时，需至少开启「在线沟通」或「站长中转」一项，否则买家无法联系你");
+    return;
+  }
+  /* 市集一对一交易：至少一条直接联系方式或开启在线沟通 */
+  if (isMarket && tradeMethods.includes("direct") && !contacts.length && !allowChat) {
+    toast("一对一交易需至少填写一条联系方式，或开启「在线沟通」");
     return;
   }
 
@@ -1988,7 +2059,7 @@ async function onRootClick(e) {
   if (a === "newPost") {
     if (!S.user) { toast("请先登录"); openLogin(); return; }
     S.view = "form"; S.formBoard = S.board; S.formVis = "public"; S.formAllowChat = false; S.formAllowRelay = false; S.formMulti = {};
-    S.formTrade = []; S.formGuarantors = []; S.formGuarQ = ""; S.formTags = {}; S.formPhoneMaskDirty = false;
+    S.formTrade = []; S.formGuarantors = []; S.formGuarQ = ""; S.formTags = {}; S.formPhoneMaskDirty = false; S.formMarketUrl = "";
     S.formProofs = []; S.formProofPublic = false; S.formReviewMode = "proof"; S.formReviewAdmin = "";
     S.formEditId = null; S.formEditOrig = null;
     seedFormContacts();
@@ -2044,7 +2115,7 @@ async function onRootClick(e) {
     return;
   }
   if (a === "clearFilter") {
-    S.filters = { carrier: "", province: "", city: "", q: "" };
+    S.filters = { carrier: "", province: "", city: "", q: "", scope: "" };
     S.listPage = 1;
     render();
     loadBoardPage().then(renderListRegion);
@@ -2266,6 +2337,20 @@ function updateChannelGate() {
   }
 }
 
+/* 帖子分享深链（#post_<id>，shell.js 已路由到本页）：拉详情拿板块 → 切对应分类视图（详情页
+   「返回列表」可回到正确板块）→ 按板块形态打开（market=图文弹窗，其余=详情视图）；
+   帖子不存在/已下架时提示并留在当前视图 */
+async function openPostDeep(id) {
+  const r = await api.getPost(id);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : ((r.error && r.error.message) || "帖子不存在或已下架")); return; }
+  const p = adaptPost(r.data);
+  const board = (p && p.board) || "";
+  if (board && boardOf(board) && chTabs) chTabs.activate("board:" + board);   // onNavChange：S.view=board + 列表渲染
+  if (p && p.board === "market") { openMarketModal(id); return; }
+  S.view = "detail"; S.detailId = id; S.detailPost = p;
+  render();
+}
+
 /* 市集弹窗：market 板块卡片点击 → 图文弹窗（md.js 渲染 Markdown，链接可点图片直显）。
    数据走 getPost 详情接口；收藏按钮本地直连 toggleFavorite（弹窗不在根委托容器内） */
 async function openMarketModal(id) {
@@ -2274,33 +2359,63 @@ async function openMarketModal(id) {
   mask.innerHTML = `
     <div class="ch-confirm mk-modal" role="dialog" aria-modal="true">
       <div class="mk-body"><div class="empty" style="padding:32px;text-align:center">加载中…</div></div>
-      <div class="ch-confirm-btns"><button class="btn ghost" data-c="close">关闭</button></div>
     </div>`;
   document.body.appendChild(mask);
   const close = () => { mask.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = (e) => { if (e.key === "Escape") close(); };
   document.addEventListener("keydown", onKey);
   mask.addEventListener("mousedown", (e) => { if (e.target === mask) close(); });
-  mask.querySelector('[data-c="close"]').addEventListener("click", close);
+  /* 关闭按钮随内容渲染（加载中靠 Esc / 点遮罩关闭），每次渲染后重绑 */
+  const bindClose = () => { const el = mask.querySelector('[data-c="close"]'); if (el) el.addEventListener("click", close); };
 
   const r = await api.getPost(id);
   const bodyEl = mask.querySelector(".mk-body");
   if (!r.ok) {
-    bodyEl.innerHTML = `<div class="empty" style="padding:32px;text-align:center">${esc(r.error || "加载失败")}</div>`;
+    bodyEl.innerHTML = `<div class="empty" style="padding:32px;text-align:center">${esc(r.error || "加载失败")}</div>
+      <div class="mk-actions"><span></span><button class="btn ghost" data-c="close">关闭</button></div>`;
+    bindClose();
     return;
   }
   const d = r.data;
   const x = d.extra && typeof d.extra === "object" ? d.extra : {};
   const scope = x.market_scope === "综合" ? "综合" : "单一";
-  const badges = `<span class="mk-badge${scope === "综合" ? " mk-all" : ""}">${esc(scope)}</span>` +
-    (x.market_kind ? `<span class="mk-badge mk-kind">${esc(x.market_kind)}</span>` : "");
+  const kinds = scope === "综合"
+    ? String(x.market_kinds || "").split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean)
+    : [];
+  /* 品类覆盖声明（综合模式可选）：完整提示展示在弹窗内，列表卡片仅以「更多 · 点击查看」胶囊引导 */
+  const noteLine = x.market_note ? `<div class="mk-note">${icon("info")} ${esc(x.market_note)}</div>` : "";
+  /* 交易方式展示：平台交易=「前往平台」外链；一对一=联系方式列表 / 站内在线沟通提示 */
+  const trades = Array.isArray(x.trade_methods) ? x.trade_methods : [];
+  const platBtn = x.market_url
+    ? `<a class="btn primary sm" href="${esc(x.market_url)}" target="_blank" rel="noopener noreferrer nofollow"><i data-icon="external"></i>前往平台</a>`
+    : "";
+  const ctRows = (Array.isArray(d.contacts) ? d.contacts : [])
+    .filter((c) => c && c.value)
+    .map((c) => `<span class="mk-ct"><i data-icon="user"></i>${esc(c.value)}</span>`).join("");
+  const directTip = trades.includes("direct")
+    ? `<div class="mk-contact">${ctRows || ""}${d.allow_chat ? `<span class="mk-ct"><i data-icon="message"></i>支持站内在线沟通（登录后发起）</span>` : ""}${!ctRows && !d.allow_chat ? `<span class="mk-ct dim">未公开联系方式</span>` : ""}</div>`
+    : "";
   bodyEl.innerHTML = `
-    <div class="mk-badges">${badges}</div>
-    <h3 class="mk-title">${esc(d.title || "")}</h3>
+    <div class="mk-head">
+      <div class="mk-badges">
+        <span class="mk-badge mk-scope${scope === "综合" ? " mk-all" : ""}">${esc(scope === "综合" ? "综合回收" : "单一权益")}</span>
+        ${(scope === "单一" && x.market_kind ? [x.market_kind] : kinds).map((k) => `<span class="mk-badge mk-kind">${esc(k)}</span>`).join("")}
+      </div>
+      <h3 class="mk-title">${esc(d.title || "")}</h3>
+      <div class="mk-meta">发布于 ${relTime(Math.floor((d.created_at || 0) / 1000))}${d.author ? ` · ${esc(d.author.nickname || "用户")}` : ""}</div>
+    </div>
+    ${noteLine}
     <div class="mk-md">${mdToSafeHtml(String(x.market_body || ""), { nofollow: true })}</div>
-    <div class="mk-meta">发布于 ${relTime(Math.floor((d.created_at || 0) / 1000))}${d.author ? ` · ${esc(d.author.nickname || "用户")}` : ""}</div>
-    ${Auth.isLoggedIn() ? `<div class="mk-actions"><button type="button" class="btn ghost sm mk-fav"><i data-icon="star"></i>收藏</button></div>` : ""}`;
+    ${(platBtn || directTip) ? `
+    <div class="mk-trade">
+      <div class="mk-trade-t">交易方式</div>
+      <div class="mk-trade-body">${platBtn}${directTip}</div>
+    </div>` : ""}
+    <div class="mk-actions"><div class="mk-actions-l">${Auth.isLoggedIn() ? `<button type="button" class="btn ghost sm mk-fav"><i data-icon="star"></i>收藏</button>` : ""}<button type="button" class="btn ghost sm mk-share"><i data-icon="share"></i>分享</button></div><button class="btn ghost" data-c="close">关闭</button></div>`;
   mountIcons(bodyEl);
+  bindClose();
+  const shareBtnEl = mask.querySelector(".mk-share");
+  if (shareBtnEl) shareBtnEl.addEventListener("click", () => shareLink({ title: d.title || "跳蚤市集", text: "跳蚤市集交易帖", hash: "post_" + encodeURIComponent(id) }));
   const favEl = mask.querySelector(".mk-fav");
   if (favEl) {
     let favState = !!d.favorited;
@@ -2380,6 +2495,7 @@ function onRootChange(e) {
     if (card) card.classList.toggle("active", on);
     /* 取消「圈内卡商担保」= 不能再保留担保人选择，清空已选与搜索词 */
     if (tradeId === "merchant" && !on) { S.formGuarantors = []; S.formGuarQ = ""; }
+    if (S.formBoard === "market") syncMarketTradeRows();   // 市集：勾 platform 显链接行 / 勾 direct 显联系方式区
     updateChannelGate();
     renderGuarBox();
     return;
@@ -2568,10 +2684,10 @@ Shell.registerPage({
     paint();
     themeBtn.addEventListener("click", () => { theme.toggle(); paint(); });
 
-    /* 帖子分享深链（#post_<id>，shell.js 已路由到本页）：渲染完成后直达该帖详情；
-       帖子已下架/过期时 chOpenDetail 自带失败提示 */
+    /* 帖子分享深链（#post_<id>，shell.js 已路由到本页）：渲染完成后直达该帖详情并切对应分类；
+       帖子已下架/过期时 toast 提示（openPostDeep 内处理） */
     const postDeep = (location.hash || "").match(/^#post_(.+)$/);
-    if (postDeep) chOpenDetail(decodeURIComponent(postDeep[1]));
+    if (postDeep) openPostDeep(decodeURIComponent(postDeep[1]));
 
     /* 侧边栏抽屉 */
     $("chHamburger").addEventListener("click", openSidebar);

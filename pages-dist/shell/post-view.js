@@ -78,6 +78,14 @@ export function multiItems(rawV, fd) {
     .filter(Boolean);
 }
 
+/* 市集卡片徽章：回收权益范围（单一·品类 / 综合）——仅 market 板块显示 */
+function marketChip(view) {
+  if (view.board !== "market" || !view.extra) return "";
+  const scope = view.extra.market_scope === "综合" ? "综合" : "单一";
+  const txt = scope === "综合" ? "综合回收" : ("单一 · " + (view.extra.market_kind || "权益"));
+  return `<span class="ch-chip ch-chip-scope">${icon("tag")} ${esc(txt)}</span>`;
+}
+
 /* ─────────────── 联系方式策略小徽章 ───────────────
    多渠道模型：消费 view.contact（visibility/allowChat/allowRelay），旧数据回退 view.policy（legacy 单选）。
    一个芯片概括联系能力：公开联系方式 / 登录可见 / 在线沟通 / 站长中转 / 不展示 */
@@ -244,6 +252,14 @@ export function renderListCard(schema, view, opts = {}) {
       }</div>`
     : `<div class="ch-card-side ch-bc-${board}">${icon(BOARD_ICONS[board] || "box")}</div>`;
   const act = ro ? "" : ` data-act="openDetail" data-id="${esc(view.id)}" data-board="${esc(view.board || "")}"`;
+  /* 市集卡片：回收品类胶囊组（综合模式多个品类）+ 「更多点击查看」声明胶囊（勾了覆盖声明时显示，点击=打开弹窗看完整提示） */
+  const marketKinds = board === "market" && view.extra && view.extra.market_scope === "综合"
+    ? String(view.extra.market_kinds || "").split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean)
+    : [];
+  const kindsChips = marketKinds.map((k) => `<span class="ch-chip ch-chip-scope">${esc(k)}</span>`).join("");
+  const noteChip = board === "market" && view.extra && view.extra.market_note
+    ? `<span class="ch-chip ch-chip-scope ch-chip-more" title="${esc(view.extra.market_note)}">更多 · 点击查看</span>`
+    : "";
   /* 注意：卡片不再自带 .ch-list 包裹层——列表容器由调用方包一次，
      否则每卡各成一个 grid 容器，容器间 gap 永远不生效（卡片曾因此贴死 0px） */
   return `
@@ -252,15 +268,16 @@ export function renderListCard(schema, view, opts = {}) {
     <div class="ch-card-main">
       <div class="ch-card-head">
         <h3 class="ch-card-title">${esc(view.title || "")}</h3>
-        ${opts.showBoard && view.board ? `<span class="ch-chip ch-chip-board">${esc(BOARD_LABELS[view.board] || view.board)}</span>` : ""}${view.pinnedAt ? `<span class="ch-chip ch-chip-pin">${icon("star")}精华</span>` : ""}${policyChip(view)}
+        ${opts.showBoard && view.board ? `<span class="ch-chip ch-chip-board">${esc(BOARD_LABELS[view.board] || view.board)}</span>` : ""}${view.pinnedAt ? `<span class="ch-chip ch-chip-pin">${icon("star")}精华</span>` : ""}${marketChip(view)}${policyChip(view)}
       </div>
       <div class="ch-card-meta">
         ${view.carrier ? `<span class="ch-chip ch-chip-carrier cc-${esc(view.carrier)}">${esc(carrierLabel(schema, view.carrier))}</span>` : ""}
         ${(view.province || view.city) ? `<span class="ch-chip">${icon("map")} ${esc(view.province)}${view.city ? " · " + esc(view.city) : ""}</span>` : ""}
+        ${kindsChips}${noteChip}
       </div>
       ${(view.specs && view.specs.length) ? `<div class="ch-card-specs">${view.specs.map((s) => `<span class="ch-spec"><b>${esc(s.label)}</b>${esc(s.text)}</span>`).join("")}</div>` : ""}
       <div class="ch-card-foot">
-        <span class="ch-price">${esc(view.priceLabel)} <b>${esc(view.price || "面议")}</b></span>
+        ${board === "market" ? "" : `<span class="ch-price">${esc(view.priceLabel)} <b>${esc(view.price || "面议")}</b></span>`}
         <span class="ch-time">${icon("clock")} ${relTime(view.createdAt)}${remainTag(view.expiresAt)}</span>
       </div>
     </div>

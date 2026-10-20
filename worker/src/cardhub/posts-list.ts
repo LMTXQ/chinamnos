@@ -16,6 +16,8 @@ export async function handlePostsList(request: Request, env: Env): Promise<Respo
   const province = url.searchParams.get('province');
   const city = url.searchParams.get('city');
   const q = url.searchParams.get('q');
+  // 市集板块专属：回收权益范围（单一/综合），按 extra_json.market_scope 过滤（市集无运营商/省市维度）
+  const scope = url.searchParams.get('scope');
   const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
   const pageSize = Math.min(50, Math.max(1, Number(url.searchParams.get('pageSize')) || 20));
 
@@ -26,6 +28,7 @@ export async function handlePostsList(request: Request, env: Env): Promise<Respo
   if (carrier) { where.push(`carrier = ?${i++}`); binds.push(carrier); }
   if (province) { where.push(`province = ?${i++}`); binds.push(province); }
   if (city) { where.push(`city = ?${i++}`); binds.push(city); }
+  if (scope) { where.push(`json_extract(extra_json, '$.market_scope') = ?${i++}`); binds.push(scope); }
   if (q) {
     const qn = /^\d+$/.test(q) ? Number(q) : null;
     if (qn !== null) {

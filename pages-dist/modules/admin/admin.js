@@ -521,6 +521,15 @@ function getPromos() {
   const row = (state.settings || []).find((s) => s.key === "promos");
   try { const v = JSON.parse(row ? row.value_json : "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
 }
+/* 占位符行文本（公告页签编辑块）：[{key,value}] → 「键名 | 值」行 */
+function getPlaceholderRows() {
+  const row = (state.settings || []).find((s) => s.key === "promo_placeholders");
+  try {
+    const v = JSON.parse(row ? row.value_json : "[]");
+    return Array.isArray(v) ? v.map((n) => `${n.key || ""} | ${n.value || ""}`).join("\n") : "";
+  } catch { return "";
+  }
+}
 function promoScopeText(sc) {
   const carriers = sc && Array.isArray(sc.carriers) ? sc.carriers : [];
   const provinces = sc && Array.isArray(sc.provinces) ? sc.provinces : [];
@@ -683,6 +692,12 @@ function renderPromos() {
       </div>
       ${pr.editId === "new" ? editor(null) : ""}
       ${items.length ? items.map(row).join("") : `<div class="adm-empty">暂无推广，点击「新建推广」创建第一条</div>`}
+    </div>
+    <div class="adm-set-group">
+      <div class="adm-set-group-title">占位符取值（{{key}}）</div>
+      <div class="adm-filter" style="margin-bottom:8px"><span class="adm-meta">公告/推广正文里写 {{键名}}，展示时替换为对应值（仅公告/推广渲染生效，其他 Markdown 不替换）；值不随部署——保存即生效，前端访客下次进站拉到新值。</span></div>
+      <textarea class="inp adm-setting-ta" rows="6" data-act="inputSetting" data-key="promo_placeholders" placeholder="每行一条，格式：键名 | 值&#10;如：quota | 128&#10;如：deadline | 10 月 31 日&#10;键名小写字母/数字/下划线 1~20 位且不可重复，值 ≤200 字">${esc(getPlaceholderRows())}</textarea>
+      <div class="adm-actions" style="margin-top:8px"><button class="btn primary sm" data-act="saveSetting" data-key="promo_placeholders"><i data-icon="check"></i>保存占位符</button></div>
     </div>`;
 }
 
@@ -1129,7 +1144,7 @@ const SETTING_DESC = {
   about_thanks: "关于页「鸣谢名单」配置，位于关于页最底部。每行一条，竖线分隔，三类格式各不相同：任意打赏 | 昵称 | 打赏留言 | 打赏金额 | 打赏渠道 | 打赏时间；反馈建议 | 昵称 | 建议内容摘要 | 建议时间；参考项目 | 项目名 | 项目介绍 | 参考说明 | 项目链接。时间为自由文本（如 2026.10），金额如 ¥20，渠道如 微信/支付宝，链接需 https:// 开头；留空的字段直接省略即可（保持竖线位数一致更易读，但允许省略尾部竖线）。行顺序即组内展示顺序；某一类别无条目则该组不显示；全部留空 = 关于页不显示鸣谢区块。仅站长可修改。",
   cardhub_trade_site_guarantee: "跳蚤市集发布表单「交易方式」中「站点担保」选项的显示开关。关闭后：新发布帖子的表单不再显示该选项，互动渠道「站长中转」随之隐藏；已发布帖子不受影响（交易方式标注照常展示，编辑旧帖时保留原勾选）。前端在下一轮采集部署后生效（板块配置快照随 Pages 部署）。仅站长可修改。",
   site_notice_schedule: "公告弹出日期门槛（编辑入口在「公告」页签「公告弹出日期」块，设置页不展示）。三类（每周/每月/每年）任一命中当天即弹（OR，北京时间）；全部留空 = 不限日期走现有每日首访逻辑，防重规则不变。站长与管理员可修改。",
-  promo_placeholders: "公告/推广正文的 {{key}} 占位符取值（值不随前端部署：前端每次会话首次访问向 Worker 拉取一次，保存即生效）。每行一条，格式：键名 | 值（如 quota | 128），键名小写字母/数字/下划线 1~20 位且不可重复，值 ≤200 字。正文里写 {{键名}}，展示时替换为值；未定义的 {{xxx}} 原样显示。设置页保存即时生效。站长与管理员可修改。",
+  promo_placeholders: "公告/推广正文的 {{key}} 占位符取值（值不随前端部署：前端每次会话首次访问向 Worker 拉取一次，保存即生效）。编辑入口在「公告」页签「占位符取值」块，每行一条：键名 | 值（如 quota | 128），键名小写字母/数字/下划线 1~20 位且不可重复，值 ≤200 字。正文里写 {{键名}}，展示时替换为值；未定义的 {{xxx}} 原样显示。仅公告/推广渲染生效，其他 Markdown 不替换。站长与管理员可修改。",
   site_notice_enabled: "全站公告总开关。开启后所有访客与登录用户每日首次进入站点任意页面时弹出公告，可勾选「今日不再弹出」（不勾直接关闭则下次进入/刷新仍弹）。标题与正文分别在 site_notice_title / site_notice_content 配置。公告弹窗随下一轮采集部署生效。站长与管理员可修改。",
   site_notice_title: "全站公告弹窗标题，默认「站点公告」。站长与管理员可修改。",
   site_notice_content: "全站公告正文，支持 Markdown（语法同警告内容）。写维护通知、新功能上线、规则变更等。保存后需开启 site_notice_enabled 才会弹出。所有人每日首次进入弹窗，勾选「今日不再弹出」后当天不再显示。站长与管理员可修改。",
@@ -1162,8 +1177,9 @@ function mountSettingMdEditors() {
 /* 已迁至「公告」页签 / 已废弃的键：设置页不再展示（否则会掉进「其他」组重复出现）。
    cardhub_warning_* 已废弃：migration 0030 迁为推广条目 promo_cardhub_warning 并删除原键，
    保留在隐藏名单中兜底（迁移未执行前 DB 中仍有旧行）。
-   promos 已迁「公告」页签（推广列表可视化编辑器整存整取），设置页隐藏避免通用输入框直改复杂对象绕过校验 */
-const SETTING_HIDDEN_KEYS = new Set(["site_notice_enabled", "site_notice_title", "site_notice_content", "cardhub_warning_enabled", "cardhub_warning_content", "promos", "promo_reswitch_enabled"]);
+   promos / promo_reswitch_enabled / promo_placeholders 已迁「公告」页签（可视化编辑器），
+   site_notice_schedule 编辑入口在「公告」页签「公告弹出日期」块——设置页一律隐藏 */
+const SETTING_HIDDEN_KEYS = new Set(["site_notice_enabled", "site_notice_title", "site_notice_content", "cardhub_warning_enabled", "cardhub_warning_content", "promos", "promo_reswitch_enabled", "site_notice_schedule", "promo_placeholders"]);
 /* 多行编辑块的 per-key 文案（计数说明 / placeholder / 提示 / 保存按钮文字） */
 const SETTING_BLOCK_META = {
   ticket_apply_guarantor: {
@@ -1287,25 +1303,6 @@ function renderSettings() {
       <div class="adm-setting-actions">
         <span class="adm-setting-hint">保存后前端在下一轮采集部署时生效（Worker 接口 60s 缓存）</span>
         <button class="btn primary sm" data-act="saveSetting" data-key="${s.key}"><i data-icon="check"></i>保存友链</button>
-      </div>
-    </div>`;
-    }
-    /* 公告/推广占位符取值：行式编辑「键名 | 值」，保存解析为 [{key,value}] 数组 */
-    if (SETTING_PLACEHOLDER_KEYS.has(s.key)) {
-      const rows = Array.isArray(val)
-        ? val.map((n) => `${n.key || ""} | ${n.value || ""}`).join("\n")
-        : String(val);
-      const n = Array.isArray(val) ? val.length : 0;
-      return `
-    <div class="adm-setting adm-setting-block">
-      <div class="adm-setting-info">
-        <div class="adm-setting-key">${esc(s.key)}${SETTING_DESC[s.key] ? `<span class="help" data-tip="${esc(SETTING_DESC[s.key])}">?</span>` : ""}</div>
-        <div class="adm-setting-meta">已配置 <b>${n}</b> 个占位符 · 更新于 ${fmtTime(s.updated_at)}</div>
-      </div>
-      <textarea class="inp adm-setting-ta" rows="7" data-act="inputSetting" data-key="${s.key}" placeholder="每行一条，格式：键名 | 值&#10;如：quota | 128&#10;如：deadline | 10 月 31 日&#10;键名小写字母/数字/下划线 1~20 位且不可重复；公告/推广正文里写 {{键名}}，展示时替换为值（保存即生效，不随部署）">${esc(rows)}</textarea>
-      <div class="adm-setting-actions">
-        <span class="adm-setting-hint">值保存即生效（前端下次进站拉取），无需等部署；正文用法见问号说明</span>
-        <button class="btn primary sm" data-act="saveSetting" data-key="${s.key}"><i data-icon="check"></i>保存占位符</button>
       </div>
     </div>`;
     }
