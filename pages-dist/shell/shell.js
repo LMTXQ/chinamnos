@@ -119,7 +119,7 @@ const PAGE_TITLES = {
   tariff: "资费监测",
   cardhub: "跳蚤市集",
   ticket: "工单中心",
-  tools: "工具宝库",
+  tools: "觅珍集库",
   admin: "管理后台",
   config: "管理中心",
 };

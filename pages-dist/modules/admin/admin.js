@@ -49,9 +49,9 @@ let state = {
   tab: "stats",
   stats: null,
   pending: [],
-  pendingNav: [],       // 工具宝库待审（仅站长拉取）
+  pendingNav: [],       // 觅珍集库待审（仅站长拉取）
   pendingActs: [],      // 活动集锦待审（管理员即可审核）
-  reviewFilter: { source: "", board: "" }, // 审核 Tab 筛选：来源（跳蚤市集/工具宝库/活动集锦）+ 板块
+  reviewFilter: { source: "", board: "" }, // 审核 Tab 筛选：来源（跳蚤市集/觅珍集库/活动集锦）+ 板块
   acts: [],             // 活动全量列表（活动 Tab，客户端按状态筛选）
   actStatus: "",        // 活动 Tab 状态筛选
   relay: [],
@@ -224,9 +224,9 @@ function renderTradeMethods(p) {
 }
 
 
-/* ── 审核中心：跳蚤市集帖子 + 工具宝库提交（工具宝库仅站长）统一列表，来源/板块筛选 ── */
+/* ── 审核中心：跳蚤市集帖子 + 觅珍集库提交（觅珍集库仅站长）统一列表，来源/板块筛选 ── */
 /* 筛选选项动态生成：来源/板块 chip 由当前待审数据统计而来——有什么才显示什么（含数量徽章），
-   管理员拉不到工具宝库数据则自然不显示工具宝库项，无需写死枚举与权限判断 */
+   管理员拉不到觅珍集库数据则自然不显示觅珍集库项，无需写死枚举与权限判断 */
 function reviewFilterHTML() {
   const f = state.reviewFilter;
   const chip = (act, v, label, count, active) => `<button type="button" class="rv-chip${active ? " active" : ""}" data-act="${act}" data-v="${v}">${label}${count ? ` <span class="rv-chip-n">${count}</span>` : ""}</button>`;
@@ -238,7 +238,7 @@ function reviewFilterHTML() {
       <span class="rv-filter-label">来源</span>
       ${chip("reviewSrc", "", "全部", postTotal + navCount + actCount, !f.source)}
       ${postTotal ? chip("reviewSrc", "cardhub", "跳蚤市集", postTotal, f.source === "cardhub") : ""}
-      ${navCount ? chip("reviewSrc", "nav", "工具宝库", navCount, f.source === "nav") : ""}
+      ${navCount ? chip("reviewSrc", "nav", "觅珍集库", navCount, f.source === "nav") : ""}
       ${actCount ? chip("reviewSrc", "acts", "情报酒馆", actCount, f.source === "acts") : ""}
     </div>`;
   if (f.source === "nav" || f.source === "acts") return `<div class="rv-filters">${sourceRow}</div>`;
@@ -290,12 +290,12 @@ function reviewPostCard(p) {
   </div>`;
 }
 
-/* 工具宝库提交待审卡（仅站长）：标题/链接/分组 + 打开/通过/驳回 */
+/* 觅珍集库提交待审卡（仅站长）：标题/链接/分组 + 打开/通过/驳回 */
 function reviewNavCard(n) {
   return `
   <div class="adm-item rv-card">
     <div class="rv-head">
-      <span class="rv-src rv-src-nav">工具宝库</span>
+      <span class="rv-src rv-src-nav">觅珍集库</span>
       <span class="rv-board rv-b-nav">${esc(n.group_name || "未分组")}</span>
       <span class="rv-title">${esc(n.title || "(无标题)")}</span>
     </div>
@@ -413,7 +413,7 @@ function renderTickets() {
     }).join("") : `<div class="adm-empty">暂无工单</div>`}`;
 }
 
-/* ═══════════════ 工具宝库（导航链接，仅站长） ═══════════════ */
+/* ═══════════════ 觅珍集库（导航链接，仅站长） ═══════════════ */
 const NAV_STATUS_LABELS = { pending: "待审核", open: "已上架", rejected: "已驳回", retired: "已下架" };
 
 function renderNav() {
@@ -434,7 +434,7 @@ function renderNav() {
       return `
     <div class="adm-item">
       <div class="adm-item-head">
-        <span class="adm-title">${esc(it.title)}</span>
+        <span class="adm-title">${esc(it.title)}${it.featured ? `<span class="adm-tag ok" title="觅珍集库顶部精选区高亮展示">精选</span>` : ""}</span>
         <span class="adm-meta">${esc(it.group_name || "其他")} · ${esc(it.url.length > 46 ? it.url.slice(0, 46) + "…" : it.url)}</span>
       </div>
       <div class="adm-item-foot">
@@ -458,6 +458,7 @@ function renderNav() {
           <label>简介<input class="inp" id="navEDescr" maxlength="80" value="${esc(it.descr || "")}"></label>
           <label>分组<input class="inp" id="navEGroup" maxlength="20" value="${esc(it.group_name || "")}"></label>
           <label>排序（小在前）<input class="inp" id="navESort" type="number" step="1" value="${Number(it.sort) || 100}"></label>
+          <label style="flex-direction:row;align-items:center;gap:8px">特殊站点<input type="checkbox" id="navEFeatured" ${it.featured ? "checked" : ""} style="width:16px;height:16px"><span class="opt" style="font-weight:400">勾选后在觅珍集库顶部「站长精选」区高亮展示</span></label>
         </div>
         <div class="adm-actions" style="margin-top:8px">
           <button class="btn primary sm" data-act="navSave" data-id="${esc(it.id)}">保存</button>
@@ -486,7 +487,7 @@ const PROMO_PROV_LIST = [
   { c: "xj", n: "新疆" },
 ];
 /* 生效模块可选项 = 前端页面注册 id（shell.js Shell.registerPage）；新增面向用户的功能模块时需同步维护此表 */
-const PROMO_MODULE_LABELS = { tariff: "资费中心", cardhub: "跳蚤市集", ticket: "工单中心", tools: "工具宝库" };
+const PROMO_MODULE_LABELS = { tariff: "资费中心", cardhub: "跳蚤市集", ticket: "工单中心", tools: "觅珍集库" };
 const PROMO_MODE_LABELS = { closable: "可关闭 · 每日一次", must: "强制同意" };
 
 /* ── 弹出日期门槛控件（公告 + 推广条目共用）：三类任一命中当天即弹（OR），全空 = 不限日期走现有逻辑 ── */
@@ -902,6 +903,7 @@ async function onNavSave(id) {
     descr: $("navEDescr")?.value?.trim() ?? "",
     group_name: $("navEGroup")?.value?.trim() ?? "",
     sort: Number($("navESort")?.value ?? 100),
+    featured: $("navEFeatured")?.checked ? 1 : 0,
   };
   if (!body.title) { toast("名称不能为空"); return; }
   if (!body.url) { toast("链接不能为空"); return; }
@@ -1135,7 +1137,7 @@ const SETTING_DESC = {
   mail_daily_cap: "邮件系统每日发送总量上限，超出后当日暂停发送验证类邮件。",
   site_name: "站点名称，用于邮件标题与页面展示。",
   notification_retention_days: "站内通知（铃铛）保留天数：已读通知超过该天数后，在本人下次打开通知面板时自动清除；未读通知不受影响、永久保留。整数 1~365，默认 30。保存后即时生效（无需等前端部署）。",
-  promos: "推广列表（与全站公告共用弹窗体系，原「推广」页签已并入「公告」页签，此处仅存数据不再展示）。数据结构 [{id,enabled,title,content,version,mode,scope{carriers,provinces,modules}}]：mode=closable 可关闭每日一次 / must 强制同意；scope 三维度全空 = 全站任意页面，modules 非空 = 仅进入对应模块（资费中心/跳蚤市集/工单中心/工具宝库）时判定弹出。请勿在设置页直接编辑本键（会绕过公告页签编辑器的规范化校验），一律在「公告」页签操作。保存后 Worker 即时生效，弹窗配置随下一轮采集部署。站长与管理员可修改。",
+  promos: "推广列表（与全站公告共用弹窗体系，原「推广」页签已并入「公告」页签，此处仅存数据不再展示）。数据结构 [{id,enabled,title,content,version,mode,scope{carriers,provinces,modules}}]：mode=closable 可关闭每日一次 / must 强制同意；scope 三维度全空 = 全站任意页面，modules 非空 = 仅进入对应模块（资费中心/跳蚤市集/工单中心/觅珍集库）时判定弹出。请勿在设置页直接编辑本键（会绕过公告页签编辑器的规范化校验），一律在「公告」页签操作。保存后 Worker 即时生效，弹窗配置随下一轮采集部署。站长与管理员可修改。",
   promo_reswitch_enabled: "推广「切换重弹」开关（编辑入口在「公告」页签推广分组的「切换重弹」按钮，设置页不展示）。开启 = 访客在资费页切换运营商/省份时，重新判定全站推广并弹出命中新范围且未读的条目；关闭 = 切换不打断、不弹。不影响每日首次进站与模块进入两个触发点；同意记录/「今日不再」天然防重。布尔，未保存过默认开启。站长与管理员可修改。",
   cardhub_trade_merchants: "圈内卡商担保的推荐卡商列表——发帖人发布/编辑帖子勾选「圈内卡商担保」时，从此列表搜索并选择担保人（每帖最多 3 位），帖子详情页展示所选担保人及其热度统计。每行一条，格式：卡商名 | 站内用户UID（可留空） | 一句话介绍（可留空）。条数不限；卡商名必填（≤40 字）且同列表内不可重复——名称是担保人关联与统计标识，改名会使旧帖与该条目的统计关联断开（旧帖仍显示发帖时名称）。绑定 UID 后候选与详情显示头像与「站内」标识、点击弹用户资料卡（介绍随卡片展示）；UID 留空即纯文本卡商，同样可被选为担保人。绑定 UID 必须是站内 active 用户，否则拒绝保存。全部清空则发帖时无候选可选。推荐仅作参考，站点不为所推荐人承担保证。热度统计随快照更新（约 0-8 小时），Worker 兜底接口即时；其余展示在下一轮采集部署后生效。仅站长可修改。",
   ticket_apply_guarantor: "「毛遂自荐 · 申请成为卡商担保人」工单的申请模板。跳蚤市集「毛遂自荐」按钮会把此模板预填进工单表单（用户可修改后提交）。留空则使用系统内置的通用申请框架。模板建议控制在 500 字内（工单正文上限）。前端在下一轮采集部署后生效。仅站长可修改。",
@@ -1376,7 +1378,7 @@ async function loadTab() {
   const t = state.tab;
   if (t === "stats") { const r = await api.adminStats(); if (r.ok) state.stats = r.data; }
   else if (t === "review") {
-    /* 统一审核：跳蚤市集帖子 + 工具宝库提交（站长）+ 活动集锦提交（管理员即可） */
+    /* 统一审核：跳蚤市集帖子 + 觅珍集库提交（站长）+ 活动集锦提交（管理员即可） */
     const jobs = [api.adminPending(), api.adminActivityList("pending")];
     if (Auth.isOwner()) jobs.push(api.request("/api/admin/nav?status=pending"));
     const [pr, ar, nr] = await Promise.all(jobs);
@@ -1930,7 +1932,7 @@ const CSS = `
 .adm-tk-reply{margin-top:4px}
 .adm-tk-reply textarea{width:100%}
 .adm-item-foot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-/* 工具宝库行内编辑 */
+/* 觅珍集库行内编辑 */
 .adm-nav-edit{margin-top:10px;padding:10px 12px;border-radius:10px;background:var(--surface-2,rgba(0,0,0,.03));border:1px solid var(--border)}
 .adm-nav-edit-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .adm-nav-edit-grid label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--muted)}

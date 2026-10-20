@@ -20,7 +20,7 @@ const APP_SITES = [
   { id: "tariff", label: "资费监测", icon: "chart", route: "/" },
   { id: "cardhub", label: "跳蚤市集", icon: "box", route: "/cardhub", module: "cardhub", badge: "新" },
   { id: "ticket", label: "工单中心", icon: "list", route: "/ticket" },
-  { id: "tools", label: "工具宝库", icon: "link", route: "/tools" },
+  { id: "tools", label: "觅珍集库", icon: "link", route: "/tools" },
   { id: "admin", label: "管理后台", icon: "shield", route: "/admin", staffOnly: true },
 ];
 

@@ -106,7 +106,7 @@ export async function handleExportChats(_request: Request, env: Env): Promise<Re
 // GET /api/export/navlinks：全部集合公开导航链接（open，≤1000 条）
 export async function handleExportNavlinks(_request: Request, env: Env): Promise<Response> {
   const { results } = await env.DB.prepare(
-    `SELECT id, collection, group_name, title, url, icon_url, descr
+    `SELECT id, collection, group_name, title, url, icon_url, descr, featured
      FROM nav_links WHERE status = 'open'
      ORDER BY collection ASC, group_name ASC, sort ASC, created_at ASC LIMIT 1000`,
   ).all();

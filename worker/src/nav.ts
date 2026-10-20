@@ -65,7 +65,7 @@ export async function handleNavLinks(request: Request, env: Env): Promise<Respon
   if (!COLLECTIONS.has(collection)) return fail(ERR.VALIDATION_ERROR, 'INVALID_COLLECTION', 400);
 
   const { results } = await env.DB.prepare(
-    `SELECT id, collection, group_name, title, url, icon_url, descr
+    `SELECT id, collection, group_name, title, url, icon_url, descr, featured
      FROM nav_links WHERE collection = ?1 AND status = 'open'
      ORDER BY group_name ASC, sort ASC, created_at ASC LIMIT 200`,
   ).bind(collection).all();
@@ -205,6 +205,11 @@ export async function handleNavUpdate(request: Request, env: Env, id: string): P
   }
   if ('descr' in body) { sets.push('descr = ?'); binds.push(cleanStr(body.descr, DESCR_MAX) || null); }
   if ('group_name' in body) { sets.push('group_name = ?'); binds.push(cleanStr(body.group_name, GROUP_MAX) || '其他'); }
+  // 特殊站点标志（觅珍集库顶部精选区高亮展示）：仅 0/1
+  if ('featured' in body) {
+    const v = body.featured === true || body.featured === 1 ? 1 : 0;
+    sets.push('featured = ?'); binds.push(v);
+  }
   if ('sort' in body) {
     const v = Number(body.sort);
     if (!Number.isInteger(v)) return failInvalid('sort');
