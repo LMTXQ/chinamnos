@@ -37,7 +37,7 @@ import hashlib
 import mimetypes
 import string
 import zipfile
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -3866,6 +3866,12 @@ class StorageBackend:
     def write_json(self, key, data):
         raise NotImplementedError
 
+    def write_bytes(self, key, data):
+        """二进制文件写入 buffer（站点图标等静态资源；持久副本由调用方维护在
+        local_cache/favicons/，不走 JSON 本地缓存）。三条部署通道的 files 字典
+        均直接收 bytes，无需各线单独适配。"""
+        self._buffer[f'{self.path_prefix}/{key}'] = data
+
     def list_keys(self, prefix=''):
         raise NotImplementedError
 
@@ -4818,6 +4824,9 @@ class MultiStorage:
     def write_json(self, key, data):
         self.primary.write_json(key, data)
 
+    def write_bytes(self, key, data):
+        self.primary.write_bytes(key, data)
+
     def list_keys(self, prefix=''):
         return self.primary.list_keys(prefix)
 
@@ -4856,6 +4865,9 @@ class MultiStorage:
 
     def commit(self, message='auto update', skip_unchanged_download=False):
         results = {}
+        # 站点图标统一保活：无论全量/轻量轮，先把 local_cache/favicons/* 注入 buffer，
+        # 防整站替换制下本轮未写入导致线上图标被删（快照进各线独立副本）
+        _attach_favicons(self)
         # 本轮数据快照：每线注入独立副本。不能直接 merge primary 的活 buffer——
         # primary 线先 commit 时会清空自身 buffer，后续线将 merge 到空数据（丢本轮数据）
         snapshot = dict(self.primary._buffer)
@@ -4900,6 +4912,153 @@ _PUBLIC_CONFIG_SOURCES = [
 ]
 
 
+# ── 站点图标（favicon）自动抓取：为觅珍集库无图标的站点补图 ──
+# 抓取链：首页 HTML <link rel="...icon..."> → 站点 /favicon.ico；持久副本存 local_cache/favicons/
+# （青龙卷持久、容器重建不丢；置于 local_cache 根下而非 data/ 内——_cleanup_local_cache 会把
+#   data/ 下不在运营商名单里的目录整删，favicons 放根下不受影响）。
+# 文件名 = md5(站点url)[:12] + 扩展名：url 变更自动重抓，同名复用天然去重。
+_FAV_EXTS = ('.png', '.ico', '.svg', '.jpg', '.gif', '.webp')
+_FAV_CTYPE_EXT = {
+    'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
+    'image/webp': '.webp', 'image/svg+xml': '.svg',
+    'image/x-icon': '.ico', 'image/vnd.microsoft.icon': '.ico',
+}
+_FAV_HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36'}
+
+
+def _fav_name_for(site_url):
+    return hashlib.md5(site_url.strip().encode('utf-8')).hexdigest()[:12]
+
+
+def _fav_ext_from(ctype, url_hint=''):
+    ct = (ctype or '').split(';')[0].strip().lower()
+    if ct in _FAV_CTYPE_EXT:
+        return _FAV_CTYPE_EXT[ct]
+    tail = (url_hint or '').split('?')[0].rsplit('.', 1)
+    if len(tail) == 2 and tail[1].lower() in ('png', 'ico', 'svg', 'jpg', 'jpeg', 'gif', 'webp'):
+        return '.jpg' if tail[1].lower() == 'jpeg' else '.' + tail[1].lower()
+    return '.ico'
+
+
+def _fetch_favicon(site_url):
+    """抓取站点图标，返回 (bytes, 扩展名) 或 None。首页 HTML link icon → /favicon.ico 两级。"""
+    try:
+        parsed = urlparse(site_url)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+            return None
+        origin = f'{parsed.scheme}://{parsed.netloc}'
+        # 1) 首页 HTML 提取 <link rel~=icon>（rel 与 href 先后顺序两种写法都覆盖）
+        try:
+            r = requests.get(site_url, timeout=(5, 8), headers=_FAV_HEADERS)
+            if r.ok and r.content:
+                head = r.text[:60000]
+                href = None
+                m = re.search(r'<link[^>]+rel=["\'][^"\']*icon[^"\']*["\'][^>]*>', head, re.I)
+                if m:
+                    hm = re.search(r'href=["\']([^"\']+)["\']', m.group(0), re.I)
+                    if hm:
+                        href = hm.group(1)
+                if not href:
+                    m2 = re.search(r'<link[^>]+href=["\']([^"\']+)["\'][^>]*rel=["\'][^"\']*icon[^"\']*["\']', head, re.I)
+                    if m2:
+                        href = m2.group(1)
+                if href:
+                    icon_url = urljoin(origin + '/', href.strip())
+                    try:
+                        ir = requests.get(icon_url, timeout=(5, 8), headers=_FAV_HEADERS)
+                        if ir.ok and ir.content and len(ir.content) <= 200 * 1024 \
+                                and 'html' not in (ir.headers.get('Content-Type') or '').lower():
+                            return ir.content, _fav_ext_from(ir.headers.get('Content-Type'), icon_url)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # 2) 回退站点根 /favicon.ico（SPA 回退返回 HTML 时按 Content-Type 拒绝）
+        try:
+            r2 = requests.get(origin + '/favicon.ico', timeout=(5, 8), headers=_FAV_HEADERS)
+            if r2.ok and r2.content and len(r2.content) <= 200 * 1024 \
+                    and 'html' not in (r2.headers.get('Content-Type') or '').lower():
+                return r2.content, _fav_ext_from(r2.headers.get('Content-Type'), 'favicon.ico')
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return None
+
+
+def _fav_local_file(fav_dir, site_url):
+    """该站点 url 在 local_cache/favicons/ 下的既有文件名（含扩展名），无则 None"""
+    name = _fav_name_for(site_url)
+    for ext in _FAV_EXTS:
+        if os.path.isfile(os.path.join(fav_dir, name + ext)):
+            return name + ext
+    return None
+
+
+def _enrich_nav_icons(storage, data):
+    """为觅珍集库（nav_links toolbox）无图标的站点补本地 favicon：
+    本地已有 → 直接覆写 icon_url；没有 → 抓取下载后覆写。
+    仅改写烘焙产物内存对象，管理端 nav_links 源数据不动；失败不影响烘焙主流程。"""
+    try:
+        st = getattr(storage, 'primary', storage)
+        fav_dir = os.path.join(st._local_cache_dir, 'favicons')
+        os.makedirs(fav_dir, exist_ok=True)
+        items = data.get('items') if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return data
+        fetched = 0
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            url = (it.get('url') or '').strip()
+            if not url or url.startswith('/') or url.startswith('#'):
+                continue   # 站内链接无外站图标
+            if (it.get('icon_url') or '').strip():
+                continue   # 站长已指定图标，尊重不覆盖
+            existing = _fav_local_file(fav_dir, url)
+            if existing is None:
+                if fetched >= 20:
+                    continue   # 单轮抓取上限：首轮大量缺图时自然分摊到后续轮次，防拖死采集
+                got = _fetch_favicon(url)
+                if got:
+                    content, ext = got
+                    with open(os.path.join(fav_dir, _fav_name_for(url) + ext), 'wb') as f:
+                        f.write(content)
+                    existing = _fav_name_for(url) + ext
+                    fetched += 1
+                    time.sleep(0.3)   # 温和节流，减轻对方站点压力
+            if existing:
+                it['icon_url'] = f'/data/favicons/{existing}'   # 根绝对路径：SPA 部署于站点根，同源加载
+        if fetched:
+            logger.info(f'[favicons] 本轮新抓 {fetched} 个站点图标（存 local_cache/favicons/）')
+    except Exception as e:
+        logger.warning(f'[favicons] 补图处理失败(不影响烘焙): {str(e)[:120]}')
+    return data
+
+
+def _attach_favicons(storage):
+    """部署前把 local_cache/favicons/* 注入 primary buffer：
+    ① 每轮部署（含轻量轮）随数据一起上传，防整站替换制下线上图标文件被删；
+    ② MultiStorage.commit 会把 buffer 快照分发给全部启用线路，三通道自动携带。"""
+    try:
+        st = getattr(storage, 'primary', storage)
+        fav_dir = os.path.join(st._local_cache_dir, 'favicons')
+        if not os.path.isdir(fav_dir):
+            return
+        n = 0
+        for fname in sorted(os.listdir(fav_dir)):
+            fpath = os.path.join(fav_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            with open(fpath, 'rb') as f:
+                st.write_bytes(f'favicons/{fname}', f.read())
+            n += 1
+        if n:
+            logger.info(f'[favicons] 已注入 {n} 个站点图标随本轮部署')
+    except Exception as e:
+        logger.warning(f'[favicons] 图标注入失败(不影响部署): {str(e)[:120]}')
+
+
 def refresh_public_config(storage):
     """拉取公共配置快照写入待部署 buffer；单项失败跳过（前端该项回落 Worker 接口），整体失败不阻塞部署。
     单项 4 次尝试 + 指数退避 2/4/8s（±20% 抖动）：meta 是聚合接口全家最重（实测 2.6s vs 其他 <1.5s），
@@ -4936,6 +5095,7 @@ def refresh_public_config(storage):
         elif mode == 'links':
             cfg.setdefault('about', {})['links'] = data.get('links') or []
         elif mode == 'nav':
+            data = _enrich_nav_icons(storage, data)   # 无图标站点补抓 favicon 并覆写 icon_url
             cfg['nav_links'] = {'toolbox': data}   # 保留 {items:[...]} 形状，前端与接口响应同构消费
         elif mode == 'meta':
             # /api/meta 的 data 自带 {modules:{...}} 包装（包装键与快照键同名），
@@ -5002,7 +5162,10 @@ def bake_community_data(storage, config, carrier_keys=None):
 
     if tools is not None:
         try:
-            storage.write_json('tools.json', {'generated_at': now_iso(), 'items': tools.get('items') or []})
+            # tools.json 是觅珍集库前端第一优先数据源（public-config nav_links 仅回退），
+            # 无图标站点的 favicon 补抓在此处接入，保证主源与回退源的 icon_url 一致
+            tools_data = _enrich_nav_icons(storage, {'generated_at': now_iso(), 'items': tools.get('items') or []})
+            storage.write_json('tools.json', tools_data)
         except Exception as e:
             logger.warning(f'[bake] tools.json 写入失败(不影响本次部署): {str(e)[:100]}')
 

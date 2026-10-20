@@ -31,7 +31,7 @@ const S = {
 
 const $ = (id) => document.getElementById(id);
 
-/* favicon 三级回退：指定 icon → 谷歌 s2 → 站点 favicon.ico → 首字母块 */
+/* favicon 回退：指定 icon → 站点 favicon.ico → 首字母块（谷歌 s2 国内不可达已移除，采集端会为未设图标的站点预抓存本地） */
 function hostOf(u) {
   try { return new URL(u, location.origin).host; } catch { return ""; }
 }
@@ -39,9 +39,8 @@ function iconChain(url, iconUrl) {
   if (/^\/(?!\/)/.test(url)) return null; // 站内链接：首字母块
   const host = hostOf(url);
   if (!host) return null;
-  return iconUrl
-    ? [iconUrl, `https://www.google.com/s2/favicons?domain=${host}&sz=64`, `${new URL(url, location.origin).origin}/favicon.ico`]
-    : [`https://www.google.com/s2/favicons?domain=${host}&sz=64`, `${new URL(url, location.origin).origin}/favicon.ico`];
+  const favIco = `${new URL(url, location.origin).origin}/favicon.ico`;
+  return iconUrl ? [iconUrl, favIco] : [favIco];
 }
 
 /* ═══════════════ 页面骨架 ═══════════════ */
