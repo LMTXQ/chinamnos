@@ -4888,7 +4888,7 @@ PUBLIC_CONFIG_API_BASE = 'https://api.ftac.dpdns.org'  # 与前端 shell/api.js 
 
 # (快照键, Worker 接口, 合并方式)：about 由两个接口拼合；nav_links 按 collection 归档
 _PUBLIC_CONFIG_SOURCES = [
-    ('modules',      '/api/meta',                          'direct'),
+    ('modules',      '/api/meta',                          'meta'),
     ('notices',      '/api/notices',                       'direct'),
     ('email_policy', '/api/auth/email-policy',             'direct'),
     ('schema',       '/api/cardhub/schema',                'direct'),
@@ -4937,6 +4937,10 @@ def refresh_public_config(storage):
             cfg.setdefault('about', {})['links'] = data.get('links') or []
         elif mode == 'nav':
             cfg['nav_links'] = {'toolbox': data}   # 保留 {items:[...]} 形状，前端与接口响应同构消费
+        elif mode == 'meta':
+            # /api/meta 的 data 自带 {modules:{...}} 包装（包装键与快照键同名），
+            # direct 直塞会双层嵌套导致前端 pc.modules.cardhub 恒 undefined、菜单入口永不隐藏——解包一层
+            cfg['modules'] = data.get('modules') or {}
         else:
             cfg[key] = data
         ok_cnt += 1
@@ -5470,8 +5474,10 @@ def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_
                         last_crawl.setdefault(attr, {'added': 0, 'removed': 0, 'changed': 0})
                         last_crawl[attr][key] += 1
 
-                from datetime import datetime as _dt
-                today_start = _dt.strptime(crawl_time, '%Y-%m-%dT%H:%M:%S.%fZ').replace(hour=0, minute=0, second=0, microsecond=0)
+                from datetime import datetime as _dt, timedelta as _td
+                # 「今日」窗口锚定北京时间 0 点（ts 全链路 UTC 存储：+8h 转北京时间取 0 点，再 -8h 换回 UTC 比较）
+                _bj = _dt.strptime(crawl_time, '%Y-%m-%dT%H:%M:%S.%fZ') + _td(hours=8)
+                today_start = _bj.replace(hour=0, minute=0, second=0, microsecond=0) - _td(hours=8)
                 today_start_iso = today_start.strftime('%Y-%m-%dT%H:%M:%S.000Z')
                 changelog_path = f'{carrier_key}/changelogs/changelog_{prov["code"]}.json'
                 changelog_data = storage.read_json(changelog_path) or {}
@@ -5626,8 +5632,10 @@ def _digest_province_stats(carrier_key, prov, r, storage_ref, crawl_time):
                 last_crawl.setdefault(attr, {'added': 0, 'removed': 0, 'changed': 0})
                 last_crawl[attr][key] += 1
 
-        from datetime import datetime as _dt
-        today_start = _dt.strptime(crawl_time, '%Y-%m-%dT%H:%M:%S.%fZ').replace(hour=0, minute=0, second=0, microsecond=0)
+        from datetime import datetime as _dt, timedelta as _td
+        # 「今日」窗口锚定北京时间 0 点（ts 全链路 UTC 存储：+8h 转北京时间取 0 点，再 -8h 换回 UTC 比较）
+        _bj = _dt.strptime(crawl_time, '%Y-%m-%dT%H:%M:%S.%fZ') + _td(hours=8)
+        today_start = _bj.replace(hour=0, minute=0, second=0, microsecond=0) - _td(hours=8)
         today_start_iso = today_start.strftime('%Y-%m-%dT%H:%M:%S.000Z')
         changelog_path = f'{carrier_key}/changelogs/changelog_{prov["code"]}.json'
         changelog_data = storage_ref.read_json(changelog_path) or {}
