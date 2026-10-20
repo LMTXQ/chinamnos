@@ -72,6 +72,8 @@ const AUTH_CSS = `
 .auth-profile-ct code{font-family:ui-monospace,monospace;word-break:break-all;flex:1;min-width:0}
 /* 签名卡：复用联系方式卡布局，正文用常规字体（签名非代码，等宽不合适） */
 .auth-profile-ct-bio .v{flex:1;min-width:0;font-size:13px;line-height:1.6;color:var(--txt);overflow-wrap:anywhere}
+/* 卡商介绍行（站长推荐栏绑定条目传入）：同布局，边框带主题色以示推荐身份 */
+.auth-profile-intro{border-color:color-mix(in oklab,var(--acc) 35%,var(--line))}
 .auth-profile-ct .t{flex:none;font-size:11px;font-weight:700;color:var(--sub);min-width:40px}
 .auth-profile-ct .btn{flex:none;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--sub);font-size:12px;cursor:pointer;transition:.15s}
 .auth-profile-ct .btn:hover{border-color:var(--acc);color:var(--acc)}
@@ -347,8 +349,9 @@ export const Auth = {
     box.addEventListener("input", onSettingsInput); // 同一函数引用，重复挂载会被浏览器去重
   },
 
-  /** 他人公开资料卡（点头像弹出）：昵称 / UID / 主动公开的联系方式 */
-  async showProfileCard(uid) {
+  /** 他人公开资料卡（点头像弹出）：昵称 / UID / 主动公开的联系方式
+      intro 可选：站长推荐栏绑定卡商 chip 传入的「卡商介绍」，显示在资料卡头部下方 */
+  async showProfileCard(uid, intro) {
     injectCSS();
     openModal(`<button class="auth-close" data-act="closeAuth">&times;</button><h3>用户资料</h3><div id="authCardBody"><p class="hint">加载中…</p></div>`);
     getModal().querySelector("#authModalBox").addEventListener("click", onModalClick);
@@ -380,6 +383,7 @@ export const Auth = {
           <div class="auth-profile-uid">UID: ${esc(p.id)}</div>
         </div>
       </div>
+      ${(intro || "").trim() ? `<div class="auth-profile-ct auth-profile-intro"><span class="t">介绍</span><span class="v">${esc(intro.trim())}</span></div>` : ""}
       ${p.bio ? `<div class="auth-profile-ct auth-profile-ct-bio"><span class="v">${esc(p.bio)}</span></div>` : ""}
       ${(p.contacts || []).map((c) => `
         <div class="auth-profile-ct"><span class="t">${CT_LABELS[c.type] || "其他"}</span><code>${esc(c.value)}</code>

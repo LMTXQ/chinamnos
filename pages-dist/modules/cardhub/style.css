@@ -1129,24 +1129,163 @@
   flex: none;
   margin-top: 3px;
 }
-.ch-merchants {
+/* ── 担保人（发帖候选选择 + 详情「该帖担保人」共用行样式） ── */
+.ch-guar-search {
+  display: flex;
+  gap: 8px;
   margin-top: 8px;
+}
+.ch-guar-search .inp {
+  flex: 1;
+  min-width: 0;
+}
+.ch-guar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.ch-guar-empty {
+  font-size: 12px;
+  color: var(--sub);
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  text-align: center;
+}
+.ch-guar-item {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.ch-guar-item:hover {
+  border-color: var(--acc);
+}
+.ch-guar-item.on {
+  border-color: var(--acc);
+  background: color-mix(in oklab, var(--acc) 8%, var(--surface));
+}
+.ch-guar-item.locked {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.ch-guar-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  background: var(--surface-2);
+}
+.ch-guar-avatar-txt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--acc), var(--acc-deep));
+}
+.ch-guar-avatar-txt.dim {
+  background: var(--surface-3);
+  color: var(--sub);
+}
+.ch-guar-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ch-guar-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--txt);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.ch-guar-stat {
+  font-size: 11px;
+  color: var(--sub);
+}
+.ch-guar-check {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--acc);
+}
+.ch-guar-check svg {
+  width: 18px;
+  height: 18px;
+}
+/* 候选行「资料」按钮：弹担保人公开资料卡（仅绑定站内用户的条目） */
+.ch-guar-card {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--sub);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.ch-guar-card:hover {
+  border-color: var(--acc);
+  color: var(--acc);
+}
+.ch-guar-card svg {
+  width: 13px;
+  height: 13px;
+}
+/* 详情页「该帖担保人」：纵向列表，绑定条目可点击弹资料卡 */
+.ch-guar-detail {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
-.ch-merchants-t {
+.ch-guar-t {
   font-size: 11.5px;
   font-weight: 700;
   color: var(--sub);
 }
-.ch-merchant-item {
-  font-size: 11.5px;
-  padding: 2px 9px;
+.ch-guar-detail .ch-guar-item {
+  cursor: default;
+}
+.ch-guar-detail .ch-guar-item:hover {
+  border-color: var(--line);
+}
+.ch-guar-detail .ch-guar-item.bound {
+  cursor: pointer;
+}
+.ch-guar-detail .ch-guar-item.bound:hover {
+  border-color: var(--acc);
+}
+.ch-merchant-badge {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--acc);
+  background: color-mix(in oklab, var(--acc) 14%, transparent);
+  padding: 1px 5px;
   border-radius: var(--r-full);
-  background: var(--surface);
-  border: 1px solid var(--line);
 }
 /* tags 类型字段（号码特征等）：chips 行 */
 .ch-tags-row {

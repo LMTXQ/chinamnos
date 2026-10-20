@@ -637,10 +637,11 @@ async function chEnsureSchema() {
     if (!r.ok) return null;
     d = r.data;
   }
-  // tradeMethods/tradeMerchants：renderTradeBox 翻译交易方式中文名与推荐栏依赖
+  // tradeMethods/tradeMerchants/tradeGuarantorStats：renderTradeBox 交易方式翻译、发帖选担保人候选池与统计依赖
   chState.schema = {
     boards: d.boards || [], carriers: d.carriers || [],
     tradeMethods: d.tradeMethods || [], tradeMerchants: d.tradeMerchants || [],
+    tradeGuarantorStats: d.tradeGuarantorStats || {},
   };
   return chState.schema;
 }
@@ -739,6 +740,9 @@ function chOnBodyClick(e) {
     if (navigator.clipboard) navigator.clipboard.writeText(v).then(() => toast("已复制：" + v)).catch(() => toast("复制失败，请手动选择文本复制"));
   } else if (a === "soonLogin") {
     Auth.openLogin();
+  } else if (a === "merchantCard") {
+    /* 「站长推荐」绑定站内用户的卡商 chip → 公开资料卡（intro = 站长填写的卡商介绍） */
+    Auth.showProfileCard(actEl.dataset.uid, actEl.dataset.intro || "");
   } else if (a === "soonChat" || a === "soonRelay" || a === "favToggle" || a === "staffClose" || a === "pinAdd" || a === "pinRemove" || a === "pinBump") {
     toast("请前往跳蚤市集操作");
   }

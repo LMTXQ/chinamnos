@@ -3,7 +3,7 @@ import { ERR, fail, ok } from '../common/envelope';
 import { guard } from '../common/auth';
 import { deleteProofs } from './proofs';
 import { sanitizeContacts, parseContactChannels } from './contacts';
-import { TTL_OPTIONS, TRADE_METHODS, validateBoardFields } from './schema';
+import { TTL_OPTIONS, TRADE_METHODS, validateBoardFields, validateTradeGuarantors } from './schema';
 
 const VALID_TRADES = new Set(TRADE_METHODS.map((t) => t.id));
 
@@ -123,6 +123,13 @@ export async function handleUpdatePost(request: Request, env: Env, id: string): 
     return fail(ERR.VALIDATION_ERROR, 'TRADE_SITE_REQUIRED', 400, { field: 'trade_methods' });
   }
   if (tradeMethods.length) extraRec.trade_methods = tradeMethods;
+
+  // 发帖担保人（编辑同发布规则）：≤3 位、必须在候选池、不勾选「圈内卡商担保」不能选；
+  // 校验通过后整组覆盖（编辑时未提交 = 清空担保人）；已失效候选由编辑表单预填时过滤
+  const guarantors = await validateTradeGuarantors(env, body.trade_guarantors, tradeMethods);
+  if (guarantors.error) return fail(ERR.VALIDATION_ERROR, guarantors.error, 400, { field: 'trade_guarantors' });
+  if (guarantors.names.length) extraRec.trade_guarantors = guarantors.names;
+  else delete extraRec.trade_guarantors;
 
   // 号码隐私拦截（必须先于 validateBoardFields：phone_masked required 字段依赖此处的自动打码）；
   // 编辑清空号码时同步清 phone_plain / phone_masked；found 出让号码必填

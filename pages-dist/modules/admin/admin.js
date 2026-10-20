@@ -1067,7 +1067,7 @@ const SETTING_DESC = {
   mail_daily_cap: "邮件系统每日发送总量上限，超出后当日暂停发送验证类邮件。",
   site_name: "站点名称，用于邮件标题与页面展示。",
   notification_retention_days: "站内通知（铃铛）保留天数：已读通知超过该天数后，在本人下次打开通知面板时自动清除；未读通知不受影响、永久保留。整数 1~365，默认 30。保存后即时生效（无需等前端部署）。",
-  cardhub_trade_merchants: "圈内卡商担保的推荐栏内容。填 JSON 字符串数组（如 [\"某某卡商·微信xxx\",\"某某卡商·QQ123\"]），最多 10 条，留空数组 [] 则详情页不显示推荐栏。推荐仅作参考，站点不为所推荐人承担保证。",
+  cardhub_trade_merchants: "圈内卡商担保的推荐卡商列表——发帖人发布/编辑帖子勾选「圈内卡商担保」时，从此列表搜索并选择担保人（每帖最多 3 位），帖子详情页展示所选担保人及其热度统计。每行一条，格式：卡商名 | 站内用户UID（可留空） | 一句话介绍（可留空）。条数不限；卡商名必填（≤40 字）且同列表内不可重复——名称是担保人关联与统计标识，改名会使旧帖与该条目的统计关联断开（旧帖仍显示发帖时名称）。绑定 UID 后候选与详情显示头像与「站内」标识、点击弹用户资料卡（介绍随卡片展示）；UID 留空即纯文本卡商，同样可被选为担保人。绑定 UID 必须是站内 active 用户，否则拒绝保存。全部清空则发帖时无候选可选。推荐仅作参考，站点不为所推荐人承担保证。热度统计随快照更新（约 0-8 小时），Worker 兜底接口即时；其余展示在下一轮采集部署后生效。仅站长可修改。",
   ticket_apply_guarantor: "「毛遂自荐 · 申请成为卡商担保人」工单的申请模板。跳蚤市集「毛遂自荐」按钮会把此模板预填进工单表单（用户可修改后提交）。留空则使用系统内置的通用申请框架。模板建议控制在 500 字内（工单正文上限）。前端在下一轮采集部署后生效。仅站长可修改。",
   email_domain_whitelist: "注册/登录邮箱域名白名单（前后台双重校验）。逗号分隔域名，如 qq.com,163.com,gmail.com,foxmail.com。留空 = 使用系统内置常见邮箱列表（QQ/163/126/Gmail/Outlook 等约 20 个）。⚠ 后端校验保存后立即生效——请确保你自己的邮箱域名在列表内，否则将无法登录！前端注册预校验提示走 Pages 静态快照，在下一轮采集部署后更新。仅站长可修改。",
   about_timeline: "关于页「项目历程」横向时间轴的节点配置（内置 6 个默认节点已预填，可直接在其基础上增删改）。每行一个节点，格式：时间 | 阶段名称 | 描述（竖线分隔，时间选填，如 2025.Q4 | 项目起点 | 开发自动化采集脚本）。节点顺序即展示顺序，最后一个节点以绿色圆点标识为当前阶段。清空保存 = 关于页隐藏时间轴区块。仅站长可修改。",
@@ -1107,6 +1107,9 @@ const SETTING_LIST_KEYS = new Set(["email_domain_whitelist"]);
 const SETTING_TIMELINE_KEYS = new Set(["about_timeline"]);
 /* 友链类设置：多行「链接名 | 一句话介绍 | 链接」→ 保存为 [{name,descr,url}] 数组（url 需 https:// 开头） */
 const SETTING_LINKS_KEYS = new Set(["about_links"]);
+/* 卡商推荐类设置：多行「卡商名 | 站内用户UID | 一句话介绍」→ 保存为 条目数组（uid/介绍可留空=纯文本推荐；
+   后端校验 uid 必须为 active 用户，前端渲染时绑定条目显示头像+「站内」标识、点击弹资料卡） */
+const SETTING_MERCHANT_KEYS = new Set(["cardhub_trade_merchants"]);
 /* 鸣谢名单类设置：多行「类别 | 名称 | 说明 | 链接」→ 保存为 [{cat,name,descr,url}] 数组 */
 const SETTING_THANKS_KEYS = new Set(["about_thanks"]);
 const THANKS_CAT_LABEL = { donor: "任意打赏", feedback: "反馈建议", ref: "参考项目" };
@@ -1200,6 +1203,25 @@ function renderSettings() {
       <div class="adm-setting-actions">
         <span class="adm-setting-hint">保存后前端在下一轮采集部署时生效（Worker 接口 60s 缓存）</span>
         <button class="btn primary sm" data-act="saveSetting" data-key="${s.key}"><i data-icon="check"></i>保存友链</button>
+      </div>
+    </div>`;
+    }
+    /* 卡商推荐类设置：行式编辑「卡商名 | 站内用户UID | 一句话介绍」（uid/介绍可留空），保存解析为条目数组 */
+    if (SETTING_MERCHANT_KEYS.has(s.key)) {
+      const rows = Array.isArray(val)
+        ? val.map((n) => typeof n === "string" ? n : [n.name || "", n.uid || "", n.intro || ""].join(" | ")).join("\n")
+        : String(val);
+      const n = Array.isArray(val) ? val.length : 0;
+      return `
+    <div class="adm-setting adm-setting-block">
+      <div class="adm-setting-info">
+        <div class="adm-setting-key">${esc(s.key)}${SETTING_DESC[s.key] ? `<span class="help" data-tip="${esc(SETTING_DESC[s.key])}">?</span>` : ""}</div>
+        <div class="adm-setting-meta">已配置 <b>${n}</b> 条推荐 · 更新于 ${fmtTime(s.updated_at)}</div>
+      </div>
+      <textarea class="inp adm-setting-ta" rows="8" data-act="inputSetting" data-key="${s.key}" placeholder="每行一条，格式：卡商名 | 站内用户UID（可留空） | 一句话介绍（可留空）&#10;如：某某卡商 | a1b2c3d4e5f6 | 从业多年，走担保前先看担保记录&#10;如：某某卡商（站外） |  | 微信 xxx（UID 留空 = 纯文本卡商）&#10;条数不限；卡商名不可重复（发帖人从此列表选择担保人，名称即关联标识）；绑定 UID 后显示头像与「站内」标识、点击弹资料卡">${esc(rows)}</textarea>
+      <div class="adm-setting-actions">
+        <span class="adm-setting-hint">发帖人勾选「圈内卡商担保」后从此列表选担保人（每帖最多 3 位）；快照随下一轮采集部署生效</span>
+        <button class="btn primary sm" data-act="saveSetting" data-key="${s.key}"><i data-icon="check"></i>保存推荐</button>
       </div>
     </div>`;
     }
@@ -1624,6 +1646,14 @@ async function onSaveSetting(key) {
         return { name: parts[0] || "", descr: parts[1] || "", url: parts[2] || "" };
       })
       .filter((n) => n.name && /^https:\/\//.test(n.url)); // 链接必须 https:// 开头，非法行丢弃
+  } else if (SETTING_MERCHANT_KEYS.has(key)) {
+    /* 统一传对象 {name, uid, intro}，由后端规范化：uid/intro 全空回落纯字符串条目（与旧格式同形） */
+    val = val.split("\n")
+      .map((line) => {
+        const parts = line.split("|").map((x) => x.trim());
+        return { name: parts[0] || "", uid: parts[1] || "", intro: parts[2] || "" };
+      })
+      .filter((n) => n.name);
   } else if (!SETTING_TEMPLATE_KEYS.has(key)) {
     if (val === "true") val = true;
     else if (val === "false") val = false;

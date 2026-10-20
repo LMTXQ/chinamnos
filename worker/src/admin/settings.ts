@@ -192,6 +192,60 @@ export async function handleUpdateSetting(request: Request, env: Env, key: strin
         })
         .filter(Boolean);
     }
+    // 推荐卡商键：规范化为 字符串 | {name, uid?, intro?} 数组（条数不限，仅站长/管理员可改；
+    // name 必填 ≤40 字且**全列表不可重复**——名称是发帖担保人选择的关联键与统计 key；
+    // intro ≤60 字）。兼容前端传行文本「卡商名 | uid | 介绍」或对象数组；无 uid/intro 的条目回落纯字符串。
+    // 带 uid 的条目校验用户存在且 status='active'，无效整次拒绝保存（防手误 uid 产生前端死链——
+    // schema 出口虽有失效降级兜底，保存时拦住可让站长当场知道哪条绑错了）
+    else if (key === 'cardhub_trade_merchants') {
+      let raw: unknown[] = [];
+      if (Array.isArray(value)) raw = value as unknown[];
+      else if (typeof value === 'string') raw = value.split('\n');
+      const norm = raw
+        .map((item) => {
+          let name = '', uid = '', intro = '';
+          if (item && typeof item === 'object') {
+            const o = item as Record<string, unknown>;
+            name = String(o.name ?? '');
+            uid = String(o.uid ?? '');
+            intro = String(o.intro ?? '');
+          } else if (typeof item === 'string') {
+            const parts = item.split('|').map((x) => x.trim());
+            name = parts[0] ?? '';
+            uid = parts[1] ?? '';
+            intro = parts[2] ?? '';
+          }
+          name = name.trim().slice(0, 40);
+          uid = uid.trim();
+          intro = intro.trim().slice(0, 60);
+          if (!name) return null;
+          return uid || intro ? { name, uid, intro } : name;
+        })
+        .filter((x): x is string | { name: string; uid: string; intro: string } => !!x);
+      const seenNames = new Set<string>();
+      for (const x of norm) {
+        const n = typeof x === 'string' ? x : x.name;
+        if (seenNames.has(n)) {
+          return fail(ERR.VALIDATION_ERROR, `卡商名称重复：「${n}」。名称是担保人选择的关联标识，同列表内不可重复`, 400, { field: key });
+        }
+        seenNames.add(n);
+      }
+      const uids = [...new Set(norm.map((x) => (typeof x === 'object' ? x.uid : '')).filter(Boolean))];
+      if (uids.length) {
+        const ph = uids.map(() => '?').join(',');
+        const { results } = await env.DB.prepare(
+          `SELECT id FROM users WHERE id IN (${ph}) AND status = 'active'`,
+        ).bind(...uids).all<{ id: string }>();
+        const found = new Set((results || []).map((r) => r.id));
+        const missing = uids.filter((u) => !found.has(u));
+        if (missing.length) {
+          return fail(ERR.VALIDATION_ERROR, `以下 UID 对应的站内用户不存在或已封禁/注销，无法绑定：${missing.join('、')}`, 400, {
+            field: key,
+          });
+        }
+      }
+      value = norm;
+    }
     if (key === 'site_notice_content') {
       value = String(value ?? '').slice(0, 8000);
     }

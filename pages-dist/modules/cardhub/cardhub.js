@@ -82,6 +82,8 @@ const S = {
   convId: null,          // 当前打开的会话 id
   convDetail: null,      // 当前会话详情（对话页），null=加载中
   formTrade: [],        // 发布表单当前交易方式多选（["offline","xianyu",…]）
+  formGuarantors: [],   // 发布表单已选担保人（站长推荐条目名称快照，≤3 位；依赖勾选「圈内卡商担保」）
+  formGuarQ: "",        // 担保人搜索词（点「搜索」按钮生效）
   formTags: {},         // tags 类型字段草稿（号码特征等）：{ [key]: string[] }
   formPhoneMaskDirty: false, // 号码公开显示是否被手动编辑过（编辑后不再自动生成）
   formContacts: [],     // 发布表单联系方式草稿：[{ channel, value }]（进入表单时按种类带入公开联系方式）
@@ -137,6 +139,7 @@ function adaptSchema(raw) {
     contactPolicies: raw.contactPolicies.map((p) => [p.id, p.name, p.desc]),
     tradeMethods: raw.tradeMethods || [],
     tradeMerchants: raw.tradeMerchants || [],
+    tradeGuarantorStats: raw.tradeGuarantorStats || {},
     admins: raw.admins || [],
     provinces: PROVINCES,
     chatChannels: CHAT_CHANNELS,
@@ -681,6 +684,7 @@ function formFieldsHTML() {
 
   <div class="ch-form-sep">交易方式 <span class="hint">允许多选 · 仅供参考</span></div>
   <div class="ch-trade-grid" id="chTradeGrid">${isMarket ? "" : tradeGridHTML()}</div>
+  <div id="chGuarBox">${!isMarket && (S.formTrade || []).includes("merchant") ? guarBoxHTML() : ""}</div>
 
   ${isMarket ? "" : `
   <div class="ch-form-sep">联系方式设置 <span class="hint">谁可见 + 互动渠道，可自由组合</span></div>
@@ -820,6 +824,74 @@ function tradeGridHTML() {
     )
     .join("") +
     `<div class="ch-trade-note">${icon("info")} 交易方式允许多选，仅供参考，具体交易方式请与交易方实际协商。</div>`;
+}
+
+/* ─────────────── 发帖担保人选择（勾选「圈内卡商担保」后展开） ───────────────
+   候选池 = 管理端「站长推荐卡商」列表（schema.tradeMerchants）；名称即关联键。
+   支持搜索按钮过滤（名称/站内昵称/介绍），最多选 3 位；每项展示统计
+   「当前已有 N 帖子选择他作为担保人」（schema.tradeGuarantorStats，快照 0-8h 时延） */
+const GUAR_MAX = 3;
+function guarPool() {
+  return (S.schema.tradeMerchants || []).map((m) => {
+    const o = (m && typeof m === "object") ? m : { name: String(m) };
+    const name = String(o.name || "").trim();
+    if (!name) return null;
+    return {
+      name,
+      uid: o.uid || "",
+      nickname: o.nickname || "",
+      avatar_v: o.avatar_v || null,
+      intro: String(o.intro || "").trim(),
+    };
+  }).filter(Boolean);
+}
+function guarAvatarHTML(c) {
+  if (c.uid) {
+    return c.avatar_v
+      ? `<img class="ch-guar-avatar" src="${esc(api.avatarUrl(c.uid, c.avatar_v))}" alt="" loading="lazy">`
+      : `<span class="ch-guar-avatar ch-guar-avatar-txt">${esc((c.nickname || c.name).charAt(0).toUpperCase())}</span>`;
+  }
+  return `<span class="ch-guar-avatar ch-guar-avatar-txt dim">${esc(c.name.charAt(0).toUpperCase())}</span>`;
+}
+function guarItemHTML(c, on, locked) {
+  const n = ((S.schema && S.schema.tradeGuarantorStats) || {})[c.name] || 0;
+  /* 资料卡按钮（仅绑定站内用户的条目）：closest("[data-act]") 先命中内层按钮，不会误触外层行的选中切换 */
+  const cardBtn = c.uid
+    ? `<button type="button" class="ch-guar-card" data-act="guarCard" data-uid="${esc(c.uid)}" data-intro="${esc(c.intro)}" title="查看资料卡"><i data-icon="user"></i>资料</button>`
+    : "";
+  return `
+  <div class="ch-guar-item${on ? " on" : ""}${locked ? " locked" : ""}" data-act="guarToggle" data-name="${esc(c.name)}"${locked ? ' aria-disabled="true"' : ""}${c.intro ? ` title="${esc(c.intro)}"` : ""}>
+    ${guarAvatarHTML(c)}
+    <span class="ch-guar-main">
+      <span class="ch-guar-name">${esc(c.name)}${c.uid ? `<span class="ch-merchant-badge">站内</span>` : ""}</span>
+      <span class="ch-guar-stat">当前已有 ${n} 帖子选择他作为担保人</span>
+    </span>
+    <span class="ch-guar-check">${on ? icon("check") : ""}</span>
+    ${cardBtn}
+  </div>`;
+}
+function guarBoxHTML() {
+  const pool = guarPool();
+  if (!pool.length) return `<div class="ch-guar-empty">站长暂未配置推荐担保人</div>`;
+  const q = (S.formGuarQ || "").trim().toLowerCase();
+  const list = q ? pool.filter((c) => (c.name + " " + c.nickname + " " + c.intro).toLowerCase().includes(q)) : pool;
+  const sel = S.formGuarantors || [];
+  const full = sel.length >= GUAR_MAX;
+  return `
+  <div class="ch-guar-search">
+    <input type="text" class="inp" id="chGuarQ" maxlength="40" placeholder="搜索卡商名 / 站内昵称 / 介绍" value="${esc(S.formGuarQ || "")}">
+    <button type="button" class="btn ghost sm" data-act="guarSearch"><i data-icon="search"></i>搜索</button>
+  </div>
+  <div class="ch-guar-list">
+    ${list.length ? list.map((c) => guarItemHTML(c, sel.includes(c.name), !sel.includes(c.name) && full)).join("") : `<div class="ch-guar-empty">无匹配的推荐担保人</div>`}
+  </div>
+  <div class="ch-trade-note">${icon("info")} 已选 ${sel.length}/${GUAR_MAX} 位${sel.length ? `：${esc(sel.join("、"))}` : ""}。担保人仅作参考，站点不为所推荐人承担保证。</div>`;
+}
+function renderGuarBox() {
+  const host = $("chGuarBox");
+  if (!host) return;
+  host.innerHTML = (S.formTrade || []).includes("merchant") ? guarBoxHTML() : "";
+  mountIcons(host);
 }
 
 /* 联系方式可见范围（单选三卡，复用 ch-policy-card 样式） */
@@ -989,6 +1061,9 @@ const POST_ERR_CN = {
   PROOFS_REQUIRED: "出让/出租需上传 1~3 张证明材料，或改选「指定管理员审核」",
   PROOFS_INVALID: "证明材料无效（图片过大或格式不支持），请重新选择后上传",
   TRADE_SITE_REQUIRED: "选择「站长中转」需同时勾选交易方式「站点担保」",
+  GUARANTORS_TOO_MANY: "担保人最多选择 3 位",
+  GUARANTOR_NEEDS_MERCHANT: "选择担保人需先勾选交易方式「圈内卡商担保」",
+  GUARANTOR_NOT_IN_POOL: "所选担保人已不在站长推荐列表中，请刷新后重新选择",
   PENDING_QUOTA_EXCEEDED: "待审核帖子已达 3 条上限，请等待审核结果后再发布",
 };
 function postErrCN(r, board) {
@@ -999,7 +1074,7 @@ function postErrCN(r, board) {
   const common = {
     board: "板块", carrier: "运营商", province: "省份", city: "城市",
     title: "标题", descr: "描述", contact_policy: "联系方式策略", ttl_days: "挂帖时长",
-    trade_methods: "交易方式", contacts: "联系方式", proofs: "证明材料",
+    trade_methods: "交易方式", trade_guarantors: "担保人", contacts: "联系方式", proofs: "证明材料",
     phone_num: "号码", phone_masked: "掩码号码", review_admin_id: "指定管理员",
   };
   const own = board && (board.fields || []).find((f) => f.key === fd);
@@ -1027,6 +1102,12 @@ function enterEditMode(p) {
   S.formAllowChat = p.allowChat ? true : legacyPolicy === "relay_online";
   S.formAllowRelay = p.allowRelay ? true : legacyPolicy === "relay_owner";
   S.formTrade = (p.extra && Array.isArray(p.extra.trade_methods)) ? p.extra.trade_methods.slice() : [];
+  /* 担保人回填：只保留仍存在于站长推荐候选池中的条目（已被站长移除的候选不再保留） */
+  const guarPoolNames = new Set(guarPool().map((c) => c.name));
+  S.formGuarantors = (p.extra && Array.isArray(p.extra.trade_guarantors))
+    ? p.extra.trade_guarantors.filter((n) => guarPoolNames.has(n))
+    : [];
+  S.formGuarQ = "";
   S.formTags = {};
   S.formMulti = {};
   S.formPhoneMaskDirty = true; // 编辑时不自动覆盖原掩码号码
@@ -1196,6 +1277,7 @@ async function collectAndSubmit() {
     allow_relay: allowRelay ? 1 : 0,
     contact_policy: legacyPolicy,
     trade_methods: tradeMethods,
+    trade_guarantors: tradeMethods.includes("merchant") ? (S.formGuarantors || []).slice(0, GUAR_MAX) : [],
     contacts,
     extra,
     ttl_days: ttl,
@@ -1216,6 +1298,7 @@ async function collectAndSubmit() {
   S.myIds.add(isEdit ? S.formEditId : r.data.id);
   S.formEditId = null; S.formEditOrig = null;
   S.formTrade = [];
+  S.formGuarantors = []; S.formGuarQ = "";
   S.formTags = {};
   S.formPhoneMaskDirty = false;
   S.formProofs = [];
@@ -1850,10 +1933,35 @@ async function onRootClick(e) {
   }
   // 点发布者头像/名称 → 公开资料卡（昵称/UID/主动公开的联系方式）
   if (a === "authorCard") { Auth.showProfileCard(actEl.dataset.id); return; }
+  // 点「站长推荐」绑定站内用户的卡商 chip → 公开资料卡（intro = 站长填写的卡商介绍）
+  if (a === "merchantCard") { Auth.showProfileCard(actEl.dataset.uid, actEl.dataset.intro || ""); return; }
+  // 发帖表单担保人选择：搜索按钮过滤 + 点行选中/取消（≤3 位）
+  if (a === "guarSearch") {
+    const inp = $("chGuarQ");
+    S.formGuarQ = inp ? inp.value : "";
+    renderGuarBox();
+    return;
+  }
+  if (a === "guarToggle") {
+    const name = actEl.dataset.name || "";
+    if (!name) return;
+    const sel = S.formGuarantors || [];
+    const idx = sel.indexOf(name);
+    if (idx >= 0) sel.splice(idx, 1);
+    else {
+      if (sel.length >= GUAR_MAX) { toast(`最多选择 ${GUAR_MAX} 位担保人`); return; }
+      sel.push(name);
+    }
+    S.formGuarantors = sel;
+    renderGuarBox();
+    return;
+  }
+  // 候选行「资料」按钮：弹该担保人公开资料卡（介绍随卡片展示）
+  if (a === "guarCard") { Auth.showProfileCard(actEl.dataset.uid, actEl.dataset.intro || ""); return; }
   if (a === "newPost") {
     if (!S.user) { toast("请先登录"); openLogin(); return; }
     S.view = "form"; S.formBoard = S.board; S.formVis = "public"; S.formAllowChat = false; S.formAllowRelay = false; S.formMulti = {};
-    S.formTrade = []; S.formTags = {}; S.formPhoneMaskDirty = false;
+    S.formTrade = []; S.formGuarantors = []; S.formGuarQ = ""; S.formTags = {}; S.formPhoneMaskDirty = false;
     S.formProofs = []; S.formProofPublic = false; S.formReviewMode = "proof"; S.formReviewAdmin = "";
     S.formEditId = null; S.formEditOrig = null;
     seedFormContacts();
@@ -2243,7 +2351,10 @@ function onRootChange(e) {
       : (S.formTrade || []).filter((x) => x !== tradeId);
     const card = t.closest(".ch-trade-card");
     if (card) card.classList.toggle("active", on);
+    /* 取消「圈内卡商担保」= 不能再保留担保人选择，清空已选与搜索词 */
+    if (tradeId === "merchant" && !on) { S.formGuarantors = []; S.formGuarQ = ""; }
     updateChannelGate();
+    renderGuarBox();
     return;
   }
   /* 互动渠道开关勾选：同步草稿（在线沟通 / 站长中转） */
@@ -2448,6 +2559,14 @@ Shell.registerPage({
       if (e.key === "Enter" && !e.shiftKey && e.target && e.target.id === "chConvInput") {
         e.preventDefault();
         sendConvMsg();
+      }
+      /* 担保人搜索框：Enter 执行搜索。必须 preventDefault——搜索框在 chForm 内，
+         回车会触发浏览器隐式提交（「提交发布」按钮缺省 type=submit 被当默认按钮激活），
+         导致表单流程被重置跳回列表 */
+      if (e.key === "Enter" && e.target && e.target.id === "chGuarQ") {
+        e.preventDefault();
+        S.formGuarQ = e.target.value || "";
+        renderGuarBox();
       }
     };
     host.addEventListener("click", _rootClickHandler);

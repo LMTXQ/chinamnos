@@ -16,6 +16,7 @@
 import { esc } from "./shell.js";
 import { icon } from "./ui.js";
 import { mdToSafeHtml } from "./md.js";
+import { api } from "./api.js";
 
 export const BOARD_LABELS = { found: "出让", lost: "求购", rent_out: "出租", rent_want: "求租", fleet: "车队", market: "市集" };
 export const BOARD_ICONS = { found: "tag", lost: "search", rent_out: "key", rent_want: "search", fleet: "users", market: "box" };
@@ -298,7 +299,27 @@ function detailFieldHTML(fd, v) {
   return `<div class="ch-dt-row"><span class="ch-dt-k">${esc(fd.label)}</span><span class="ch-dt-v">${esc(shown)}</span></div>`;
 }
 
-function renderTradeBox(schema, view) {
+/* 该帖担保人行：view.extra.trade_guarantors = 发帖时从站长推荐列表选择的担保人名称快照（字符串数组）。
+   按名称回查 schema.tradeMerchants：绑定站内用户 → 头像 + 「站内」徽章 + 点击弹资料卡；
+   未绑定/条目已被站长移除 → 纯文本行（快照名称兜底，永不丢展示）。
+   统计来自 schema.tradeGuarantorStats（快照 0-8h 时延）。ro=true（管理预览）输出无交互快照 */
+function guarantorRowHTML(name, schema, ro) {
+  const merchants = (schema && schema.tradeMerchants) || [];
+  const stats = (schema && schema.tradeGuarantorStats) || {};
+  const c = merchants.find((m) => String(((m && typeof m === "object") ? m.name : m) || "").trim() === name) || {};
+  const bound = !!(c.uid && c.nickname);
+  const intro = String(c.intro || "").trim();
+  const avatar = bound
+    ? (c.avatar_v
+        ? `<img class="ch-guar-avatar" src="${esc(api.avatarUrl(c.uid, c.avatar_v))}" alt="" loading="lazy">`
+        : `<span class="ch-guar-avatar ch-guar-avatar-txt">${esc((c.nickname || name).charAt(0).toUpperCase())}</span>`)
+    : `<span class="ch-guar-avatar ch-guar-avatar-txt dim">${esc(name.charAt(0).toUpperCase())}</span>`;
+  const inner = `${avatar}<span class="ch-guar-main"><span class="ch-guar-name">${esc(name)}${bound ? `<span class="ch-merchant-badge">站内</span>` : ""}</span><span class="ch-guar-stat">当前已有 ${stats[name] || 0} 帖子选择他作为担保人</span></span>`;
+  const act = (ro || !bound) ? "" : ` data-act="merchantCard" data-uid="${esc(c.uid)}" data-intro="${esc(intro)}"`;
+  return `<div class="ch-guar-item${bound ? " bound" : ""}"${act}${intro ? ` title="${esc(intro)}"` : ""}>${inner}</div>`;
+}
+
+function renderTradeBox(schema, view, ro) {
   const tm = (view.extra && Array.isArray(view.extra.trade_methods)) ? view.extra.trade_methods : [];
   if (!tm.length) return "";
   const tmap = {};
@@ -313,10 +334,12 @@ function renderTradeBox(schema, view) {
     notes += `<div class="ch-trade-warnline">${icon("info")} 闲鱼等二手平台交易：买方拥有无条件仅退款风险，请务必知悉。</div>`;
   }
   if (tm.includes("merchant")) {
-    notes += `<div class="ch-trade-hintline">${icon("shield")} 圈内卡商担保：请与交易方沟通后选择双方均认可的可信卡商；推荐栏仅作参考，不代表站点为所推荐人承担保证。</div>`;
-    const merchants = (schema && schema.tradeMerchants) || [];
-    if (merchants.length) {
-      notes += `<div class="ch-merchants"><span class="ch-merchants-t">站长推荐（仅供参考）</span>${merchants.map((m) => `<span class="ch-merchant-item">${esc(m)}</span>`).join("")}</div>`;
+    notes += `<div class="ch-trade-hintline">${icon("shield")} 发帖人已选择由圈内卡商进行担保交易，请确保交易双方均认可该担保人，并通过担保人进行交易，防止上当受骗。站点不为任何交易、担保人作信用背书，请自行甄别卖方、担保人信用资质。</div>`;
+    const gnames = (view.extra && Array.isArray(view.extra.trade_guarantors))
+      ? view.extra.trade_guarantors.map((n) => String(n || "").trim()).filter(Boolean)
+      : [];
+    if (gnames.length) {
+      notes += `<div class="ch-guar-detail"><span class="ch-guar-t">该帖担保人</span>${gnames.map((n) => guarantorRowHTML(n, schema, ro)).join("")}</div>`;
     }
   }
   return `
@@ -506,7 +529,7 @@ export function renderDetailBody(schema, view, opts = {}) {
     ${authorRow}
     ${riskBanner}
     ${fields ? `<div class="ch-dt-grid">${fields}</div>` : ""}
-    ${renderTradeBox(schema, view)}
+    ${renderTradeBox(schema, view, ro)}
     ${proof}
     ${descr}
     <div class="ch-contact" id="chContactZone">${renderContactBox(view, ro, opts)}</div>

@@ -4,7 +4,7 @@ import { guard } from '../common/auth';
 import { randomBase62 } from '../common/crypto';
 import { sanitizeContacts, parseContactChannels } from './contacts';
 import { saveProofs } from './proofs';
-import { BOARDS, CARRIERS, TTL_OPTIONS, TRADE_METHODS, validateBoardFields } from './schema';
+import { BOARDS, CARRIERS, TTL_OPTIONS, TRADE_METHODS, validateBoardFields, validateTradeGuarantors } from './schema';
 
 const VALID_BOARDS = new Set<string>(BOARDS.map((b) => b.id));
 const VALID_CARRIERS = new Set(CARRIERS.map((c) => c.id));
@@ -56,6 +56,14 @@ export async function handleCreatePost(request: Request, env: Env): Promise<Resp
     return fail(ERR.VALIDATION_ERROR, 'TRADE_SITE_REQUIRED', 400, { field: 'trade_methods' });
   }
   if (tradeMethods.length) (extra as Record<string, unknown>).trade_methods = tradeMethods;
+
+  // 发帖担保人（选填）：从站长推荐卡商候选池中选择 ≤3 位；不勾选「圈内卡商担保」不能选担保人。
+  // 恒以服务端校验结果为准写入/清除，防客户端在 extra 里伪造 trade_guarantors 刷统计
+  const guarantors = await validateTradeGuarantors(env, body.trade_guarantors, tradeMethods);
+  if (guarantors.error) return fail(ERR.VALIDATION_ERROR, guarantors.error, 400, { field: 'trade_guarantors' });
+  const extraRec = extra as Record<string, unknown>;
+  if (guarantors.names.length) extraRec.trade_guarantors = guarantors.names;
+  else delete extraRec.trade_guarantors;
 
   // 证明材料：出让(found)/出租(rent_out) 必须二选一——上传 1~3 张照片，或指定管理员实名审核
   // 选「管理员审核」时：该帖仅由站长或该管理员审核，队列特别提醒未上传资料

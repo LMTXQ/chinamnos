@@ -23,6 +23,26 @@ export async function getPublicProfile(env: Env, id: string): Promise<PublicProf
   return rows.get(id) || null;
 }
 
+/** 批量用户公开资料——仅 active 生效用户（封禁/注销/不存在查不到 → 消费方降级处理）。
+ *  供「绑定站内用户」类展示场景（如卡商推荐栏）做有效性门槛：status 过滤无法走 getPublicProfiles，
+ *  故字段子集与统一出口保持完全一致，仅追加 status='active' 门槛（key = user_id） */
+export async function getActivePublicProfiles(env: Env, ids: string[]): Promise<Map<string, PublicProfile>> {
+  const uniq = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, PublicProfile>();
+  if (!uniq.length) return map;
+  for (let i = 0; i < uniq.length; i += 100) {
+    const batch = uniq.slice(i, i + 100);
+    const ph = batch.map(() => '?').join(',');
+    const { results } = await env.DB.prepare(
+      `SELECT id, nickname, title, role, avatar_updated_at FROM users WHERE id IN (${ph}) AND status = 'active'`,
+    ).bind(...batch).all<{ id: string; nickname: string | null; title: string | null; role: string | null; avatar_updated_at: number | null }>();
+    for (const u of results || []) {
+      map.set(u.id, { id: u.id, nickname: u.nickname, title: u.title, role: u.role, avatar_v: u.avatar_updated_at });
+    }
+  }
+  return map;
+}
+
 /** 批量用户公开资料（去重、最多 100 个/批防滥用）；key = user_id */
 export async function getPublicProfiles(env: Env, ids: string[]): Promise<Map<string, PublicProfile>> {
   const uniq = [...new Set(ids.filter(Boolean))];

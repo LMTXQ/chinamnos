@@ -1,6 +1,7 @@
 // 板块/字段配置（§9：配置驱动，站长后期可扩展；本期内置默认配置）
 import type { Env } from '../common/env';
 import { getSetting } from '../common/settings';
+import { getActivePublicProfiles, type PublicProfile } from '../auth/public-profile';
 
 /** 交易方式（帖子级多选，仅供参考，具体交易方式由交易双方实际协商） */
 export interface TradeMethod {
@@ -315,19 +316,68 @@ export function validateBoardFields(boardId: string, extra: Record<string, unkno
 }
 
 // GET /api/cardhub/schema：返回板块/字段/渠道/有效期档位/交易方式配置
-// tradeMerchants 为站长在设置中配置的推荐卡商列表（仅展示，站点不为其担保）
+// tradeMerchants 为站长在设置中配置的推荐卡商列表——发帖人选择担保人的候选池（仅展示，站点不为其担保）
+// ▸ 条目两种形态兼容：纯字符串（旧格式）/ {name, uid?, intro?}（新格式，可选绑定站内用户 + 一句话介绍）
+// ▸ 绑定 uid 的条目统一批量校验 users（仅 status='active'）：有效 → 下发 uid+nickname+avatar_v，
+//   失效（注销/封禁/uid 手误）→ 自动降级为纯文本条目，前端永不出现死链
+// tradeGuarantorStats：当前上架中（status='open'）帖子按 extra.$.trade_guarantors（担保人名称快照数组）
+// 聚合计数 { 担保人名: 帖数 }——发帖候选列表与详情担保人行同源消费；快照 0-8h 时延 + Worker 兜底即时
 // admins 为「管理员审核」模式下可指定的审核人列表（仅 id/昵称，不含邮箱）
 export async function getSchema(env: Env) {
   const merchantsRaw = await getSetting<unknown>(env, 'cardhub_trade_merchants', []);
-  const tradeMerchants = Array.isArray(merchantsRaw)
-    ? merchantsRaw.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 10)
-    : [];
+  const merchantList = Array.isArray(merchantsRaw) ? merchantsRaw : [];
+  const parsed = merchantList
+    .map((x): { name: string; uid: string; intro: string } | null => {
+      if (typeof x === 'string') {
+        const name = x.trim();
+        return name ? { name, uid: '', intro: '' } : null;
+      }
+      if (!x || typeof x !== 'object') return null;
+      const o = x as Record<string, unknown>;
+      const name = typeof o.name === 'string' ? o.name.trim() : '';
+      if (!name) return null;
+      return {
+        name,
+        uid: typeof o.uid === 'string' ? o.uid.trim() : '',
+        intro: typeof o.intro === 'string' ? o.intro.trim().slice(0, 60) : '',
+      };
+    })
+    .filter((x): x is { name: string; uid: string; intro: string } => !!x);
+  const boundUids = [...new Set(parsed.map((p) => p.uid).filter(Boolean))];
+  const profMap: Map<string, PublicProfile> = boundUids.length
+    ? await getActivePublicProfiles(env, boundUids)
+    : new Map();
+  const tradeMerchants = parsed.map((p) => {
+    const plain = p.intro ? { name: p.name, intro: p.intro } : p.name;
+    if (!p.uid) return plain;
+    const prof = profMap.get(p.uid);
+    if (!prof) return plain; // 绑定失效 → 降级纯文本（介绍保留，随 chip 悬浮提示展示）
+    return {
+      name: p.name,
+      uid: p.uid,
+      nickname: prof.nickname || '未设置昵称',
+      avatar_v: prof.avatar_v,
+      intro: p.intro || undefined,
+    };
+  });
   // 「站点担保」显示开关：关闭时新发布表单不提供该选项（存量帖子 trade_methods 不受影响）
   const siteGuaranteeOn = await getSetting<boolean>(env, 'cardhub_trade_site_guarantee', true);
   const tradeMethods = siteGuaranteeOn ? TRADE_METHODS : TRADE_METHODS.filter((m) => m.id !== 'site');
   const adminRows = await env.DB.prepare(
     `SELECT id, nickname FROM users WHERE role IN ('admin', 'owner') AND status = 'active' ORDER BY nickname ASC`,
   ).all<{ id: string; nickname: string | null }>();
+  // 担保人热度统计：上架中帖子 extra.$.trade_guarantors（字符串数组）逐元素聚合计数。
+  // extra 恒由后端 JSON.stringify 写入，json_valid + NULL 短路仅兜底历史脏数据（json_each(NULL) = 0 行，不抛错）
+  const statsRows = await env.DB.prepare(
+    `SELECT je.value AS name, COUNT(*) AS c
+     FROM posts, json_each(CASE WHEN json_valid(posts.extra) THEN json_extract(posts.extra, '$.trade_guarantors') END) je
+     WHERE posts.status = 'open'
+     GROUP BY je.value`,
+  ).all<{ name: string; c: number }>();
+  const tradeGuarantorStats: Record<string, number> = {};
+  for (const r of statsRows.results || []) {
+    if (typeof r.name === 'string' && r.name) tradeGuarantorStats[r.name] = r.c;
+  }
   return {
     boards: BOARDS,
     carriers: CARRIERS,
@@ -335,6 +385,46 @@ export async function getSchema(env: Env) {
     contactPolicies: CONTACT_POLICIES,
     tradeMethods,
     tradeMerchants,
+    tradeGuarantorStats,
     admins: (adminRows.results || []).map((r) => ({ id: r.id, nickname: r.nickname || '管理员' })),
   };
+}
+
+// 发帖担保人选择校验（post-create / post-actions 编辑共用）：
+// ▸ body.trade_guarantors = 担保人名称数组（候选池条目名称即关联键）：≤3 位、去重、非空字符串
+// ▸ 每个名称必须存在于站长推荐卡商候选池（cardhub_trade_merchants），防止伪造任意名称刷统计
+// ▸ 选了担保人必须同时勾选「圈内卡商担保」交易方式（不勾选不能选担保人）
+// ▸ 通过返回规范化名称数组（[] = 未选择担保人，合法）；error 为字段名或错误码
+export async function validateTradeGuarantors(
+  env: Env,
+  raw: unknown,
+  tradeMethods: string[],
+): Promise<{ error?: string; names: string[] }> {
+  const rawList = Array.isArray(raw) ? raw : raw == null ? [] : null;
+  if (rawList === null) return { error: 'VALIDATION_ERROR', names: [] };
+  const names: string[] = [];
+  for (const x of rawList) {
+    if (typeof x !== 'string' || !x.trim()) return { error: 'VALIDATION_ERROR', names: [] };
+    const n = x.trim();
+    if (!names.includes(n)) names.push(n);
+  }
+  if (!names.length) return { names: [] };
+  if (names.length > 3) return { error: 'GUARANTORS_TOO_MANY', names: [] };
+  if (!tradeMethods.includes('merchant')) return { error: 'GUARANTOR_NEEDS_MERCHANT', names: [] };
+  const merchantsRaw = await getSetting<unknown>(env, 'cardhub_trade_merchants', []);
+  const pool = new Set<string>(
+    (Array.isArray(merchantsRaw) ? merchantsRaw : [])
+      .map((x) => {
+        if (typeof x === 'string') return x.trim();
+        if (x && typeof x === 'object' && typeof (x as Record<string, unknown>).name === 'string') {
+          return String((x as Record<string, unknown>).name).trim();
+        }
+        return '';
+      })
+      .filter(Boolean),
+  );
+  for (const n of names) {
+    if (!pool.has(n)) return { error: 'GUARANTOR_NOT_IN_POOL', names: [] };
+  }
+  return { names };
 }
