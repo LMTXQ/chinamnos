@@ -12,6 +12,7 @@ export type NotificationKind =
   | 'act_retired' | 'act_expired'
   | 'link_approved' | 'link_rejected'
   | 'post_approved' | 'post_rejected' | 'post_closed' | 'post_expired'
+  | 'post_expiring' | 'relay_request'
   | 'dm_message';
 
 /* pushNotification：写一条站内通知。尽力而为——失败静默，绝不影响主流程（审核/发消息等） */

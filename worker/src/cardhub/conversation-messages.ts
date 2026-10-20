@@ -4,6 +4,7 @@ import { guard } from '../common/auth';
 import { ulid } from '../common/crypto';
 import { IMG_URL_HOSTS } from '../common/img-hosts';
 import { notify } from '../mail/notifier';
+import { getSetting } from '../common/settings';
 import { pushNotification, markNotificationsReadByRef } from '../common/notifications';
 import { getPublicProfile, getPublicProfiles } from '../auth/public-profile';
 
@@ -154,7 +155,11 @@ export async function handleReplyMessage(request: Request, env: Env, convId: str
     ? (conv.buyer_email as string)
     : (await env.DB.prepare('SELECT email FROM users WHERE id = ?1').bind(otherUid as string).first<{ email: string }>())?.email;
   if (otherEmail) {
-    void notify(env, otherEmail, 'conversation_new_message', { title, body: plain || '（发送了图片）', sender: senderRole }).catch(() => {});
+    // 受「在线沟通新消息」邮件开关控制（站内通知不受影响）
+    void (async () => {
+      if (!(await getSetting<boolean>(env, 'mail_conversation_enabled', true))) return;
+      notify(env, otherEmail, 'conversation_new_message', { title, body: plain || '（发送了图片）', sender: senderRole }).catch(() => {});
+    })().catch(() => {});
   }
 
   // 站内通知对方（铃铛红点；打开对话详情时自动标已读）

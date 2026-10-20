@@ -26,6 +26,10 @@ const ALLOWED_KEYS = new Set([
   'promo_reswitch_enabled',
   'promo_placeholders',
   'notification_retention_days',
+  'mail_post_review_enabled',
+  'mail_conversation_enabled',
+  'mail_relay_request_enabled',
+  'mail_post_expiring_enabled',
 ]);
 
 /** 白名单内尚未写入 DB 的新键的默认值（仅「空串即合法默认」的文本键；布尔/数值键的默认语义请走迁移 seed，避免误显开关状态） */
@@ -324,6 +328,10 @@ export async function handleUpdateSetting(request: Request, env: Env, key: strin
     }
     // 公告/警告开关：强校验布尔（防止存入字符串等脏值）
     else if (key === 'site_notice_enabled' || key === 'cardhub_trade_site_guarantee' || key === 'promo_reswitch_enabled') {
+      if (typeof value !== 'boolean') return fail(ERR.VALIDATION_ERROR, 'INVALID_VALUE', 400, { field: key });
+    }
+    // 邮件通知分场景开关：强校验布尔
+    else if (key === 'mail_post_review_enabled' || key === 'mail_conversation_enabled' || key === 'mail_relay_request_enabled' || key === 'mail_post_expiring_enabled') {
       if (typeof value !== 'boolean') return fail(ERR.VALIDATION_ERROR, 'INVALID_VALUE', 400, { field: key });
     }
     valueJson = JSON.stringify(value);

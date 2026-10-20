@@ -42,13 +42,20 @@ export async function handleCreateRelayRequest(request: Request, env: Env): Prom
      VALUES (?1, ?2, ?3, ?4, ?5, 'open', ?6)`,
   ).bind(id, postId, name, contact, note || '', now).run();
 
-  // 通知站长
+  // 通知站长（受「站长中转意向」邮件开关控制；站内通知不受影响）
   const ownerEmail = await getSetting(env, 'owner_email', env.OWNER_EMAIL || '');
   if (ownerEmail) {
-    void notify(env, ownerEmail, 'relay_request', {
-      title: post.title, name, contact, note: note || '(无)',
-    }).catch(() => {});
+    void (async () => {
+      if (!(await getSetting<boolean>(env, 'mail_relay_request_enabled', true))) return;
+      notify(env, ownerEmail, 'relay_request', {
+        title: post.title, name, contact, note: note || '(无)',
+      }).catch(() => {});
+    })().catch(() => {});
   }
+  // 站内通知帖主：收到中转意向（此前仅邮件——补齐站内兜底，ref 指向帖子便于跳转）
+  await pushNotification(env, post.user_id, 'relay_request', postId,
+    '收到新的站长中转意向',
+    `您的帖子「${post.title}」收到中转意向：联系人 ${name}（${contact}）${note ? `，留言：${note.slice(0, 60)}` : ''}，请登录后台处理。`);
 
   return ok({ id });
 }

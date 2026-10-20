@@ -27,6 +27,8 @@ const KIND_META = {
   post_rejected: { icon: "x",       cls: "no",   src: "用户管理组", go: "/cardhub", chview: "me" },
   post_closed:   { icon: "box",     cls: "warn", src: "用户管理组", go: "/cardhub", chview: "me" },
   post_expired:  { icon: "clock",   cls: "warn", src: "用户管理组", go: "/cardhub", chview: "me" },
+  post_expiring: { icon: "clock",   cls: "warn", src: "系统提醒",   go: "/cardhub", chview: "me" },
+  relay_request: { icon: "message", cls: "info", src: "中转意向",   go: "/cardhub", chview: "convs" },
   dm_message:    { icon: "message", cls: "info", src: "会话消息",   go: "/cardhub", chview: "convs" },
 };
 

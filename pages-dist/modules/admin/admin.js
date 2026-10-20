@@ -1137,6 +1137,10 @@ const SETTING_DESC = {
   mail_daily_cap: "邮件系统每日发送总量上限，超出后当日暂停发送验证类邮件。",
   site_name: "站点名称，用于邮件标题与页面展示。",
   notification_retention_days: "站内通知（铃铛）保留天数：已读通知超过该天数后，在本人下次打开通知面板时自动清除；未读通知不受影响、永久保留。整数 1~365，默认 30。保存后即时生效（无需等前端部署）。",
+  mail_post_review_enabled: "跳蚤市集帖子审核结果的邮件通知开关（管理组通过/驳回帖子时邮件通知帖主）。关闭后仅发站内通知（铃铛），不再发邮件。布尔，默认开启。保存后约 30 秒内生效。仅站长可修改。",
+  mail_conversation_enabled: "市集在线沟通新消息的邮件通知开关（买家发起沟通、会话中发消息/发图时邮件通知对方）。关闭后仅发站内通知（铃铛），不再发邮件。布尔，默认开启。保存后约 30 秒内生效。仅站长可修改。",
+  mail_relay_request_enabled: "站长中转意向的邮件通知开关（买家提交中转表单时邮件通知帖主）。关闭后不再发邮件（中转意向仍在后台保留可查）。布尔，默认开启。保存后约 30 秒内生效。仅站长可修改。",
+  mail_post_expiring_enabled: "帖子到期前 3 天的邮件提醒开关（每日定时任务扫描，仅提醒一次）。关闭后不再发邮件（到期自动下架与站内通知不受影响）。布尔，默认开启。保存后约 30 秒内生效。仅站长可修改。",
   promos: "推广列表（与全站公告共用弹窗体系，原「推广」页签已并入「公告」页签，此处仅存数据不再展示）。数据结构 [{id,enabled,title,content,version,mode,scope{carriers,provinces,modules}}]：mode=closable 可关闭每日一次 / must 强制同意；scope 三维度全空 = 全站任意页面，modules 非空 = 仅进入对应模块（资费中心/跳蚤市集/工单中心/觅珍集库）时判定弹出。请勿在设置页直接编辑本键（会绕过公告页签编辑器的规范化校验），一律在「公告」页签操作。保存后 Worker 即时生效，弹窗配置随下一轮采集部署。站长与管理员可修改。",
   promo_reswitch_enabled: "推广「切换重弹」开关（编辑入口在「公告」页签推广分组的「切换重弹」按钮，设置页不展示）。开启 = 访客在资费页切换运营商/省份时，重新判定全站推广并弹出命中新范围且未读的条目；关闭 = 切换不打断、不弹。不影响每日首次进站与模块进入两个触发点；同意记录/「今日不再」天然防重。布尔，未保存过默认开启。站长与管理员可修改。",
   cardhub_trade_merchants: "圈内卡商担保的推荐卡商列表——发帖人发布/编辑帖子勾选「圈内卡商担保」时，从此列表搜索并选择担保人（每帖最多 3 位），帖子详情页展示所选担保人及其热度统计。每行一条，格式：卡商名 | 站内用户UID（可留空） | 一句话介绍（可留空）。条数不限；卡商名必填（≤40 字）且同列表内不可重复——名称是担保人关联与统计标识，改名会使旧帖与该条目的统计关联断开（旧帖仍显示发帖时名称）。绑定 UID 后候选与详情显示头像与「站内」标识、点击弹用户资料卡（介绍随卡片展示）；UID 留空即纯文本卡商，同样可被选为担保人。绑定 UID 必须是站内 active 用户，否则拒绝保存。全部清空则发帖时无候选可选。推荐仅作参考，站点不为所推荐人承担保证。热度统计随快照更新（约 0-8 小时），Worker 兜底接口即时；其余展示在下一轮采集部署后生效。仅站长可修改。",
@@ -1218,6 +1222,7 @@ const THANKS_CAT_KEY = { "任意打赏": "donor", "反馈建议": "feedback", "�
 const SETTING_GROUPS = [
   ["基础信息", ["site_name", "owner_email", "notification_retention_days"]],
   ["安全与准入", ["turnstile_enforced", "email_domain_whitelist", "mail_daily_cap"]],
+  ["邮件通知", ["mail_post_review_enabled", "mail_conversation_enabled", "mail_relay_request_enabled", "mail_post_expiring_enabled"]],
   ["跳蚤市集", ["module_cardhub_enabled", "cardhub_trade_site_guarantee", "cardhub_trade_merchants"]],
   ["工单系统", ["ticket_apply_guarantor"]],
   ["关于页", ["about_timeline", "about_thanks", "about_links"]],

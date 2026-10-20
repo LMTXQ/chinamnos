@@ -1,5 +1,6 @@
 import type { Env } from '../common/env';
 import { notify } from '../mail/notifier';
+import { getSetting } from '../common/settings';
 import { deleteProofs } from './proofs';
 import { pushNotification } from '../common/notifications';
 
@@ -72,14 +73,18 @@ export async function runCardhubCron(env: Env): Promise<void> {
   const msgCutoff = now - 60 * DAY;
   await env.DB.prepare(`DELETE FROM messages WHERE created_at < ?1`).bind(msgCutoff).run();
 
-  // 5) 到期前 3 天提醒（仅提醒一次窗口 [now+2d, now+3d)）
+  // 5) 到期前 3 天提醒（仅提醒一次窗口 [now+2d, now+3d)）；邮件受「帖子到期提醒」开关控制，站内通知恒发
   const expiring = await env.DB.prepare(
-    `SELECT p.id, p.title, p.expires_at, u.email
+    `SELECT p.id, p.title, p.user_id, p.expires_at, u.email
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE p.status = 'open' AND p.expires_at >= ?1 AND p.expires_at < ?2`,
   ).bind(threeDaysLaterMinus1d, threeDaysLater).all();
+  const mailExpiring = await getSetting<boolean>(env, 'mail_post_expiring_enabled', true);
 
-  for (const row of expiring.results as Array<{ id: string; title: string; expires_at: number; email: string }>) {
-    void notify(env, row.email, 'post_expiring', { title: row.title }).catch(() => {});
+  for (const row of expiring.results as Array<{ id: string; title: string; user_id: string; expires_at: number; email: string }>) {
+    if (mailExpiring) void notify(env, row.email, 'post_expiring', { title: row.title }).catch(() => {});
+    await pushNotification(env, row.user_id, 'post_expiring', row.id,
+      '您的帖子即将到期',
+      `帖子「${row.title}」将在 3 天后到期自动下架，如需继续展示请到「我的发布」重新提交。`);
   }
 }

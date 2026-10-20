@@ -4,6 +4,7 @@ import { ERR, fail, ok } from '../common/envelope';
 import { guard, type Viewer } from '../common/auth';
 import { audit } from '../common/audit';
 import { notify } from '../mail/notifier';
+import { getSetting } from '../common/settings';
 import { deleteProofs, proofRows } from '../cardhub/proofs';
 import { serializePost, type PostRow } from '../cardhub/projection';
 import { getPublicProfile } from '../auth/public-profile';
@@ -208,11 +209,14 @@ export async function handleReviewPost(request: Request, env: Env, id: string): 
     ).bind(now, reason.slice(0, 500), id).run();
   }
 
-  // 通知发布者（失败不影响审核结果）
+  // 通知发布者（失败不影响审核结果；受「帖子审核结果」邮件开关控制，站内通知不受影响）
   const user = await env.DB.prepare('SELECT email FROM users WHERE id = ?1').bind(post.user_id).first<{ email: string }>();
   if (user) {
-    const template = approve ? 'review_approved' : 'review_rejected';
-    void notify(env, user.email, template, { title: post.title, reason: approve ? '' : reason }).catch(() => {});
+    void (async () => {
+      if (!(await getSetting<boolean>(env, 'mail_post_review_enabled', true))) return;
+      const template = approve ? 'review_approved' : 'review_rejected';
+      notify(env, user.email, template, { title: post.title, reason: approve ? '' : reason }).catch(() => {});
+    })().catch(() => {});
   }
   await pushNotification(env, post.user_id,
     approve ? 'post_approved' : 'post_rejected',

@@ -4,7 +4,9 @@ import { guard } from '../common/auth';
 import { hitLimit } from '../common/ratelimit';
 import { verifyTurnstile } from '../common/turnstile';
 import { ulid } from '../common/crypto';
+import { getSetting } from '../common/settings';
 import { notify } from '../mail/notifier';
+import { pushNotification } from '../common/notifications';
 import { getPublicProfile } from '../auth/public-profile';
 
 const MAX_MSG = 200; // 单对话双方合计消息上限（§10.1 调整：交易/私信统一 200，实际校验在 conversation-messages.ts）
@@ -80,8 +82,14 @@ export async function handleCreateConversation(request: Request, env: Env): Prom
     ).bind(msgId, convId, bodyText, now),
   ]);
 
-  // 通知卖家
-  void notify(env, (await env.DB.prepare('SELECT email FROM users WHERE id = ?1').bind(post.user_id).first<{ email: string }>())?.email || '', 'conversation_new_message', { title: post.title, body: bodyText, sender: 'buyer' }).catch(() => {});
+  // 通知卖家（受「在线沟通新消息」邮件开关控制；站内通知不受影响）
+  void (async () => {
+    if (!(await getSetting<boolean>(env, 'mail_conversation_enabled', true))) return;
+    notify(env, (await env.DB.prepare('SELECT email FROM users WHERE id = ?1').bind(post.user_id).first<{ email: string }>())?.email || '', 'conversation_new_message', { title: post.title, body: bodyText, sender: 'buyer' }).catch(() => {});
+  })().catch(() => {});
+  // 站内通知卖家：买家首次发起沟通（此前仅邮件，关闭邮件后卖家将收不到任何通知——补齐站内兜底）
+  await pushNotification(env, post.user_id, 'dm_message', convId,
+    '收到新的沟通请求', `关于「${post.title}」收到买家发起的沟通，首条消息：${bodyText.slice(0, 80)}`);
 
   return ok({ id: convId });
 }
