@@ -107,6 +107,12 @@ export const theme = {
 
 /* ─────────────── 页面注册表 ─────────────── */
 const pages = new Map();
+/* 条目级深链前缀 → 归属页面路由：post_ 跳蚤市集帖；act_/chat_/ann_/cl_/plan_ 资费页各 tab 条目。
+   hash 原样透传，目标页面 onEnter 解析打开；未匹配前缀仍走「回退首页」老逻辑 */
+const DEEP_LINK_ROUTES = [
+  [/^post_/, "/cardhub"],
+  [/^(act|chat|ann|cl|plan)_/, "/"],
+];
 /* 页面级标题（id → 显示名）：activate 进入页面即切，模块可在 onEnter 内覆盖更具体的标题
    （如资费页带运营商名「XX资费监控」）；名称与 apps-menu.js APP_SITES 保持同源一致 */
 const PAGE_TITLES = {
@@ -213,6 +219,11 @@ async function activate(page) {
 function routeOf(hash) {
   const h = hash.replace(/^#/, "") || "/";
   for (const p of pages.values()) if (p.route === h) return p;
+  /* 条目级深链（裸 hash 前缀，未注册为页面）：路由到归属页面，hash 原样保留，
+     由页面 onEnter 自行解析并打开对应内容（资费页已有 pendingTab/数据就绪补载机制） */
+  for (const [re, route] of DEEP_LINK_ROUTES) {
+    if (re.test(h)) return [...pages.values()].find((p) => p.route === route) || null;
+  }
   return null;
 }
 

@@ -17,6 +17,7 @@ import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
+import { shareLink } from "../../shell/share.js";
 import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 import {
   BOARD_LABELS, BOARD_ICONS, BOARD_PRICE, CONTACT_CH_LABEL,
@@ -585,9 +586,11 @@ function renderDetailView() {
   const favBtn = S.user && !isSelf
     ? `<button class="btn ghost ch-fav${raw.favorited ? " on" : ""}" data-act="favToggle" data-id="${p.id}"><i data-icon="${raw.favorited ? "starFill" : "star"}"></i>${raw.favorited ? "已收藏" : "收藏"}</button>`
     : "";
-  const topExtra = staffBtns + favBtn;
+  /* 分享：详情页常驻（复制链接或唤起系统分享，深链 #post_<id>） */
+  const shareBtn = `<button class="btn ghost" data-act="postShare" data-id="${esc(p.id)}" data-title="${esc(p.title || "")}" title="分享本帖（复制链接或唤起系统分享）"><i data-icon="share"></i>分享</button>`;
+  const topExtra = staffBtns + favBtn + shareBtn;
   const topRow = topExtra
-    ? `<div class="ch-detail-top">${backBtn}${staffBtns}${favBtn}</div>`
+    ? `<div class="ch-detail-top">${backBtn}${staffBtns}${favBtn}${shareBtn}</div>`
     : backBtn;
   const opsRow = selfOps ? `<div class="ch-self-ops">${selfOps}</div>` : "";
   /* 字段网格/作者行/交易方式/证明材料/描述/联系方式渲染已迁 shell/post-view.js 共享模块 */
@@ -1957,6 +1960,8 @@ async function onRootClick(e) {
   if (a === "authorCard") { Auth.showProfileCard(actEl.dataset.id); return; }
   // 点「站长推荐」绑定站内用户的卡商 chip → 公开资料卡（intro = 站长填写的卡商介绍）
   if (a === "merchantCard") { Auth.showProfileCard(actEl.dataset.uid, actEl.dataset.intro || ""); return; }
+  // 帖子详情分享：复制深链或唤起系统分享
+  if (a === "postShare") { shareLink({ title: actEl.dataset.title || "跳蚤市集", text: "跳蚤市集交易帖", hash: "post_" + encodeURIComponent(actEl.dataset.id || "") }); return; }
   // 发帖表单担保人选择：搜索按钮过滤 + 点行选中/取消（≤3 位）
   if (a === "guarSearch") {
     const inp = $("chGuarQ");
@@ -2562,6 +2567,11 @@ Shell.registerPage({
     };
     paint();
     themeBtn.addEventListener("click", () => { theme.toggle(); paint(); });
+
+    /* 帖子分享深链（#post_<id>，shell.js 已路由到本页）：渲染完成后直达该帖详情；
+       帖子已下架/过期时 chOpenDetail 自带失败提示 */
+    const postDeep = (location.hash || "").match(/^#post_(.+)$/);
+    if (postDeep) chOpenDetail(decodeURIComponent(postDeep[1]));
 
     /* 侧边栏抽屉 */
     $("chHamburger").addEventListener("click", openSidebar);

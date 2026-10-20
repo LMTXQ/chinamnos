@@ -21,6 +21,7 @@ import { adaptPost, viewFromCardhubRaw, renderListCard, renderDetailBody, relTim
 import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
 import { loadNotices, loadPlaceholders, applyPlaceholders, maybePromosOnSwitch, scopeMatch } from "../../shell/notice.js";
+import { shareLink } from "../../shell/share.js";
 
 const $ = (id) => document.getElementById(id);
 const cache = {};
@@ -1086,6 +1087,7 @@ async function actOpenDetail(id) {
         <span class="act-mode-badge ${guide ? "guide" : "official"}">${guide ? "个人攻略" : "官方活动"}</span>
         ${scopeBadge}
         ${actRemaining(a.ends_at)}
+        <button type="button" class="btn ghost sm" data-act="actShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本帖（复制链接或唤起系统分享）" style="margin-left:auto"><i data-icon="share"></i>分享</button>
       </div>
       <h3 class="act-detail-title">${esc(a.title)}</h3>
       ${a.descr ? `<div class="act-descr">${esc(a.descr)}</div>` : ""}
@@ -1523,7 +1525,7 @@ function chatCardHTML(a) {
       ? `<button type="button" class="act-author" data-act="chatAuthor" data-uid="${esc(a.submitted_by)}" title="查看收录者资料卡">${esc(a.submitter_nickname || "用户")}</button>`
       : `<span>${esc(a.submitter_nickname || "用户")}</span>`);
   return `
-  <div class="act-card chat-card">
+  <div class="act-card chat-card" data-chat-id="${esc(a.id || "")}">
     <div class="act-main">
       <div class="act-title-line">
         <span class="act-mode-badge chat">${esc(a.chat_type || "其他")}</span>
@@ -3085,6 +3087,7 @@ function openClModal(log) {
   openModal(log.name || "变更详情",
     '<div class="res-row sub">变更时间：' + esc(fmtTime(log.ts)) + "</div>" +
     clDetailHTML(log, clView ? clView.itemMap : {}),
+    `<button type="button" class="btn ghost sm" data-act="clShare" title="复制本条变更链接或唤起系统分享">${icon("share")}分享</button>` +
     `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="name" title="复制资费名称">${icon("copy")}名称</button>` +
     `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="summary" title="复制资费概要">${icon("list")}概要</button>` +
     (diffN ? `<button type="button" class="btn ghost sm" data-act="clModalDiff" title="在「全部字段」与「仅看变化」两种显示模式间切换">${clDiffOnly ? icon("list") + "全部字段" : icon("filter") + "仅看变化"}</button>` : ""));
@@ -3560,6 +3563,16 @@ function initModal() {
   $("modalOk").addEventListener("click", closeModal);
   $("modalDlg").addEventListener("click", e => { if (e.target === $("modalDlg")) closeModal(); });
   $("modalDlg").addEventListener("cancel", e => { e.preventDefault(); closeModal(); });
+  /* 弹窗为顶层 <dialog>（骨架外层，不在各 tab 委托容器内）：data-act 按钮经 window.__MODAL_ACT__ 分发
+     （actOnBodyClick 等 tab 级委托捕获不到——弹窗内既有按钮同此因，仅接分享类新按钮，不改动既有行为） */
+  const modalDispatch = (e) => {
+    const el = e.target.closest("[data-act]");
+    if (!el) return;
+    const fn = window.__MODAL_ACT__ && window.__MODAL_ACT__[el.dataset.act];
+    if (fn) { e.preventDefault(); fn(el); }
+  };
+  $("modalBody").addEventListener("click", modalDispatch);
+  $("modalFootExtra").addEventListener("click", modalDispatch);
 }
 
 /* ─────────────── 侧边栏（移动端抽屉） ─────────────── */
@@ -4032,6 +4045,17 @@ function initTariff() {
 
   if ($("clToggleAll")) $("clToggleAll").addEventListener("click", clToggleAll);
 
+  /* 弹窗内分享按钮分发（顶层 dialog，tab 级委托捕获不到） */
+  window.__MODAL_ACT__ = {
+    actShare: (el) => shareLink({ title: el.dataset.title || "情报酒馆", text: "来自情报酒馆的一条分享", hash: "act_" + encodeURIComponent(el.dataset.id || "") }),
+    clShare: () => {
+      const log = clModalLog;
+      if (log) shareLink({ title: log.name || "变更记录", text: "一条资费变更记录", hash: "cl_" + currentCarrier + "_" + getProvCode() + "_" + String(log.ts ?? "") + "_" + encodeURIComponent(log.name || "") });
+    },
+  };
+  /* 关于页「分享本站」（关于页区域无点击委托，走 window 挂钩） */
+  window.__cmnosShareSite = () => shareLink({ title: "ChinaMNOs 讯览台", text: "全网资费实时面板", hash: "" });
+
   var raw = (location.hash || "").replace("#", "").trim();
   var staticTabs = ["overview","changelog","announce","monitor","cardhub","acts","chat","notices","about"];
   if (staticTabs.includes(raw)) {
@@ -4039,9 +4063,109 @@ function initTariff() {
   } else if (raw.startsWith("t1_")) {
     pendingTab = raw;
     goTab("overview");
+  } else if (/^(act|chat|ann|cl|plan)_/.test(raw)) {
+    handleDeepLink(raw);
   } else {
     goTab("overview");
   }
+}
+
+/* ─────────────── 条目级深链（分享落地） ───────────────
+   #act_<id>                       情报酒馆帖详情弹窗
+   #chat_<id>                      唠嗑聚落卡片定位高亮
+   #ann_<carrier>_<id>             运营公告条目展开定位（自动切运营商）
+   #cl_<carrier>_<prov>_<ts>_<name(URI编码)>   变更记录：切运营商/省份 + 按名称过滤 + 弹该条详情
+   #plan_<carrier>_<prov>_<方案编号(URI编码)>   资费列表：切运营商/省份 + 全分类搜索过滤该方案
+   解析后置 pendingDeep，由各数据就绪路径消费（轮询兜底，见 pollDeep*） */
+let pendingDeep = null;
+let pendingAnnId = "";
+function handleDeepLink(raw) {
+  const m = raw.match(/^(act|chat|ann|cl|plan)_(.+)$/);
+  if (!m) { goTab("overview"); return; }
+  const kind = m[1], rest = m[2];
+  if (kind === "act") {
+    goTab("acts");
+    actOpenDetail(decodeURIComponent(rest));   // 详情弹窗独立拉接口，不依赖列表
+    return;
+  }
+  if (kind === "chat") {
+    goTab("chat");
+    pendingDeep = { kind: "chat", id: decodeURIComponent(rest) };
+    pollDeep(() => { const el = document.querySelector(`[data-chat-id="${CSS.escape(pendingDeep.id)}"]`); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("deep-hit"); pendingDeep = null; return true; } return chatState.items.length > 0; });
+    return;
+  }
+  if (kind === "ann") {
+    const sep = rest.indexOf("_");
+    const carrier = sep > 0 ? rest.slice(0, sep) : "";
+    pendingAnnId = decodeURIComponent(sep > 0 ? rest.slice(sep + 1) : rest);
+    if (carrier && carrier !== currentCarrier) switchCarrier(carrier);
+    goTab("announce");
+    annTabRefresh().then(() => { if (pendingAnnId) annRenderBody(); });
+    return;
+  }
+  if (kind === "cl") {
+    const parts = rest.split("_");
+    if (parts.length < 4) { goTab("changelog"); return; }
+    const carrier = parts[0], prov = parts[1], ts = Number(parts[2]);
+    const name = decodeURIComponent(parts.slice(3).join("_")).toLowerCase();
+    if (!/^[a-z]+$/.test(carrier) || !/^[a-z]{2,6}$/.test(prov) || !Number.isFinite(ts)) { goTab("changelog"); return; }
+    if (carrier !== currentCarrier) switchCarrier(carrier);
+    goProvince(prov);
+    goTab("changelog");
+    pendingDeep = { kind: "cl", ts, name };
+    pollDeep(() => {
+      const logs = (clView && Array.isArray(clView.logs)) ? clView.logs : [];
+      const hit = logs.find((l) => String(l.ts) === String(ts) && String(l.name || "").toLowerCase() === name);
+      if (hit) { if (clQ !== name) { clQ = name; } renderChangelog(); openClModal(hit); pendingDeep = null; return true; }
+      return false;
+    });
+    return;
+  }
+  if (kind === "plan") {
+    const parts = rest.split("_");
+    if (parts.length < 3) { goTab("overview"); return; }
+    const carrier = parts[0], prov = parts[1];
+    const planNo = decodeURIComponent(parts.slice(2).join("_"));
+    if (!/^[a-z]+$/.test(carrier) || !/^[a-z]{2,6}$/.test(prov)) { goTab("overview"); return; }
+    if (carrier !== currentCarrier) switchCarrier(carrier);
+    goProvince(prov);
+    goTab("overview");
+    pendingDeep = { kind: "plan", plan: planNo.toLowerCase() };
+    pollDeep(() => {
+      const codes = Object.keys(TYPE1_MAP || {});
+      if (!codes.length) return false;
+      let hitView = "";
+      for (const t1Code of codes) {
+        const s = getListState(t1Code + "_" + getProvCode());
+        s.q = pendingDeep.plan; s.page = 1;
+        drawList(t1Code, getProvCode());
+        const st = getListState(t1Code + "_" + getProvCode());
+        if (st.total == null || st.total > 0) { if (!hitView) hitView = t1Code; }
+      }
+      if (hitView) {
+        const searchEl = $(t1Id(hitView, "search"));
+        if (searchEl) searchEl.value = pendingDeep.plan;
+        const first = document.querySelector(`#view-${t1ViewId(hitView)} .res-row, #view-${t1ViewId(hitView)} .plan-card, #view-${t1ViewId(hitView)} [data-plan]`);
+        if (first) first.scrollIntoView({ behavior: "smooth", block: "center" });
+        pendingDeep = null;
+        return true;
+      }
+      return false;
+    });
+    return;
+  }
+  goTab("overview");
+}
+
+/* 深链轮询兜底：数据未就绪时每 500ms 重试（最多 20 次 = 10s），fn 返回 true 表示已消费 */
+function pollDeep(fn) {
+  let n = 0;
+  const t = setInterval(() => {
+    n++;
+    let done = false;
+    try { done = fn(); } catch { done = false; }
+    if (done || n >= 20) clearInterval(t);
+  }, 500);
 }
 
 /* ─────────────── 关于页 · 项目历程时间轴（站长在管理中心 about_timeline 配置；内置节点已 seed 进 settings，清空=隐藏区块）
@@ -4390,6 +4514,7 @@ function annItemHTML(a) {
       <span class="ann-badge${nat ? " nat" : ""}">${nat ? "全国" : esc(a.province)}</span>
       <span class="ann-title" title="点击展开/收起正文">${esc(a.title || "（无标题）")}</span>
       ${att ? `<span class="ann-att">附件 ${att}</span>` : ""}
+      <button type="button" class="btn ghost sm" data-ann="annShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本条公告" style="padding:2px 8px"><i data-icon="share"></i></button>
       <span class="ann-chev">${icon("chevronDown")}</span>
     </div>
   </div>`;
@@ -4481,6 +4606,16 @@ function annRenderBody() {
       ? `<div class="ann-list">${items.map(annItemHTML).join("")}</div>`
       : `<div class="ann-empty">${icon("bell", "ann-empty-ic")}<div>${scope === "home" ? "当前省份暂无公告" : "暂无公告"}</div></div>`}`;
 
+  /* 深链定位：展开并滚动到目标公告（含分享链接打开场景） */
+  if (pendingAnnId) {
+    const el = body.querySelector(`.ann-item[data-id="${pendingAnnId.replace(/"/g, "")}"]`);
+    if (el) {
+      if (!el.classList.contains("open")) el.click(); // 整行点击=展开（惰性构建正文）
+      setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+    }
+    pendingAnnId = "";
+  }
+
   /* 进入 tab 即写已读（按最新一条），红点随之消除 */
   try { if (data.items[0] && data.items[0].id) localStorage.setItem(ANN_READ_KEY(), data.items[0].id); } catch { /* */ }
   annUpdateDot();
@@ -4496,7 +4631,12 @@ function annOnBodyClick(e) {
     annTabRefresh().then(annRenderBody);
     return;
   }
-  /* 附件/官网原文为外链，放行默认行为；标题与整行点击均为展开/收起 */
+  /* 附件/官网原文为外链，放行默认行为；分享按钮不触发行展开；标题与整行点击均为展开/收起 */
+  const shareBtn = e.target.closest('[data-ann="annShare"]');
+  if (shareBtn) {
+    shareLink({ title: shareBtn.dataset.title || "运营公告", text: "运营商官方公告", hash: "ann_" + currentCarrier + "_" + encodeURIComponent(shareBtn.dataset.id || "") });
+    return;
+  }
   if (e.target.closest(".ann-att-chip") || e.target.closest(".ann-golink")) return;
   const row = e.target.closest(".ann-row");
   if (!row) return;
@@ -4684,7 +4824,9 @@ Shell.registerPage({
     </section>
     <section id="view-about" class="view">
       <h1 class="page-title">关于本站</h1>
-      <p class="page-sub">站点简介 · 数据说明 · 项目历程</p>
+      <p class="page-sub">站点简介 · 数据说明 · 项目历程
+        <button type="button" class="btn ghost sm" onclick="window.__cmnosShareSite && window.__cmnosShareSite()" title="复制站点链接或唤起系统分享" style="margin-left:10px;vertical-align:middle"><i data-icon="share"></i>分享本站</button>
+      </p>
 
       <div class="panel" id="aboutTlPanel" hidden>
         <div class="about-text">
