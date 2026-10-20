@@ -2421,6 +2421,14 @@ function bindListSection(type1Code) {
     const copyBtn = t.closest(".copy-btn");
     if (copyBtn && section.contains(copyBtn)) {
       e.stopPropagation();
+      /* 分享本条资费：深链 plan_<运营商>_<省>_<方案编号（回退名称）>，定位键与深链消费端一致 */
+      if (copyBtn.dataset.planShare) {
+        const s1 = getListState(type1Code + "_" + getProvCode());
+        const it1 = (s1.items || []).find(x => String(x.id) === String(copyBtn.dataset.planShare));
+        const key = it1 ? ((it1.fields && it1.fields["方案编号"]) || it1.name || "") : (copyBtn.dataset.shareKey || "");
+        shareLink({ title: (it1 && it1.name) || "资费条目", text: "一条资费详情", hash: "plan_" + currentCarrier + "_" + getProvCode() + "_" + encodeURIComponent(key) });
+        return;
+      }
       const cid = copyBtn.dataset.copyId;
       const s0 = getListState(type1Code + "_" + getProvCode());
       const item = (s0.items || []).find(x => String(x.id) === String(cid));
@@ -2930,7 +2938,7 @@ function favBtnHtml(it, fav) {
   return `<button type="button" class="fav-btn${fav ? " on" : ""}" data-fav-id="${esc(it.id)}" title="${fav ? "取消收藏" : "收藏"}" aria-label="收藏">${icon(fav ? "starFill" : "star")}</button>`;
 }
 function copyBtnsHtml(it) {
-  return `<button type="button" class="copy-btn" data-copy="name" data-copy-id="${esc(it.id)}" title="复制资费名称" aria-label="复制资费名称">${icon("copy")}</button><button type="button" class="copy-btn" data-copy="summary" data-copy-id="${esc(it.id)}" title="复制资费概要" aria-label="复制资费概要">${icon("list")}</button>`;
+  return `<button type="button" class="copy-btn" data-copy="name" data-copy-id="${esc(it.id)}" title="复制资费名称" aria-label="复制资费名称">${icon("copy")}</button><button type="button" class="copy-btn" data-copy="summary" data-copy-id="${esc(it.id)}" title="复制资费概要" aria-label="复制资费概要">${icon("list")}</button><button type="button" class="copy-btn" data-plan-share="${esc(it.id)}" data-share-key="${esc((it.fields && it.fields["方案编号"]) || it.name || "")}" title="分享本条资费（复制链接或唤起系统分享）" aria-label="分享">${icon("share")}</button>`;
 }
 /* 规格标签：流量/宽带/通话/短信（存在才显示；短信从其他服务内容/权益正则提取） */
 function specBrief(it) {
