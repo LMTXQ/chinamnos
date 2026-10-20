@@ -17,7 +17,7 @@ import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
-import { mdToSafeHtml } from "../../shell/md.js";
+import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 import {
   BOARD_LABELS, BOARD_ICONS, BOARD_PRICE, CONTACT_CH_LABEL,
   boardOf as pvBoardOf, carrierLabel as pvCarrierLabel,
@@ -753,11 +753,14 @@ function formExtraHTML(board) {
               <input type="checkbox" data-ttag="${esc(o)}" data-tkey="${fd.key}" ${cur.includes(o) ? "checked" : ""}>${esc(o)}
             </label>`).join("")}</div></div>`;
       }
-      /* textarea / markdown 类型：多行文本（如车队风险声明）；markdown 详情/弹窗走 md.js 渲染 */
-      if (fd.type === "textarea" || fd.type === "markdown") {
-        const mdHint = fd.type === "markdown" ? ` <span class="hint">支持 Markdown：**加粗**、[链接](网址)、图片直链</span>` : "";
-        return `<div class="ch-fg"${showAttr}><label>${esc(fd.label)}${req}${mdHint}</label>
-          <textarea class="inp" id="chX_${fd.key}" data-xkey="${fd.key}" data-required="${fd.required ? 1 : 0}" data-max="${fd.max || 200}" maxlength="${fd.max || 200}" rows="${fd.type === "markdown" ? 8 : 4}" placeholder="${esc(fd.placeholder || "")}">${esc(keep)}</textarea></div>`;
+      /* textarea 类型：多行文本（如车队风险声明）；markdown 类型挂带预览的 MD 编辑器（mountCardMdEditors） */
+      if (fd.type === "textarea") {
+        return `<div class="ch-fg"${showAttr}><label>${esc(fd.label)}${req}</label>
+          <textarea class="inp" id="chX_${fd.key}" data-xkey="${fd.key}" data-required="${fd.required ? 1 : 0}" data-max="${fd.max || 200}" maxlength="${fd.max || 200}" rows="4" placeholder="${esc(fd.placeholder || "")}">${esc(keep)}</textarea></div>`;
+      }
+      if (fd.type === "markdown") {
+        return `<div class="ch-fg"${showAttr}><label>${esc(fd.label)}${req} <span class="hint">支持 Markdown，工具栏可快速插入语法，点「预览」查看渲染效果</span></label>
+          <div class="ch-md-mount" data-mdkey="${esc(fd.key)}" data-mdinitial="${esc(keep)}" data-mdmax="${fd.max || 8000}" data-mdplaceholder="${esc(fd.placeholder || "")}"></div></div>`;
       }
       // multi 字段（通话/流量/宽带）：多条规格，每条 = 可勾选标签组合 + 数值
       if (fd.type === "multi") {
@@ -1044,6 +1047,24 @@ function renderFormView() {
 }
 
 /* ─────────────── 表单：板块切换只重渲染局部（保留已填内容） ─────────────── */
+/* markdown 类型字段（市集图文介绍等）挂载带预览的 MD 编辑器（与酒馆同款组件）。
+   编辑器 textarea 复用 chX_<key> id —— 提交校验（val/mark）、编辑回填（setV）机制零改动。
+   渲染时 keep（旧值）经 data-mdinitial 带入，板块切换重渲染后草稿不丢 */
+function mountCardMdEditors() {
+  S.formMdHandles = {};
+  document.querySelectorAll(".ch-md-mount").forEach((el) => {
+    const key = el.dataset.mdkey;
+    if (!key || el.dataset.mounted) return;
+    el.dataset.mounted = "1";
+    S.formMdHandles[key] = mdCreateEditor(el, {
+      inputId: "chX_" + key,
+      initial: el.dataset.mdinitial || "",
+      maxlength: Number(el.dataset.mdmax) || 8000,
+      placeholder: el.dataset.mdplaceholder || "",
+      rows: 8,
+    });
+  });
+}
 function switchFormBoard(bid) {
   if (S.formBoard === bid) return;
   S.formBoard = bid;
@@ -1051,6 +1072,7 @@ function switchFormBoard(bid) {
   const host = $("chForm");
   if (host) host.innerHTML = formFieldsHTML();
   syncShowIf();
+  mountCardMdEditors();
   mountIcons($("cardhubRoot"));
 }
 
@@ -1810,7 +1832,7 @@ function render() {
   if (S.view === "overview") host.innerHTML = renderOverviewView();
   else if (S.view === "board") host.innerHTML = renderBoardView();
   else if (S.view === "detail") host.innerHTML = renderDetailView();
-  else if (S.view === "form") { host.innerHTML = renderFormView(); syncShowIf(); }
+  else if (S.view === "form") { host.innerHTML = renderFormView(); syncShowIf(); mountCardMdEditors(); }
   else if (S.view === "me") host.innerHTML = renderMeView();
   else if (S.view === "convs") host.innerHTML = renderConvsView();
   else if (S.view === "conv") host.innerHTML = renderConvView();

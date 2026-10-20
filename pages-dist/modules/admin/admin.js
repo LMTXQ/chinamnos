@@ -14,7 +14,7 @@ import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
 import { viewFromProjection, renderListCard, renderDetailBody, BOARD_PRICE } from "../../shell/post-view.js";
-import { mdToSafeHtml } from "../../shell/md.js";
+import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -157,6 +157,7 @@ function render() {
   if (!body) return;
   body.innerHTML = renderTab();
   mountIcons(body);
+  mountSettingMdEditors();
   setTimeout(loadAdminProofs, 0); // 审核队列证明材料缩略图（带鉴权 blob 加载）
 }
 
@@ -530,13 +531,17 @@ function noticeSettingRow(key) {
   const meta = SETTING_BLOCK_META[key];
   if (meta) {
     const text = String(val);
+    /* MD 编辑器键（公告正文）：挂载点 + 渲染后 mountSettingMdEditors 统一挂载，保存经 onSaveSetting 特判取值 */
+    const bodyHtml = SETTING_MD_KEYS.has(key)
+      ? mdMountHTML(key, text, meta.placeholder, 8000)
+      : `<textarea class="inp adm-setting-ta" rows="7" data-act="inputSetting" data-key="${key}" placeholder="${meta.placeholder}">${esc(text)}</textarea>`;
     return `
     <div class="adm-setting adm-setting-block">
       <div class="adm-setting-info">
         <div class="adm-setting-key">${esc(key)}${desc}</div>
         <div class="adm-setting-meta">${meta.counter(text)}${upd}</div>
       </div>
-      <textarea class="inp adm-setting-ta" rows="7" data-act="inputSetting" data-key="${key}" placeholder="${meta.placeholder}">${esc(text)}</textarea>
+      ${bodyHtml}
       <div class="adm-setting-actions">
         <span class="adm-setting-hint">${meta.hint}</span>
         <button class="btn primary sm" data-act="saveSetting" data-key="${key}"><i data-icon="check"></i>${meta.saveText}</button>
@@ -579,7 +584,7 @@ function renderPromos() {
           <option value="must"${p && p.mode === "must" ? " selected" : ""}>强制同意（无关闭按钮）</option>
         </select></label>
       </div>
-      <label style="display:block;margin-top:8px">内容（Markdown，8000 字内）<textarea class="inp" id="promoEContent" rows="8" maxlength="8000" placeholder="支持 Markdown：**加粗**、[链接](https://…)、- 列表、# 标题">${esc(p ? p.content : "")}</textarea></label>
+      <label style="display:block;margin-top:8px">内容（Markdown，8000 字内）${mdMountHTML("__promo__", p ? p.content : "", "支持 Markdown：**加粗**、[链接](https://…)、- 列表、# 标题", 8000)}</label>
       <div style="margin-top:8px">
         <div class="adm-meta">生效模块（不选 = 全站任意页面弹出；选择后仅在进入对应模块时判定弹出，与下方运营商/省份为与关系）</div>
         <div id="promoEModules">${Object.entries(PROMO_MODULE_LABELS).map(([m, n]) => chip("modules", m, n, !isNew && (sc.modules || []).includes(m))).join("")}</div>
@@ -656,7 +661,7 @@ async function onPromoReswitchToggle() {
 
 async function onPromoSave(id) {
   const title = ($("promoETitle") || {}).value || "";
-  const content = ($("promoEContent") || {}).value || "";
+  const content = settingMdEds && settingMdEds.__promo__ ? settingMdEds.__promo__.getValue() : "";
   const mode = ($("promoEMode") || {}).value || "closable";
   const enabled = !$("promoEEnabled") || $("promoEEnabled").checked;
   const pickChips = (boxId) => [...document.querySelectorAll(`#${boxId} .rv-chip.active`)].map((b) => b.dataset.v);
@@ -1084,6 +1089,26 @@ const SETTING_DESC = {
 /* 模板类设置：恒按字符串保存（不做数字/布尔强转，防纯数字标题被转 number）；
    site_notice_title 虽为短文本，也纳入字符串保护 */
 const SETTING_TEMPLATE_KEYS = new Set(["ticket_apply_guarantor", "site_notice_content", "site_notice_title"]);
+/* MD 编辑器键（site_notice_content 公告正文）：textarea → 带预览的 mdCreateEditor（与酒馆同款组件），
+   挂载 handle 存 settingMdEds，保存时经 onSaveSetting 特判取值；渲染后由 mountSettingMdEditors 统一挂载 */
+const SETTING_MD_KEYS = new Set(["site_notice_content"]);
+const mdMountHTML = (key, text, placeholder, maxlen) =>
+  `<div class="adm-md-mount" data-mdkey="${esc(key)}" data-mdinitial="${esc(text)}" data-mdmax="${maxlen}" data-mdplaceholder="${esc(placeholder)}"></div>`;
+let settingMdEds = {};
+function mountSettingMdEditors() {
+  settingMdEds = {};
+  document.querySelectorAll(".adm-md-mount").forEach((el) => {
+    const key = el.dataset.mdkey;
+    if (!key || el.dataset.mounted) return;
+    el.dataset.mounted = "1";
+    settingMdEds[key] = mdCreateEditor(el, {
+      initial: el.dataset.mdinitial || "",
+      maxlength: Number(el.dataset.mdmax) || 8000,
+      placeholder: el.dataset.mdplaceholder || "",
+      rows: 8,
+    });
+  });
+}
 /* 已迁至「公告」页签 / 已废弃的键：设置页不再展示（否则会掉进「其他」组重复出现）。
    cardhub_warning_* 已废弃：migration 0030 迁为推广条目 promo_cardhub_warning 并删除原键，
    保留在隐藏名单中兜底（迁移未执行前 DB 中仍有旧行）。
@@ -1139,13 +1164,17 @@ function renderSettings() {
         counter: (t) => `已配置 <b>${t.length}</b> 字`,
         placeholder: "", hint: "", saveText: "保存",
       };
+      /* MD 编辑器键（公告正文）：挂载点 + mountSettingMdEditors 统一挂载，保存经 onSaveSetting 特判取值 */
+      const bodyHtml = SETTING_MD_KEYS.has(s.key)
+        ? mdMountHTML(s.key, text, meta.placeholder, 8000)
+        : `<textarea class="inp adm-setting-ta" rows="7" data-act="inputSetting" data-key="${s.key}" placeholder="${meta.placeholder}">${esc(text)}</textarea>`;
       return `
     <div class="adm-setting adm-setting-block">
       <div class="adm-setting-info">
         <div class="adm-setting-key">${esc(s.key)}${SETTING_DESC[s.key] ? `<span class="help" data-tip="${esc(SETTING_DESC[s.key])}">?</span>` : ""}</div>
         <div class="adm-setting-meta">${meta.counter(text)} · 更新于 ${fmtTime(s.updated_at)}</div>
       </div>
-      <textarea class="inp adm-setting-ta" rows="7" data-act="inputSetting" data-key="${s.key}" placeholder="${meta.placeholder}">${esc(text)}</textarea>
+      ${bodyHtml}
       <div class="adm-setting-actions">
         <span class="adm-setting-hint">${meta.hint}</span>
         <button class="btn primary sm" data-act="saveSetting" data-key="${s.key}"><i data-icon="check"></i>${meta.saveText}</button>
@@ -1622,9 +1651,11 @@ async function onToggleSetting(key) {
 }
 
 async function onSaveSetting(key) {
+  /* MD 编辑器键（公告正文）：值在组件 handle 里，无 data-act="inputSetting" 元素 */
+  const mdEd = settingMdEds && settingMdEds[key];
   const input = document.querySelector(`[data-act="inputSetting"][data-key="${key}"]`);
-  if (!input) return;
-  let val = input.value.trim();
+  if (!input && !mdEd) return;
+  let val = mdEd ? mdEd.getValue().trim() : input.value.trim();
   // 尝试解析为数字/布尔，其余按字符串保存（后端 JSON.stringify）；模板类恒为字符串、列表类转数组、时间轴类转节点数组
   if (SETTING_TIMELINE_KEYS.has(key)) {
     val = input.value.split("\n")

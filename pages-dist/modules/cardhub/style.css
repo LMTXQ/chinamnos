@@ -1287,6 +1287,8 @@
   padding: 1px 5px;
   border-radius: var(--r-full);
 }
+/* markdown 字段（md.js 编辑器）校验错误标记：与 .inp.error 同款红框 */
+.ch-fg .md-input.error { border: 1px solid #e5484d; border-radius: 6px; }
 /* tags 类型字段（号码特征等）：chips 行 */
 .ch-tags-row {
   display: flex;

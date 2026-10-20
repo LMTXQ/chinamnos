@@ -165,7 +165,36 @@ export function mdToSafeHtml(src, opts) {
    onImage(editor)：工具栏「图片」按钮回调（缺省插入 ![图片](https://) 模板）；
    draftKey：localStorage 草稿键（自动加 chinamnos_md_draft_ 前缀，长文防丢）；
    返回 { getValue, setValue, focus, destroy }；容器 innerHTML 重建后需重新创建 */
+/* ── 编辑器组件样式：组件自带（任意页面引入即可用，不依赖具体页面的 css）。
+   tariff/style.css 内有一份同款定义（历史原因保留，规则一致无害重复） ── */
+let _editorCssDone = false;
+function ensureEditorCSS() {
+  if (_editorCssDone) return;
+  _editorCssDone = true;
+  const s = document.createElement("style");
+  s.setAttribute("data-md-editor-css", "");
+  s.textContent = `
+.md-editor { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
+.md-tools { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.md-tool {
+  min-width: 28px; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; cursor: pointer;
+  font-size: 12px; font-weight: 700; color: var(--sub); background: transparent;
+}
+.md-tool:hover { background: var(--surface); color: var(--acc); }
+.md-tool.active { background: color-mix(in oklab, var(--acc) 14%, transparent); color: var(--acc); }
+.md-tool-preview { margin-left: auto; }
+.md-input {
+  width: 100%; border: 0; outline: none; resize: vertical; padding: 10px 12px;
+  font: 13px/1.8 var(--font); color: var(--txt); background: var(--surface); min-height: 180px;
+}
+.md-preview { padding: 10px 12px; min-height: 120px; max-height: 420px; overflow: auto; border-bottom: 1px solid var(--line); }
+.md-foot { display: flex; align-items: center; justify-content: space-between; padding: 5px 12px; font-size: 11.5px; color: var(--sub); background: var(--surface-2); }
+.md-count { font-variant-numeric: tabular-nums; }`;
+  document.head.appendChild(s);
+}
+
 export function mdCreateEditor(container, opts = {}) {
+  ensureEditorCSS();
   const maxlen = Number(opts.maxlength) > 0 ? Number(opts.maxlength) : 10000;
   const draftKey = opts.draftKey ? "chinamnos_md_draft_" + opts.draftKey : "";
   let value = "";
@@ -184,7 +213,7 @@ export function mdCreateEditor(container, opts = {}) {
       `<button type="button" class="md-tool" data-md="${k}" title="${title}">${label}</button>`).join("")}
       <button type="button" class="md-tool md-tool-preview" data-md="preview" title="预览渲染效果">预览</button>
     </div>
-    <textarea class="md-input" rows="${opts.rows || 10}" maxlength="${maxlen}" placeholder="${escHtml(opts.placeholder || "支持 Markdown：标题 / 粗斜体 / 链接 / 列表 / 引用 / 表格 / 图片外链")}"></textarea>
+    <textarea class="md-input"${opts.inputId ? ` id="${escHtml(opts.inputId)}"` : ""} rows="${opts.rows || 10}" maxlength="${maxlen}" placeholder="${escHtml(opts.placeholder || "支持 Markdown：标题 / 粗斜体 / 链接 / 列表 / 引用 / 表格 / 图片外链")}"></textarea>
     <div class="md-preview" hidden></div>
     <div class="md-foot"><span class="md-count"></span><span class="md-hint">Markdown · 图片支持图床外链</span></div>`;
   container.appendChild(root);
