@@ -129,6 +129,49 @@ function openNoticeModal({ ns, title, bodyHtml, mode, checkboxText }) {
   });
 }
 
+/* ── 弹出日期门槛（schedule 可缺省 = 不限日期）：三类任一命中当天即弹（OR），全空 = 现有逻辑 ──
+   统一按北京时间（UTC+8）判定，避免访客本地时区不同导致"10 月 1 日"各人不一样 */
+function bjParts() {
+  const d = new Date(Date.now() + 8 * 3600e3);
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, day: d.getUTCDate(), dow: d.getUTCDay() }; // dow: 0=周日
+}
+function dateHit(schedule) {
+  if (!schedule || typeof schedule !== "object") return true;
+  const yearly = Array.isArray(schedule.yearly) ? schedule.yearly : [];
+  const monthly = Array.isArray(schedule.monthly) ? schedule.monthly : [];
+  const weekly = Array.isArray(schedule.weekly) ? schedule.weekly : [];
+  if (!yearly.length && !monthly.length && !weekly.length) return true; // 全空 = 不限日期
+  const { y, m, day, dow } = bjParts();
+  const dowN = dow === 0 ? 7 : dow; // 转 1=周一 … 7=周日
+  if (weekly.length && weekly.includes(dowN)) return true;
+  if (monthly.length) {
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate(); // 当月天数（闰月自动处理）
+    if (monthly.includes(day) || (monthly.includes("last") && day === lastDay)) return true;
+  }
+  if (yearly.length && yearly.some((s) => /^(\d{2})-(\d{2})$/.test(String(s)) && Number(String(s).slice(0, 2)) === m && Number(String(s).slice(3, 5)) === day)) return true;
+  return false;
+}
+
+/* ── 占位符（{{key}} → 值）：取值不随快照部署，前端会话首次访问向 Worker 拉一次（内存缓存）。
+   渲染前做纯文本替换，值随后续 mdToSafeHtml 转义管线（无注入面）；未定义的 {{xxx}} 保留原样 ── */
+let _phPromise = null;
+export function loadPlaceholders() {
+  if (!_phPromise) {
+    _phPromise = api.request("/api/promo-placeholders")
+      .then((r) => (r.ok && r.data && r.data.placeholders && typeof r.data.placeholders === "object") ? r.data.placeholders : {})
+      .catch(() => ({}));
+  }
+  return _phPromise;
+}
+export function applyPlaceholders(text, map) {
+  let s = String(text || "");
+  if (!s.includes("{{") || !map) return s;
+  for (const k of Object.keys(map)) {
+    s = s.split("{{" + k + "}}").join(String(map[k] == null ? "" : map[k]));
+  }
+  return s;
+}
+
 /* ── 实例一：全站公告（closable）──
    所有人每日首次进入弹；勾选「今日不再弹出」后当天不再弹（不勾直接关 = 刷新仍弹）。
    本次页面生命周期只处理一次（站内 hash 切换不重复弹；刷新重置） */
@@ -140,11 +183,13 @@ export function maybeSiteNotice() {
     const notices = await loadNotices();
     const n = notices.site_notice;
     if (!n || !n.enabled || !n.content) return;
+    if (!dateHit(n.schedule)) return; // 弹出日期门槛：非命中日不弹（防重规则不变）
     if (lsGet(LS_PREFIX + "site_notice_skip") === today()) return;
+    const ph = await loadPlaceholders();
     await openNoticeModal({
       ns: "site_notice",
       title: n.title || "站点公告",
-      bodyHtml: mdToSafeHtml(n.content),
+      bodyHtml: mdToSafeHtml(applyPlaceholders(n.content, ph)),
       mode: "closable",
       checkboxText: "今日不再弹出",
     });
@@ -208,10 +253,11 @@ async function maybePromoOne(p) {
     else if (rec && rec.d === today() && rec.v === p.version) return;
   } else if (lsGet(LS_PREFIX + ns + "_skip") === today()) return;
   _promotedInSession.add(p.id);
+  const ph = await loadPlaceholders();
   await openNoticeModal({
     ns,
     title: p.title || "推广",
-    bodyHtml: mdToSafeHtml(p.content),
+    bodyHtml: mdToSafeHtml(applyPlaceholders(p.content, ph)),
     mode: p.mode === "must" ? "must" : "closable",
     checkboxText: p.mode === "must" ? undefined : "今日不再弹出",
   });
@@ -247,6 +293,7 @@ function judgePromos() {
     const { curCarrier, curProv } = currentCarrierProv();
     for (const p of list) {
       if (!scopeMatch(p, curCarrier, curProv, undefined)) continue;
+      if (!dateHit(p.schedule)) continue; // 弹出日期门槛（三类 OR，北京时间）
       await maybePromoOne(p);
     }
   });
@@ -260,6 +307,7 @@ function judgePromosForModule(moduleId) {
     const { curCarrier, curProv } = currentCarrierProv();
     for (const p of list) {
       if (!scopeMatch(p, curCarrier, curProv, moduleId)) continue;
+      if (!dateHit(p.schedule)) continue; // 弹出日期门槛（三类 OR，北京时间）
       await maybePromoOne(p);
     }
   });

@@ -2,6 +2,7 @@ import type { Env } from '../common/env';
 import { ERR, fail, ok } from '../common/envelope';
 import { guard } from '../common/auth';
 import { audit } from '../common/audit';
+import { normalizeSchedule } from '../common/notices';
 
 /** 允许修改的设置项白名单（新增设置时同步扩展，前端 SETTING_DESC 补说明） */
 const ALLOWED_KEYS = new Set([
@@ -20,8 +21,10 @@ const ALLOWED_KEYS = new Set([
   'site_notice_enabled',
   'site_notice_title',
   'site_notice_content',
+  'site_notice_schedule',
   'promos',
   'promo_reswitch_enabled',
+  'promo_placeholders',
   'notification_retention_days',
 ]);
 
@@ -34,6 +37,8 @@ const DEFAULT_VALUES: Record<string, unknown> = {
   about_links: [], // 空数组 = 友情链接为空，关于页整个区块隐藏
   site_notice_title: '站点公告',
   site_notice_content: '',
+  site_notice_schedule: {}, // 公告弹出日期门槛（空对象 = 不限日期，走每日首访现有逻辑）
+  promo_placeholders: [], // 公告/推广正文 {{key}} 占位符取值：[{key,value}]（键名唯一小写 a-z0-9_）
   notification_retention_days: 30,
   promos: [], // 推广列表：[{id,enabled,title,content,version,mode,scope{carriers,provinces,modules}}]（空=无推广；modules 命中=仅进入对应模块时弹）
 };
@@ -56,13 +61,16 @@ export async function handleGetSettings(request: Request, env: Env): Promise<Res
 }
 
 /** 公告/推广类键：管理员（admin）亦可修改——2026-10-20 站长决策：全站公告与推广的日常运营
- *  对管理员开放，站长保留全部键的修改权；其余键（安全/准入/卡商推荐/关于页等）仍仅 owner */
+ *  对管理员开放（含辅助键：弹出日期门槛 site_notice_schedule、占位符值 promo_placeholders），
+ *  站长保留全部键的修改权；其余键（安全/准入/卡商推荐/关于页等）仍仅 owner */
 const ADMIN_EDITABLE_KEYS = new Set([
   'site_notice_enabled',
   'site_notice_title',
   'site_notice_content',
+  'site_notice_schedule',
   'promos',
   'promo_reswitch_enabled',
+  'promo_placeholders',
 ]);
 
 // PUT /api/admin/settings/:key：更新设置
@@ -202,6 +210,8 @@ export async function handleUpdateSetting(request: Request, env: Env, key: strin
             version: typeof o.version === 'number' && o.version > 0 ? o.version : now,
             mode: o.mode === 'must' ? 'must' : 'closable',
             scope: { carriers: normList(scopeRaw.carriers), provinces: normList(scopeRaw.provinces), modules: normList(scopeRaw.modules) },
+            // 弹出日期门槛（可缺省 = 不限日期；三类任一命中当天即弹，OR）
+            schedule: normalizeSchedule(o.schedule) ?? undefined,
           };
         })
         .filter(Boolean);
@@ -257,6 +267,45 @@ export async function handleUpdateSetting(request: Request, env: Env, key: strin
             field: key,
           });
         }
+      }
+      value = norm;
+    }
+    // 公告弹出日期门槛键：复用 normalizeSchedule（yearly MM-DD / monthly 1-31|last / weekly 1-7；
+    // 三类任一命中当天即弹 OR，全空/非法 = 存空对象 = 不限日期走现有逻辑）
+    else if (key === 'site_notice_schedule') {
+      const sched = normalizeSchedule(value);
+      value = sched ?? {};
+    }
+    // 占位符取值键：规范化为 [{key, value}]（键名小写 a-z0-9_ 1~20 位且不可重复，值 ≤200 字符纯文本；
+    // 数量不限——键名即唯一标识，重复直接拒绝保存）。值渲染时走 mdToSafeHtml 转义管线，无注入面
+    else if (key === 'promo_placeholders') {
+      let raw: unknown[] = [];
+      if (Array.isArray(value)) raw = value as unknown[];
+      else if (typeof value === 'string') raw = value.split('\n');
+      const norm: { key: string; value: string }[] = [];
+      const seen = new Set<string>();
+      for (const item of raw) {
+        let k = '', v = '';
+        if (item && typeof item === 'object') {
+          const o = item as Record<string, unknown>;
+          k = String(o.key ?? '');
+          v = String(o.value ?? '');
+        } else if (typeof item === 'string') {
+          const parts = item.split('|');
+          k = parts[0] ?? '';
+          v = parts.slice(1).join('|'); // 值本身可能含竖线：首个竖线后全部作为值
+        }
+        k = k.trim().toLowerCase();
+        v = v.trim().slice(0, 200);
+        if (!k) continue;
+        if (!/^[a-z0-9_]{1,20}$/.test(k)) {
+          return fail(ERR.VALIDATION_ERROR, `占位符键名「${k}」不合法：仅限小写字母/数字/下划线（1~20 位）`, 400, { field: key });
+        }
+        if (seen.has(k)) {
+          return fail(ERR.VALIDATION_ERROR, `占位符键名重复：「${k}」`, 400, { field: key });
+        }
+        seen.add(k);
+        norm.push({ key: k, value: v });
       }
       value = norm;
     }

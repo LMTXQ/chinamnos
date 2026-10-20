@@ -3,7 +3,7 @@ import { ERR, fail, ok } from './common/envelope';
 import { handleOptions, withCors } from './common/cors';
 import { cachedGet } from './common/cache';
 import { handleMeta, handleAboutTimeline, handleAboutThanks, handleAboutLinks } from './common/meta';
-import { handleNotices } from './common/notices';
+import { handleNotices, handlePromoPlaceholders } from './common/notices';
 import { handleNotificationsList, handleNotificationsRead, handleNotificationsDelete, handleNotificationsClearRead } from './common/notifications';
 import { hitLimit } from './common/ratelimit';
 import { TEMPLATES } from './mail/templates';
@@ -139,6 +139,8 @@ export default {
         resp = await cachedGet(request, ctx, 60, () => handleEmailPolicy(request, env)); // 邮箱域名白名单，60s
       } else if (p === '/api/notices' && m === 'GET') {
         resp = await cachedGet(request, ctx, 60, () => handleNotices(env)); // 边缘缓存 60s
+      } else if (p === '/api/promo-placeholders' && m === 'GET') {
+        resp = await cachedGet(request, ctx, 60, () => handlePromoPlaceholders(env)); // 公告/推广占位符取值，60s
       } else if (p === '/api/nav/links' && m === 'GET') {
         resp = await cachedGet(request, ctx, 60, () => handleNavLinks(request, env)); // 公开导航，60s
       } else if (p === '/api/nav/links' && m === 'POST') {

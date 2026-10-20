@@ -20,7 +20,7 @@ import { api } from "../../shell/api.js";
 import { adaptPost, viewFromCardhubRaw, renderListCard, renderDetailBody, relTime } from "../../shell/post-view.js";
 import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
-import { loadNotices, maybePromosOnSwitch, scopeMatch } from "../../shell/notice.js";
+import { loadNotices, loadPlaceholders, applyPlaceholders, maybePromosOnSwitch, scopeMatch } from "../../shell/notice.js";
 
 const $ = (id) => document.getElementById(id);
 const cache = {};
@@ -537,13 +537,13 @@ function ntcScopeFilter(list) {
   return list.filter((p) => scopeMatch(p, curCarrier, curProv, "tariff"));
 }
 
-function renderPromoList(pBody, list) {
+function renderPromoList(pBody, list, ph) {
   const shown = _ntcPromoFilter === "scope" ? ntcScopeFilter(list) : list;
   pBody.innerHTML = shown.length
     ? shown.map((p) => `
         <div style="border:1px solid rgba(128,128,128,.25);border-radius:8px;padding:12px;margin-top:10px">
           <h4 style="margin:0 0 8px">${esc(p.title || "推广")}</h4>
-          <div class="act-md">${mdToSafeHtml(p.content || "")}</div>
+          <div class="act-md">${mdToSafeHtml(applyPlaceholders(p.content || "", ph))}</div>
         </div>`).join("")
     : `<div class="empty" style="padding:16px;text-align:center">${_ntcPromoFilter === "scope" ? "当前范围内暂无推广（可切到「全部」查看）" : "暂无推广"}</div>`;
 }
@@ -554,9 +554,10 @@ async function renderNoticesView() {
   const nBody = $("ntcNoticeBody"), pBody = $("ntcPromosBody");
   if (!nBody || !pBody) return;
   const data = await loadNotices();
+  const ph = await loadPlaceholders(); // 占位符取值（不随快照，Worker 实时）
   const n = data && data.site_notice;
   nBody.innerHTML = (n && n.enabled && n.content)
-    ? `<h4 style="margin:0 0 8px">${esc(n.title || "站点公告")}</h4><div class="act-md">${mdToSafeHtml(n.content)}</div>`
+    ? `<h4 style="margin:0 0 8px">${esc(n.title || "站点公告")}</h4><div class="act-md">${mdToSafeHtml(applyPlaceholders(n.content, ph))}</div>`
     : `<div class="empty" style="padding:16px;text-align:center">当前没有公告</div>`;
   /* 推广列表：防御性过滤停用条目（与弹窗一致） */
   const list = ((data && Array.isArray(data.promos)) ? data.promos : []).filter((p) => p && p.enabled !== false);
@@ -568,11 +569,11 @@ async function renderNoticesView() {
       b.addEventListener("click", () => {
         _ntcPromoFilter = b.dataset.ntcf;
         chipBar.querySelectorAll("[data-ntcf]").forEach((x) => x.classList.toggle("active", x.dataset.ntcf === _ntcPromoFilter));
-        renderPromoList(pBody, list);
+        renderPromoList(pBody, list, ph);
       });
     });
   }
-  renderPromoList(pBody, list);
+  renderPromoList(pBody, list, ph);
 }
 
 function goProvince(code) {

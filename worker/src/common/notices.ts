@@ -13,6 +13,33 @@ import { ok } from './envelope';
 
 interface NoticeSettingRow { key: string; value_json: string; updated_at: number | null }
 
+/** 弹出日期门槛（可缺省 = 不限日期）：三类任一命中当天即弹（OR）；全空 = 走现有无门槛逻辑 */
+interface Schedule {
+  yearly: string[];   // 每年固定日 "MM-DD"
+  monthly: (number | 'last')[]; // 每月几号（1-31）或 "last"（每月最后一天）
+  weekly: number[];   // 每周几（1=周一 … 7=周日）
+}
+
+/** 规范化 schedule（设置端已校验，此处防御性过滤）；全空返回 undefined（= 不限日期）。
+ *  export 供 settings.ts 保存校验复用（单一实现） */
+export function normalizeSchedule(raw: unknown): Schedule | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const yearly = Array.isArray(o.yearly)
+    ? [...new Set(o.yearly.map((x) => String(x).trim()).filter((s) => /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(s)))]
+    : [];
+  const monthly = Array.isArray(o.monthly)
+    ? [...new Set(o.monthly
+      .map((x) => (x === 'last' ? 'last' : typeof x === 'number' ? x : typeof x === 'string' && /^\d+$/.test(x.trim()) ? Number(x.trim()) : NaN))
+      .filter((n) => n === 'last' || (Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 31)))]
+    : [];
+  const weekly = Array.isArray(o.weekly)
+    ? [...new Set(o.weekly.map((x) => Number(x)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 7))]
+    : [];
+  if (!yearly.length && !monthly.length && !weekly.length) return undefined;
+  return { yearly, monthly: monthly as (number | 'last')[], weekly };
+}
+
 interface PromoOut {
   id: string;
   version: number;
@@ -20,6 +47,7 @@ interface PromoOut {
   content: string;
   mode: 'closable' | 'must';
   scope: { carriers: string[]; provinces: string[]; modules: string[] };
+  schedule?: Schedule;
 }
 
 /** 规范化推广条目（设置端已校验，此处防御性过滤：仅输出 enabled 且内容非空的条目） */
@@ -45,15 +73,16 @@ function normalizePromos(raw: unknown, fallbackVersion: number): PromoOut[] {
         provinces: Array.isArray(scopeRaw.provinces) ? scopeRaw.provinces.map(String) : [],
         modules: Array.isArray(scopeRaw.modules) ? scopeRaw.modules.map(String) : [],
       },
+      schedule: normalizeSchedule(o.schedule),
     });
   }
   return out;
 }
 
 export async function handleNotices(env: Env): Promise<Response> {
-  // 一次取全部相关键（5 行），version 取 content 行 updated_at（null = 从未保存过，按 0）
+  // 一次取全部相关键（7 行），version 取 content 行 updated_at（null = 从未保存过，按 0）
   const keys = [
-    'site_notice_enabled', 'site_notice_title', 'site_notice_content',
+    'site_notice_enabled', 'site_notice_title', 'site_notice_content', 'site_notice_schedule',
     'promos', 'promo_reswitch_enabled',
   ];
   const placeholders = keys.map((_, i) => `?${i + 1}`).join(',');
@@ -74,6 +103,7 @@ export async function handleNotices(env: Env): Promise<Response> {
   const noticeEn = pick('site_notice_enabled');
   const noticeTitle = pick('site_notice_title');
   const noticeCt = pick('site_notice_content');
+  const noticeSched = pick('site_notice_schedule');
   const promosRaw = pick('promos');
   const reswitchRaw = pick('promo_reswitch_enabled');
 
@@ -86,6 +116,8 @@ export async function handleNotices(env: Env): Promise<Response> {
         version: noticeEnabled ? noticeCt.version : 0,
         title: typeof noticeTitle.value === 'string' && noticeTitle.value ? noticeTitle.value : '站点公告',
         content: noticeEnabled ? String(noticeCt.value) : '',
+        // 弹出日期门槛（可缺省 = 不限日期，走每日首访现有逻辑）；未启用公告时不返回内容
+        schedule: noticeEnabled ? normalizeSchedule(noticeSched.value) : undefined,
       },
       promos: normalizePromos(promosRaw.value, promosRaw.version),
       // 切换运营商/省份时重新弹推广（未保存过 = 默认开启）
@@ -93,4 +125,24 @@ export async function handleNotices(env: Env): Promise<Response> {
     },
     { 'Cache-Control': 'public, max-age=60' },
   );
+}
+
+// GET /api/promo-placeholders：公告/推广正文 {{key}} 占位符取值（anon，边缘缓存 60s）。
+// 值不随快照部署——前端每次会话首次访问向 Worker 拉一次，站长改值保存即生效。
+// 仅暴露占位符值本身（站长配置的公开内容）；值在前端渲染时走 mdToSafeHtml 转义管线，无注入面
+export async function handlePromoPlaceholders(env: Env): Promise<Response> {
+  const row = await env.DB.prepare(
+    `SELECT value_json FROM settings WHERE key = 'promo_placeholders'`,
+  ).first<{ value_json: string }>();
+  let list: unknown[] = [];
+  try { const v = row?.value_json ? JSON.parse(row.value_json) : null; if (Array.isArray(v)) list = v; } catch { /* 脏数据容错为空 */ }
+  const map: Record<string, string> = {};
+  for (const it of list) {
+    if (!it || typeof it !== 'object') continue;
+    const o = it as Record<string, unknown>;
+    const k = typeof o.key === 'string' ? o.key.trim().toLowerCase() : '';
+    if (!k || k in map) continue;
+    map[k] = typeof o.value === 'string' ? o.value : '';
+  }
+  return ok({ placeholders: map }, { 'Cache-Control': 'public, max-age=60' });
 }
