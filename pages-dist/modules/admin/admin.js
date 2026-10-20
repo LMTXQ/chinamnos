@@ -1067,6 +1067,7 @@ const SETTING_DESC = {
   mail_daily_cap: "邮件系统每日发送总量上限，超出后当日暂停发送验证类邮件。",
   site_name: "站点名称，用于邮件标题与页面展示。",
   notification_retention_days: "站内通知（铃铛）保留天数：已读通知超过该天数后，在本人下次打开通知面板时自动清除；未读通知不受影响、永久保留。整数 1~365，默认 30。保存后即时生效（无需等前端部署）。",
+  promos: "推广列表（与全站公告共用弹窗体系，原「推广」页签已并入「公告」页签，此处仅存数据不再展示）。数据结构 [{id,enabled,title,content,version,mode,scope{carriers,provinces,modules}}]：mode=closable 可关闭每日一次 / must 强制同意；scope 三维度全空 = 全站任意页面，modules 非空 = 仅进入对应模块（资费中心/跳蚤市集/工单中心/工具宝库）时判定弹出。请勿在设置页直接编辑本键（会绕过公告页签编辑器的规范化校验），一律在「公告」页签操作。保存后 Worker 即时生效，弹窗配置随下一轮采集部署。",
   cardhub_trade_merchants: "圈内卡商担保的推荐卡商列表——发帖人发布/编辑帖子勾选「圈内卡商担保」时，从此列表搜索并选择担保人（每帖最多 3 位），帖子详情页展示所选担保人及其热度统计。每行一条，格式：卡商名 | 站内用户UID（可留空） | 一句话介绍（可留空）。条数不限；卡商名必填（≤40 字）且同列表内不可重复——名称是担保人关联与统计标识，改名会使旧帖与该条目的统计关联断开（旧帖仍显示发帖时名称）。绑定 UID 后候选与详情显示头像与「站内」标识、点击弹用户资料卡（介绍随卡片展示）；UID 留空即纯文本卡商，同样可被选为担保人。绑定 UID 必须是站内 active 用户，否则拒绝保存。全部清空则发帖时无候选可选。推荐仅作参考，站点不为所推荐人承担保证。热度统计随快照更新（约 0-8 小时），Worker 兜底接口即时；其余展示在下一轮采集部署后生效。仅站长可修改。",
   ticket_apply_guarantor: "「毛遂自荐 · 申请成为卡商担保人」工单的申请模板。跳蚤市集「毛遂自荐」按钮会把此模板预填进工单表单（用户可修改后提交）。留空则使用系统内置的通用申请框架。模板建议控制在 500 字内（工单正文上限）。前端在下一轮采集部署后生效。仅站长可修改。",
   email_domain_whitelist: "注册/登录邮箱域名白名单（前后台双重校验）。逗号分隔域名，如 qq.com,163.com,gmail.com,foxmail.com。留空 = 使用系统内置常见邮箱列表（QQ/163/126/Gmail/Outlook 等约 20 个）。⚠ 后端校验保存后立即生效——请确保你自己的邮箱域名在列表内，否则将无法登录！前端注册预校验提示走 Pages 静态快照，在下一轮采集部署后更新。仅站长可修改。",
@@ -1084,8 +1085,9 @@ const SETTING_DESC = {
 const SETTING_TEMPLATE_KEYS = new Set(["ticket_apply_guarantor", "site_notice_content", "site_notice_title"]);
 /* 已迁至「公告」页签 / 已废弃的键：设置页不再展示（否则会掉进「其他」组重复出现）。
    cardhub_warning_* 已废弃：migration 0030 迁为推广条目 promo_cardhub_warning 并删除原键，
-   保留在隐藏名单中兜底（迁移未执行前 DB 中仍有旧行） */
-const SETTING_HIDDEN_KEYS = new Set(["site_notice_enabled", "site_notice_title", "site_notice_content", "cardhub_warning_enabled", "cardhub_warning_content"]);
+   保留在隐藏名单中兜底（迁移未执行前 DB 中仍有旧行）。
+   promos 已迁「公告」页签（推广列表可视化编辑器整存整取），设置页隐藏避免通用输入框直改复杂对象绕过校验 */
+const SETTING_HIDDEN_KEYS = new Set(["site_notice_enabled", "site_notice_title", "site_notice_content", "cardhub_warning_enabled", "cardhub_warning_content", "promos"]);
 /* 多行编辑块的 per-key 文案（计数说明 / placeholder / 提示 / 保存按钮文字） */
 const SETTING_BLOCK_META = {
   ticket_apply_guarantor: {
