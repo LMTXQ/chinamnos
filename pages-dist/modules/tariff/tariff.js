@@ -22,7 +22,7 @@ import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
 import { loadNotices, loadPlaceholders, applyPlaceholders, maybePromosOnSwitch, scopeMatch } from "../../shell/notice.js";
 import { shareLink } from "../../shell/share.js";
-import { initCompareBridge, compareOnShow, compareOnHide, favsOnShow } from "./compare.js?v=20261021q";
+import { initCompareBridge, compareOnShow, compareOnHide, favsOnShow } from "./compare.js?v=20261021r";
 
 const $ = (id) => document.getElementById(id);
 const cache = {};
@@ -815,6 +815,7 @@ const ACT_MD_MAX = 10000;  // 攻略正文上限（与后端 MD_MAX 对齐）
 const ACT_DRAFT_KEYS = { official: "act_official", guide: "act_guide" };
 const actState = {
   items: [], mine: [], favItems: [], favLoaded: false, panelOpen: false, mode: "official", filter: "", q: "", scope: "", editor: null, loadFailed: false,
+  genAt: 0,   // 静态快照 generated_at（秒）：mine「已展示」判定基准（0=未知，走列表兜底判定）
   form: { title: "", url: "", scope: "prov", descr: "", ends: "", qr: null, allCarriers: false, content: "", anon: false },
 };
 
@@ -862,16 +863,19 @@ async function actTabRefresh() {
   ]);
   if (actStatic && Array.isArray(actStatic.items)) {
     actState.items = actStatic.items.filter((x) => !x.province || x.province === provName);
+    actState.genAt = Date.parse(actStatic.generated_at) || 0;   // ISO 字符串 → 毫秒，与 D1 reviewed_at 同单位
     actState.mine = (actApi && actApi.ok) ? (actApi.data.mine || []) : [];
     actState.loadFailed = false;
   } else if (actApi && actApi.ok) {
     actState.items = actApi.data.items || [];
+    actState.genAt = 0;   // Worker 实时源：列表即已展示全集，判定走列表兜底
     actState.mine = actApi.data.mine || [];
     actState.loadFailed = false;
   } else {
     /* 双源皆败（静态拉取失败且未登录/接口失败）：必须清空陈旧条目——否则切省后
        标题已是新省、列表残留旧省数据，用户看到「标题变了数据没变」的错位 */
     actState.items = [];
+    actState.genAt = 0;
     actState.loadFailed = true;
   }
   actState.favItems = (fr && fr.ok) ? (fr.data.items || []) : [];
@@ -1184,8 +1188,19 @@ function actRenderBody() {
   const provName = chProvName();
   const brand = (CARRIER_BRAND[currentCarrier] || {}).name || "";
   const guide = actState.mode === "guide";
+  /* mine「已展示」判定：审核时间 ≤ 快照生成时间 → 该轮烘焙已含此条（服务端只烘焙 open 条目，
+     与查看时所在运营商/省无关）；genAt=0（Worker 实时源/未知）回退「当前列表可见」兜底；
+     reviewed_at 缺省按已展示（历史 open 条目必然早已烘焙） */
+  const mineShown = (m) => {
+    if ((m.status || "pending") !== "open") return false;
+    const rev = Number(m.reviewed_at) || 0;
+    if (actState.genAt && rev <= actState.genAt) return true;
+    return (actState.items || []).some((x) => String(x.id) === String(m.id));
+  };
   /* 我的投稿三态区：默认折叠，点击折叠头展开（actState.mineOpen 记忆展开态） */
-  const mineSt = (st) => st === "open" ? '<span class="act-mine-st ok">已通过 · 待展示</span>'
+  const mineSt = (st, shown) => st === "open" ? (shown
+    ? '<span class="act-mine-st ok" title="该投稿已出现在站点展示列表中">已通过 · 已展示</span>'
+    : '<span class="act-mine-st ok" title="已通过，等待随下一轮站点数据更新展示（约 0-8 小时）">已通过 · 待展示</span>')
     : st === "rejected" ? '<span class="act-mine-st no">未通过</span>'
     : '<span class="act-mine-st pend">审核中</span>';
   const mineOpen = !!actState.mineOpen;
@@ -1202,10 +1217,11 @@ function actRenderBody() {
         <span class="act-mode-badge sm ${m.mode === "guide" ? "guide" : "official"}">${m.mode === "guide" ? "攻略" : "官方"}</span>
         <span class="act-badge ${m.province ? "act-prov" : "act-nat"}">${m.province ? esc(m.province) : "全国"}</span>
         <span class="act-mine-title">${esc(m.title)}</span>
-        ${mineSt(st)}
+        ${mineSt(st, mineShown(m))}
         ${st === "pending" ? `<button type="button" class="btn ghost sm" data-act="actWithdraw" data-id="${esc(m.id)}">撤回</button>` : ""}
         ${st !== "open" ? `<button type="button" class="btn ghost sm" data-act="actEdit" data-id="${esc(m.id)}">编辑</button>` : ""}
         ${st === "rejected" ? `<button type="button" class="btn ghost sm" data-act="actMineDel" data-id="${esc(m.id)}">删除</button>` : ""}
+        ${st === "open" ? `<button type="button" class="btn ghost sm" data-act="actRetireReq" data-id="${esc(m.id)}" data-title="${esc(m.title)}">申请撤回</button>` : ""}
         ${st === "rejected" && m.reject_reason ? `<span class="act-mine-reason">驳回原因：${esc(m.reject_reason)}</span>` : ""}
       </div>`;
       }).join("")}</div>` : ""}
@@ -1417,6 +1433,8 @@ function actOnBodyClick(e) {
       toast(r.ok ? "已撤回" : (r.error || "撤回失败"));
       if (r.ok) actTabRefreshAndRender();
     });
+  } else if (a === "actRetireReq") {
+    actRetireReq(actEl.dataset.id, actEl.dataset.title);
   } else if (a === "actMineDel") {
     const id = actEl.dataset.id;
     if (!confirm("确定删除这条被驳回的投稿？删除后不可恢复。")) return;
@@ -1471,6 +1489,7 @@ function actOnBodyClick(e) {
 const CHAT_TYPES = ["论坛", "QQ群", "微信群", "贴吧", "纸飞机", "其他"];
 const chatState = {
   items: [], mine: [], panelOpen: false, q: "", typeFilter: "", scope: "", loadFailed: false,
+  genAt: 0,   // 静态快照 generated_at（秒）：mine「已展示」判定基准（0=未知，走列表兜底判定）
   form: { type: "QQ群", scope: "prov", title: "", url: "", chatId: "", descr: "", anon: false, qr: null, proof: null },
 };
 
@@ -1494,15 +1513,18 @@ async function chatTabRefresh() {
   ]);
   if (chatStatic && Array.isArray(chatStatic.items)) {
     chatState.items = chatStatic.items; // 缓存 carrier 全量，省过滤统一在 chatFilteredItems（切省零网络）
+    chatState.genAt = Date.parse(chatStatic.generated_at) || 0;   // ISO 字符串 → 毫秒，与 D1 reviewed_at 同单位
     chatState.mine = (chatApi && chatApi.ok) ? (chatApi.data.mine || []) : [];
     chatState.loadFailed = false;
   } else if (chatApi && chatApi.ok) {
     chatState.items = chatApi.data.items || [];
+    chatState.genAt = 0;   // Worker 实时源：判定走列表兜底
     chatState.mine = chatApi.data.mine || [];
     chatState.loadFailed = false;
   } else {
     /* 双源皆败：清空陈旧条目（同情报酒馆，防「标题新省、列表旧省」错位） */
     chatState.items = [];
+    chatState.genAt = 0;
     chatState.loadFailed = true;
   }
 }
@@ -1542,6 +1564,24 @@ function chatEditMine(id) {
 function chatRenderIfActive() {
   const el = $("view-chat");
   if (el && el.classList.contains("active")) chatRenderBody();
+}
+
+/* 我的投稿「申请撤回」：已展示（open）的投稿不可自删，走工单系统申请管理组核实下架
+   （机制同唠嗑聚落 chatRetireReq：sessionStorage 预填 + 跳工单中心） */
+function actRetireReq(id, title) {
+  const t = String(title || "");
+  const okGo = confirm(`将前往工单中心申请撤回已展示的投稿「${t}」，由管理组核实后下架。继续？`);
+  if (!okGo) return;
+  try {
+    sessionStorage.setItem("chinamnos_ticket_prefill", JSON.stringify({
+      category: "其他",
+      source: "tariff",
+      title: `申请撤回投稿：${t}`.slice(0, 60),
+      content: `投稿标题：${t}\n投稿编号：${id}\n申请类型：撤回我在情报酒馆的投稿（已通过展示）\n\n撤回原因：\n`,
+      banner: "已带入投稿撤回申请预设信息（来自情报酒馆我的投稿），请核对补充后提交",
+    }));
+  } catch { /* sessionStorage 不可用时跳转后手填 */ }
+  Shell.navigate("/ticket");
 }
 
 /* 我的收录「申请撤回」：已展示（open）的收录不可自删，走工单系统申请管理组核实下架
@@ -1629,7 +1669,15 @@ function chatRenderBody() {
   const provName = chProvName();
   const brand = (CARRIER_BRAND[currentCarrier] || {}).shortName || "";
   /* 我的收录三态区（与情报酒馆同款三态；默认折叠，点击展开） */
-  const chatMineSt = (st) => st === "open" ? '<span class="act-mine-st ok">已通过 · 待展示</span>'
+  const chatShown = (m) => {
+    if ((m.status || "pending") !== "open") return false;
+    const rev = Number(m.reviewed_at) || 0;
+    if (chatState.genAt && rev <= chatState.genAt) return true;
+    return (chatState.items || []).some((x) => String(x.id) === String(m.id));
+  };
+  const chatMineSt = (st, shown) => st === "open" ? (shown
+    ? '<span class="act-mine-st ok" title="该收录已出现在站点展示列表中">已通过 · 已展示</span>'
+    : '<span class="act-mine-st ok" title="已通过，等待随下一轮站点数据更新展示（约 0-8 小时）">已通过 · 待展示</span>')
     : st === "rejected" ? '<span class="act-mine-st no">未通过</span>'
     : '<span class="act-mine-st pend">审核中</span>';
   const chatMineOpen = !!chatState.mineOpen;
@@ -1645,7 +1693,7 @@ function chatRenderBody() {
       <div class="act-mine-row">
         <span class="act-mine-badge">${esc(m.chat_type || "其他")}</span>
         <span class="act-mine-title">${esc(m.title)}</span>
-        ${chatMineSt(st)}
+        ${chatMineSt(st, chatShown(m))}
         ${st === "pending" ? `<button type="button" class="btn ghost sm" data-act="chatWithdraw" data-id="${esc(m.id)}">撤回</button>` : ""}
         ${st !== "open" ? `<button type="button" class="btn ghost sm" data-act="chatEdit" data-id="${esc(m.id)}">编辑</button>` : ""}
         ${st === "rejected" ? `<button type="button" class="btn ghost sm" data-act="chatMineDel" data-id="${esc(m.id)}">删除</button>` : ""}
@@ -4697,7 +4745,7 @@ function annSanitize(html, atts) {
 
 function annItemHTML(a) {
   const nat = !a.province;
-  const date = String(a.date || "").slice(5); // 2026-10-12 → 10-12
+  const date = String(a.date || ""); // 2026-10-12 完整显示（含年份，跨年公告不歧义）
   const att = (a.attachments || []).length;
   return `
   <div class="ann-item" data-id="${esc(a.id || "")}">
