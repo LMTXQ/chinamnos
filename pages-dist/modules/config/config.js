@@ -1854,15 +1854,15 @@ Shell.registerPage({
       <h2 class="panel-title"><span class="p-icon other"><i data-icon="box"></i></span>其他配置</h2>
       <div class="f-row">
         <div class="fg"><label>变更日志保留天数<span class="help" data-tip="变更日志(changelog)的保留天数。超过此天数的日志条目将在每次采集时自动清理。值越大历史记录越全，但存储占用也越大。">?</span></label><input type="number" id="retentionDays" value="30" min="1" max="365"></div>
-        <div class="fg"><label>公告保留·移动<span class="help" data-tip="移动公告按日期保留的天数，过期条目写盘时丢弃。窗口越窄 announce.json 体积越小，但历史公告不可回看。">?</span></label><input type="number" id="annRetentionDaysCmcc" value="90" min="7" max="730"></div>
-        <div class="fg"><label>公告保留·电信<span class="help" data-tip="电信公告按日期保留的天数，过期条目写盘时丢弃。">?</span></label><input type="number" id="annRetentionDaysCtcc" value="90" min="7" max="730"></div>
-        <div class="fg"><label>公告保留·联通<span class="help" data-tip="联通公告按日期保留的天数，过期条目写盘时丢弃。">?</span></label><input type="number" id="annRetentionDaysCucc" value="90" min="7" max="730"></div>
-        <div class="fg"><label>公告保留·广电<span class="help" data-tip="广电公告按日期保留的天数。广电为全网单源且发布频率低，若 90 天窗口内条目过少，可放宽此项（如 365）以保留更多历史公告。">?</span></label><input type="number" id="annRetentionDaysCbn" value="90" min="7" max="730"></div>
+        <div class="fg"><label>公告全国判定阈值<span class="help" data-tip="联通混合源：同一条公告出现在 ≥N 个省的列表中即判定为全国公告。">?</span></label><input type="number" id="annNationalThreshold" value="5" min="2" max="31"></div>
         <div class="fg"><label>公告抓取·移动<span class="help" data-tip="移动为 30 省各自独立列表页（静态 JSON 直读）：每省各保留最新 N 条，合并跨省去重后入库。值越大单省覆盖越久，采集耗时与 announce.json 体积相应增大。">?</span></label><input type="number" id="annPerSourceFetchCmcc" value="15" min="1" max="100"></div>
         <div class="fg"><label>公告抓取·电信<span class="help" data-tip="电信为 31 省各自独立列表页：每省各保留最新 N 条，合并跨省去重后入库。">?</span></label><input type="number" id="annPerSourceFetchCtcc" value="15" min="1" max="100"></div>
         <div class="fg"><label>公告抓取·联通<span class="help" data-tip="联通为 31 省共用一个 POST 混合源：合并跨省去重后【整体】保留 N 条，量纲与移动/电信的每省 N 条不同。值太小会把绝大多数省级公告截掉（15 条时仅剩最近几天的全国性公告），建议 ≥100。">?</span></label><input type="number" id="annPerSourceFetchCucc" value="200" min="10" max="500"></div>
         <div class="fg"><label>公告抓取·广电<span class="help" data-tip="广电为全网单源（服务端忽略省份/类型参数）：整体保留最新 N 条。">?</span></label><input type="number" id="annPerSourceFetchCbn" value="15" min="1" max="100"></div>
-        <div class="fg"><label>公告全国判定阈值<span class="help" data-tip="联通混合源：同一条公告出现在 ≥N 个省的列表中即判定为全国公告。">?</span></label><input type="number" id="annNationalThreshold" value="5" min="2" max="31"></div>
+        <div class="fg"><label>公告保留·移动<span class="help" data-tip="移动公告按日期保留的天数，过期条目写盘时丢弃。窗口越窄 announce.json 体积越小，但历史公告不可回看。">?</span></label><input type="number" id="annRetentionDaysCmcc" value="90" min="7" max="730"></div>
+        <div class="fg"><label>公告保留·电信<span class="help" data-tip="电信公告按日期保留的天数，过期条目写盘时丢弃。">?</span></label><input type="number" id="annRetentionDaysCtcc" value="90" min="7" max="730"></div>
+        <div class="fg"><label>公告保留·联通<span class="help" data-tip="联通公告按日期保留的天数，过期条目写盘时丢弃。">?</span></label><input type="number" id="annRetentionDaysCucc" value="90" min="7" max="730"></div>
+        <div class="fg"><label>公告保留·广电<span class="help" data-tip="广电公告按日期保留的天数。广电为全网单源且发布频率低，若 90 天窗口内条目过少，可放宽此项（如 365）以保留更多历史公告。">?</span></label><input type="number" id="annRetentionDaysCbn" value="90" min="7" max="730"></div>
         <div class="fg"><label>Schema 版本</label><input type="text" id="schemaVersion" value="4"></div>
       </div>
       <div class="cfg-hr"></div>
