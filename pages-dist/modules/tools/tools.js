@@ -5,7 +5,7 @@
      汇总」等新导航页只需新集合值 + 复用本模块渲染逻辑
    ▸ 浏览=所有人（仅 open）；提交=登录用户（pending ≤5 + 限流 3/h）
    ▸ 审核/管理=仅站长（管理中心「觅珍集库」Tab）
-   ▸ 特殊站点：站长在管理后台标记 featured → 页面顶部「站长精选」
+   ▸ 特殊站点：站长在管理后台标记 featured → 页面顶部「精选推荐」
      高亮区独立展示（随导航数据烘焙下发，不与常规分组重复出现）
    ═══════════════════════════════════════════════════════════════ */
 "use strict";
@@ -84,7 +84,7 @@ function renderHero() {
     ? `<button type="button" class="btn primary" data-act="openSubmit"><i data-icon="plus"></i>提交站点</button>`
     : `<button type="button" class="btn ghost" data-act="goLogin"><i data-icon="user"></i>登录后可提交</button>`;
   mountIcons(el);
-  /* 统计条：收录总量 / 分组数 / 站长精选数（有精选才显示第三枚） */
+  /* 统计条：收录总量 / 分组数 / 精选推荐数（有精选才显示第三枚） */
   const st = $("toolsStats");
   if (!st) return;
   const featN = S.items.filter((it) => it.featured).length;
@@ -124,7 +124,7 @@ function renderFeatured() {
   const more = items.length - FEATURED_PREVIEW;
   el.innerHTML = `
     <section class="tl-featured">
-      <h2 class="tl-sec-title"><i data-icon="gem"></i>站长精选<span class="tl-sec-tag">特殊站点</span><span class="tl-group-n">${items.length}</span></h2>
+      <h2 class="tl-sec-title"><i data-icon="gem"></i>精选推荐<span class="tl-sec-tag">特殊站点</span><span class="tl-group-n">${items.length}</span></h2>
       <div class="tl-featured-grid">${shown.map((it, i) => cardHTML(it, `--i:${Math.min(i, 10)}`)).join("")}</div>
       ${more > 0 ? `<button type="button" class="tl-featured-more" data-act="toggleFeatured">${S.featuredExpanded ? "收起精选" : `展开全部精选（还有 ${more} 个）`}</button>` : ""}
     </section>`;

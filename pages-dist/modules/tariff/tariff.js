@@ -22,6 +22,7 @@ import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
 import { loadNotices, loadPlaceholders, applyPlaceholders, maybePromosOnSwitch, scopeMatch } from "../../shell/notice.js";
 import { shareLink } from "../../shell/share.js";
+import { initCompareBridge, compareOnShow, compareOnHide, favsOnShow } from "./compare.js?v=20261021q";
 
 const $ = (id) => document.getElementById(id);
 const cache = {};
@@ -458,6 +459,30 @@ function loadSnapshot(code) {
   return loadJson(`snapshots/snapshot_${code}.json`);
 }
 
+/* 跨运营商快照加载（资费对比/我的收藏用）：同 cache 层（key=carrier:path），
+   当前运营商+省直接命中现有缓存零请求；失败由调用方处理（列显示重试/不标注） */
+function loadSnapFor(carrier, provCode) {
+  const path = `snapshots/snapshot_${provCode}.json`;
+  const ck = carrier + ":" + path;
+  if (cache[ck]) return Promise.resolve(cache[ck]);
+  return fetchTimeout(`./data/${carrier}/${path}`, { cache: "no-store" })
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(j => { cache[ck] = j; return j; });
+}
+
+/* 收藏移除（我的收藏页用）：直接删桶内记录并落盘刷新徽章；空桶连带清理（防残留空省桶被误判"有收藏"） */
+function removeFavBy(carrier, provCode, id) {
+  const cb = RAW_FAVS[carrier];
+  if (!cb) return;
+  const pb = cb[provCode];
+  if (!pb || !Object.prototype.hasOwnProperty.call(pb, String(id))) return;
+  delete pb[String(id)];
+  if (!Object.keys(pb).length) delete cb[provCode];
+  if (!Object.keys(cb).length) delete RAW_FAVS[carrier];
+  saveFavs();
+  refreshFavBadges();
+}
+
 function loadChangelog(code) {
   // 省份无变更日志文件（如广电部分省）时按空记录处理 → 界面显示「暂无变更记录」
   return loadJson(`changelogs/changelog_${code}.json`).catch(() => ({ logs: [] }));
@@ -516,16 +541,21 @@ function goTab(v) {
 }
 
 function onTabChange(v) {
+  if (v !== "compare") compareOnHide();   // 离开对比视图：关闭残留弹层（fixed 遮罩不随视图 display:none 消失）
   document.querySelectorAll("#tariffRoot .view").forEach(x => x.classList.remove("active"));
   const viewEl = $("view-" + v);
   if (!viewEl) return;
   viewEl.classList.add("active");
-  if (TAB_SHOWN[v]) return;
+  /* compare/favs 豁免 TAB_SHOWN：每次进入都重渲（收藏列表需即时反映新增/删除；
+     compare 状态存模块级变量，重渲不丢勾选与省选择） */
+  if (TAB_SHOWN[v] && v !== "compare" && v !== "favs") return;
   TAB_SHOWN[v] = true;
   if (v === "overview") renderOverview();
   else if (v.startsWith("t1_")) renderList(v.slice(3));
   else if (v === "changelog") renderChangelog();
   else if (v === "monitor") renderMonitor();
+  else if (v === "compare") compareOnShow();
+  else if (v === "favs") favsOnShow();
   else if (v === "cardhub") { chTabRefresh().then(() => { if (chState.available) chRenderBody(); }); }
   else if (v === "acts") { actTabRefresh(true).then(actRenderBody); }
   else if (v === "announce") { annTabRefresh().then(annRenderBody); }
@@ -2743,7 +2773,16 @@ function toggleFavById(id, it) {
   } else {
     let p = "";
     try { p = it ? (repFields(it)["资费标准"] || "") : ""; } catch {}
-    pb[k] = { n: it ? it.name : "", p, t: Date.now() };
+    /* f = 完整字段快照：收藏的下架条目日后可全字段参与资费对比（旧记录无 f 自动降级）。
+       分类名（type1/type2 → 归属/资费类型，如"个人资费·加装包"）不在 fields 里，
+       源站用编码表达——收藏时补全进 f，否则收藏详情会缺分类信息 */
+    let f = it ? Object.assign({}, repFields(it) || {}) : undefined;
+    if (f && it && !f["资费类型"]) {
+      const catName = [TYPE1_MAP[it.type1], TYPE2_MAP[it.type2]].filter(Boolean).join("·");
+      if (catName) f["资费类型"] = catName;
+    }
+    /* a = 页签码（tariff_attr）：收藏卡片分享深链 plan_ 需要（缺省回退 "1"） */
+    pb[k] = { n: it ? it.name : "", p, t: Date.now(), f, a: it ? (it.tariff_attr || "1") : undefined };
   }
   saveFavs();
   refreshFavBadges();
@@ -4082,6 +4121,27 @@ function initTariff() {
   initProvListeners();
   initSidebar();
   loadFavs();
+  initCompareBridge({
+    provCode: getProvCode,
+    provName,
+    provList: () => (STATS && STATS.provinces ? STATS.provinces : []),
+    carrierName: (c) => (CARRIER_BRAND[c] || {}).name || c,
+    currentCarrier: () => currentCarrier,
+    provPicker: (container) => {
+      /* 顶栏同款省份选择组件（资费对比页接入，与 #gProv 同组件同交互） */
+      buildProvPicker(container);
+      const provs = STATS && STATS.provinces ? STATS.provinces : [];
+      const defCode = STATS && STATS.default_province ? STATS.default_province : "hun";
+      container.setOptions(provs, provs.some(p => p.code === getProvCode()) ? getProvCode() : (provs.some(p => p.code === defCode) ? defCode : (provs.length ? provs[0].code : "")));
+    },
+    loadSnapFor,
+    cacheDrop: (ck) => { delete cache[ck]; },   // 对比视图切省时释放旧省快照（23MB 级/省）
+    areaCn,
+    goTab,
+    ensureBoot: ensureTariffBootstrapped,
+    favRaw: () => RAW_FAVS,
+    removeFav: removeFavBy,
+  });
   $("refreshBtn").addEventListener("click", doCheck);
 
   navTabs = new Tabs($("mainNav"), onTabChange);
@@ -4123,7 +4183,7 @@ function initTariff() {
   window.__cmnosShareSite = () => shareLink({ title: "ChinaMNOs 讯览台", text: "全网资费实时面板", hash: "" });
 
   var raw = (location.hash || "").replace("#", "").trim();
-  var staticTabs = ["overview","changelog","announce","monitor","cardhub","acts","chat","notices","about"];
+  var staticTabs = ["overview","changelog","announce","monitor","compare","favs","cardhub","acts","chat","notices","about"];
   if (staticTabs.includes(raw)) {
     goTab(raw);
     if (raw !== "overview") ensureTariffBootstrapped();   // 子菜单直链：页面级快照引导（顶栏状态/运营商切换/省份选择器/动态页签）
@@ -4835,6 +4895,9 @@ Shell.registerPage({
       <button type="button" class="nav-item" data-view="changelog"><div class="nav-icon"><i data-icon="list"></i></div><span>变更日志</span></button>
       <button type="button" class="nav-item" data-view="monitor"><div class="nav-icon"><i data-icon="radar"></i></div><span>采集监控</span></button>
       <div class="sidebar-divider"></div>
+      <button type="button" class="nav-item" data-view="compare"><div class="nav-icon"><i data-icon="scale"></i></div><span>资费对比</span></button>
+      <button type="button" class="nav-item" data-view="favs"><div class="nav-icon"><i data-icon="star"></i></div><span>我的收藏</span></button>
+      <div class="sidebar-divider"></div>
       <button type="button" class="nav-item" data-view="cardhub" hidden><div class="nav-icon"><i data-icon="box"></i></div><span>跳蚤市集</span></button>
       <button type="button" class="nav-item" data-view="acts"><div class="nav-icon"><i data-icon="trendingUp"></i></div><span>情报酒馆</span></button>
       <button type="button" class="nav-item" data-view="about"><div class="nav-icon"><i data-icon="info"></i></div><span>关于</span></button>
@@ -4929,6 +4992,8 @@ Shell.registerPage({
     <section id="view-acts" class="view">
       <div id="actTabBody"><div class="empty" style="padding:40px;text-align:center">加载中…</div></div>
     </section>
+    <section id="view-compare" class="view"></section>
+    <section id="view-favs" class="view"></section>
     <section id="view-chat" class="view">
       <div id="chatTabBody"><div class="empty" style="padding:40px;text-align:center">加载中…</div></div>
     </section>

@@ -458,7 +458,7 @@ function renderNav() {
           <label>简介<input class="inp" id="navEDescr" maxlength="80" value="${esc(it.descr || "")}"></label>
           <label>分组<input class="inp" id="navEGroup" maxlength="20" value="${esc(it.group_name || "")}"></label>
           <label>排序（小在前）<input class="inp" id="navESort" type="number" step="1" value="${Number(it.sort) || 100}"></label>
-          <label style="flex-direction:row;align-items:center;gap:8px">特殊站点<input type="checkbox" id="navEFeatured" ${it.featured ? "checked" : ""} style="width:16px;height:16px"><span class="opt" style="font-weight:400">勾选后在觅珍集库顶部「站长精选」区高亮展示</span></label>
+          <label style="flex-direction:row;align-items:center;gap:8px">特殊站点<input type="checkbox" id="navEFeatured" ${it.featured ? "checked" : ""} style="width:16px;height:16px"><span class="opt" style="font-weight:400">勾选后在觅珍集库顶部「精选推荐」区高亮展示</span></label>
         </div>
         <div class="adm-actions" style="margin-top:8px">
           <button class="btn primary sm" data-act="navSave" data-id="${esc(it.id)}">保存</button>

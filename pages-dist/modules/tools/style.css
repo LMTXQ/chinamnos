@@ -56,7 +56,7 @@
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 
-/* ─────────────── 站长精选（特殊站点高亮区） ─────────────── */
+/* ─────────────── 精选推荐（特殊站点高亮区） ─────────────── */
 .tl-featured { margin-bottom: 22px; }
 .tl-sec-title {
   display: flex; align-items: center; gap: 7px;

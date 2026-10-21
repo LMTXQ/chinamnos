@@ -6710,7 +6710,17 @@ _ANN_CBN_UA = ("Mozilla/5.0 (Linux; Android 9) AppleWebKit/537.36 "
 
 ANN_LIMITS_DEFAULT = {
     "retention_days": 90,        # 按日期保留（与变更日志同模式），过期条目写盘前丢弃
-    "per_source_fetch": 15,      # 每源保留的最新条数
+    # ── 每源保留的最新条数：各运营商源架构不同，同名配置语义不同，故按运营商独立 ──
+    #   cmcc 移动：30 省各自独立列表页（静态 JSON 文件直读）→ 逐省截断后合并跨省去重入库
+    #   ctcc 电信：31 省各自独立列表页（province 参数逐省接口）→ 逐省截断后合并跨省去重入库
+    #   cucc 联通：31 省共用一个 POST 混合源（province 参数区分省）→ 合并跨省去重后【整体】截断
+    #              ⚠ cucc 的 N 是"31 省合计保留条数"，与 cmcc/ctcc 的"每省 N 条"完全不同量纲，
+    #                值太小会把绝大多数省级公告截掉（实测 15 条时仅剩最近几天的全国性公告）
+    #   cbn  广电：全网单源（服务端忽略省份/类型参数，8 组同结果）→ 整体截断
+    "per_source_fetch_cmcc": 15,      # 移动：每省保留最新 N 条
+    "per_source_fetch_ctcc": 15,      # 电信：每省保留最新 N 条
+    "per_source_fetch_cucc": 200,     # 联通：31 省合并去重后的整体保留条数（混合源）
+    "per_source_fetch_cbn": 15,       # 广电：全网单源整体保留 N 条
     "content_max": 20 * 1024,    # 单条正文 ≤20KB
     "file_max_bytes": 512 * 1024,  # 单文件兜底
     "national_threshold": 5,     # 联通混合源：出现在 ≥N 省判为全国
@@ -6718,6 +6728,14 @@ ANN_LIMITS_DEFAULT = {
     "retries": 2,
     "sleep_s": 0.4,              # 源内限速
 }
+
+
+def _ann_limit(lim, carrier):
+    """per_source_fetch 按运营商独立取值（配置键 per_source_fetch_<carrier>，缺省回退 15）"""
+    try:
+        return max(1, int(lim.get("per_source_fetch_%s" % carrier)))
+    except (TypeError, ValueError):
+        return 15
 
 ANN_KEEP_TAGS_RE = (r"(?!/?(p|br|div|a|img|strong|b|em|i|u|ul|ol|li|table|tr|td|th|"
                     r"tbody|thead|h\d|blockquote)(\s|/|>))")
@@ -6959,7 +6977,7 @@ def _ann_cmcc(ann_cfg):
                 rows.append({"id": m.group(1), "title": row.get("noticeTitle") or "",
                              "date": row.get("publishTime") or ""})
         rows.sort(key=lambda x: x["date"], reverse=True)
-        rows = rows[: lim["per_source_fetch"]]
+        rows = rows[: _ann_limit(lim, "cmcc")]
         # 详情 URL = list 同目录 + 文件名干 + _detail_{id}.json
         dir_url = list_url.rsplit("/", 1)[0]
         stem = list_url.rsplit("/", 1)[1][:-5]
@@ -7062,7 +7080,7 @@ def _ann_cucc(ann_cfg):
             it["province"] = ""
         items.append(it)
     items.sort(key=lambda x: x["date"], reverse=True)
-    items = items[: lim["per_source_fetch"]]
+    items = items[: _ann_limit(lim, "cucc")]
     # 详情正文（仅保留的条目；code 必须与 rid 同源——首个命中省，而非字典序最小省）
     for it in items:
         code = (it["id"].split(":")[1] if len((it["id"] or "").split(":")) > 2 else "074")
@@ -7199,23 +7217,30 @@ def _ann_ctcc_pw_details(tasks, page_wait_s=4):
             viewport={'width': 1280, 'height': 800})
         context.add_init_script(_ctcc_stealth_script())
         page = context.new_page()
-        # 入口=资费专区（实测瑞数挑战对自动化放行；公告页/静态页入口均被指纹拒绝）
-        page.goto(ANN_CTCC_SITE + '/tariffZone/',
-                  timeout=60000, wait_until='domcontentloaded')
-        # 等瑞数动态 cookie（EYg4* 前缀，与资费采集同判定）
-        for _ in range(10):
-            time.sleep(3)
-            if any(c['name'].startswith('EYg4') for c in context.cookies()):
-                break
-        _diag = page.evaluate(
-            "({ua: navigator.userAgent, tl: (document.body ? document.body.innerText.length : -1)})")
-        logger.info('[announce][ctcc] tariffZone 会话就绪，页面内 fetch 详情 %d 条'
-                    '（页面文本=%s, 内核=%s, UA=%s）'
-                    % (len(tasks), _diag.get("tl"), browser.version, _diag.get("ua")))
+
+        # 过盾：入口=资费专区（实测瑞数挑战对自动化放行；公告页/静态页入口均被指纹拒绝）。
+        # 抽成局部函数供"会话中途失效"时重过盾（连续失败触发，上限 3 次防死循环）
+        def _pass_gate(reason):
+            page.goto(ANN_CTCC_SITE + '/tariffZone/',
+                      timeout=60000, wait_until='domcontentloaded')
+            # 等瑞数动态 cookie（EYg4* 前缀，与资费采集同判定）
+            for _ in range(10):
+                time.sleep(3)
+                if any(c['name'].startswith('EYg4') for c in context.cookies()):
+                    break
+            _diag = page.evaluate(
+                "({ua: navigator.userAgent, tl: (document.body ? document.body.innerText.length : -1)})")
+            logger.info('[announce][ctcc] tariffZone 会话就绪(%s)，页面内 fetch 详情 %d 条'
+                        '（页面文本=%s, 内核=%s, UA=%s）'
+                        % (reason, len(tasks), _diag.get("tl"), browser.version, _diag.get("ua")))
+
+        _pass_gate('初始')
         # 过盾会话内同域 fetch 详情接口（瑞数为会话级校验，同域可信会话放行；
-        # 加密信封与裸 HTTP 列表同款）。单条失败记录继续，不中断整批。
+        # 加密信封与裸 HTTP 列表同款）。单条失败记录继续，不中断整批；
+        # 连续 5 条非 200 判定会话失效 → 重过盾（≤3 次），失败条目由写盘继承兜底
         detail_url = (ANN_CTCC_SITE +
                       '/wtBusiness/wtservice/nc/announcement/getAnnouncementDetail.do')
+        consec_pw_fail, regates = 0, 0
         for i, t in enumerate(tasks, 1):
             try:
                 payload, _tid = _ann_ctcc_envelope({
@@ -7234,11 +7259,22 @@ def _ann_ctcc_pw_details(tasks, page_wait_s=4):
                      "fcode": ANN_CTCC_FCODE})
                 if res.get("status") == 200:
                     out[t["key"]] = res.get("text") or ""
+                    consec_pw_fail = 0
                 else:
                     out[t["key"]] = ("HTTP %s %s"
                                      % (res.get("status"), (res.get("text") or "")[:150]))
+                    consec_pw_fail += 1
             except Exception as e:
                 out[t["key"]] = "ERR " + str(e)[:80]
+                consec_pw_fail += 1
+            if consec_pw_fail >= 5 and regates < 3:
+                regates += 1
+                consec_pw_fail = 0
+                logger.warning('[announce][ctcc] PW 会话疑似失效（连续 5 条失败），第 %d 次重过盾' % regates)
+                try:
+                    _pass_gate('重过盾#%d' % regates)
+                except Exception as e:
+                    logger.warning('[announce][ctcc] 重过盾失败(继续原会话): %s' % str(e)[:80])
             if i % 25 == 0:
                 logger.info('[announce][ctcc] 详情进度 %d/%d' % (i, len(tasks)))
             time.sleep(0.3)
@@ -7285,6 +7321,30 @@ def _ann_ctcc_post(obj, url=None, timeout=20, retries=2):
     raise last
 
 
+_ANN_CTCC_DET_URL = ANN_CTCC_SITE + '/wtBusiness/wtservice/nc/announcement/getAnnouncementDetail.do'
+_ANN_CTCC_DIRECT_SLEEP_S = 1.0   # 直连详情限速（参考项目防 WAF 实测 1.3s，按 342 条/轮取 1.0s 折中）
+
+
+def _ann_ctcc_direct_details(prov_tasks):
+    """电信详情直连通道——单省批次（借鉴资费采集两级模式：调用方逐省尝试直连，
+    失败省收集后统一 PW 回退，而非开头探针定终身）。裸 HTTP POST 详情接口，
+    加密信封与列表同款、同一 Cookie 会话（列表+详情混用会话 → 瑞数判会话不一致 → 412，
+    与列表通道同约束）。返回 resp_map（值 = JSON 响应文本 or 'ERR ...'，与 PW 通道
+    同构，阶段3 统一解析）；单条失败仅记录不中断，省内条目全败由调用方判定。"""
+    out = {}
+    for t in prov_tasks:
+        try:
+            r = _ann_ctcc_post(
+                {"offerCode": t["offer"], "type": t["type"],
+                 "provinceCode": t["prov"], "cityCode": ""},
+                url=_ANN_CTCC_DET_URL, timeout=15, retries=1)
+            out[t["key"]] = json.dumps(r, ensure_ascii=False) if isinstance(r, dict) else ""
+        except Exception as e:
+            out[t["key"]] = "ERR " + str(e)[:100]
+        time.sleep(_ANN_CTCC_DIRECT_SLEEP_S)
+    return out
+
+
 def _ann_ctcc(ann_cfg):
     lim = ann_cfg["limits"]
     sources, items, per_prov = {}, [], {}
@@ -7318,7 +7378,7 @@ def _ann_ctcc(ann_cfg):
                 "_type": (x.get("type") or ANN_CTCC_BASE_TYPE),
             })
         rows.sort(key=lambda x: (x["date"], x["id"]), reverse=True)
-        rows = rows[: lim["per_source_fetch"]]
+        rows = rows[: _ann_limit(lim, "ctcc")]
         per_prov[prov] = (prov_code, rows)
         sources[prov] = {"ok": True, "count": len(rows), "fetched": 0}
         logger.info("[announce][ctcc] %s 列表 %d 条" % (prov, len(rows)))
@@ -7331,11 +7391,40 @@ def _ann_ctcc(ann_cfg):
             tasks.append({"key": "%s|%s" % (prov, row["id"]), "offer": row["id"],
                           "type": row["_type"], "prov": prov_code,
                           "prov_name": prov, "row": row})
-    resp_map = {}
-    try:
-        resp_map = _ann_ctcc_pw_details(tasks)
-    except Exception as e:
-        logger.warning("[announce][ctcc] PW 详情通道失败，全部降级为无正文: %s" % str(e)[:120])
+    # ── 阶段2：详情（借鉴电信资费采集两级模式：先逐省直连，失败省统一 PW 回退） ──
+    # 瑞数拦截是会话/IP 级：一旦被拦后续省全挂，连续 3 省整省失败即熔断，
+    # 剩余省不再逐个白试，直接进 PW 批（与资费采集 pw_needs_fallback 同思路）
+    resp_map, pw_tasks = {}, []
+    consec_fail, done_provs, direct_ok_provs = 0, set(), set()
+    for prov, (prov_code, rows) in per_prov.items():
+        prov_tasks = [t for t in tasks if t["prov"] == prov_code]
+        try:
+            sub = _ann_ctcc_direct_details(prov_tasks)
+            if not any(v.startswith("{") for v in sub.values()):
+                raise RuntimeError("该省直连全部无正文")
+            consec_fail = 0
+            direct_ok_provs.add(prov)
+            resp_map.update(sub)
+        except Exception as e:
+            consec_fail += 1
+            logger.warning("[announce][ctcc] %s 直连失败, 标记 PW 回退: %s" % (prov, str(e)[:80]))
+            pw_tasks.extend(prov_tasks)
+            if consec_fail >= 3:
+                for p2, (pc2, _r2) in per_prov.items():
+                    if p2 not in done_provs and p2 != prov:
+                        pw_tasks.extend(t for t in tasks if t["prov"] == pc2)
+                logger.warning("[announce][ctcc] 连续 %d 省直连全败（疑似全局被拦），剩余省全部转入 PW" % consec_fail)
+                break
+        done_provs.add(prov)
+    if resp_map:
+        logger.info("[announce][ctcc] 直连详情完成 %d 条（直连成功 %d/%d 省，PW 回退 %d 条）"
+                    % (len(resp_map), len(direct_ok_provs), len(per_prov), len(pw_tasks)))
+    if pw_tasks:
+        logger.info("[announce][ctcc] PW 回退: %d 条详情走 Playwright（一次过盾）" % len(pw_tasks))
+        try:
+            resp_map.update(_ann_ctcc_pw_details(pw_tasks))
+        except Exception as e:
+            logger.warning("[announce][ctcc] PW 详情通道失败，这部分降级为无正文: %s" % str(e)[:120])
     # ── 阶段3：解析详情响应 → 统一条目 ──
     for t in tasks:
         key, prov, row = t["key"], t["prov_name"], t["row"]
@@ -7423,7 +7512,7 @@ def _ann_cbn(ann_cfg):
                           json.dumps(r, ensure_ascii=False)[:200]))
     rows.sort(key=lambda x: str(x.get("startTime") or x.get("publishTime") or ""),
               reverse=True)
-    rows = rows[: lim["per_source_fetch"]]
+    rows = rows[: _ann_limit(lim, "cbn")]
     for x in rows:
         iid = str(x.get("id") or x.get("infoId") or "")
         title = (x.get("title") or "").strip()
