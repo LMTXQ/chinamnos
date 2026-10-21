@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261021b"
+SCRIPT_VERSION = "20261022a"
 
 import os
 import sys
@@ -5072,6 +5072,7 @@ def refresh_public_config(storage):
     for key, path, mode in _PUBLIC_CONFIG_SOURCES:
         j = None
         last_err = None
+        disabled = False   # 模块总开关关闭（MODULE_DISABLED）：非瞬时故障，按预期跳过不重试
         for attempt in range(4):
             try:
                 r = s.get(PUBLIC_CONFIG_API_BASE + path, timeout=30)
@@ -5083,12 +5084,21 @@ def refresh_public_config(storage):
             except Exception as e:
                 j = None
                 last_err = e
+                # Worker 对已关闭模块的 /api/cardhub/* 统一 503 {code:50300, message:"MODULE_DISABLED"}：
+                # 重试无意义（模块开关不变则恒 503），识别后立即跳出，日志降为 INFO 消除每轮告警噪音
+                _resp = getattr(e, 'response', None)
+                if _resp is not None and _resp.status_code == 503 and 'MODULE_DISABLED' in (_resp.text or ''):
+                    disabled = True
+                    break
                 if attempt < 3:
                     wait = min(2 ** (attempt + 1), 8) * (0.8 + 0.4 * random.random())
                     logger.warning(f'[public-config] {path} 第 {attempt + 1} 次失败: {str(e)[:80]}，{wait:.1f}s 后重试')
                     time.sleep(wait)
         if j is None:
-            logger.warning(f'[public-config] {path} 搬运失败(4 次尝试仍失败，前端该项将回落接口): {str(last_err)[:100]}')
+            if disabled:
+                logger.info(f'[public-config] {path} 模块已关闭(MODULE_DISABLED)，按预期跳过，前端该项回落接口')
+            else:
+                logger.warning(f'[public-config] {path} 搬运失败(4 次尝试仍失败，前端该项将回落接口): {str(last_err)[:100]}')
             continue
         data = j.get('data') or {}
         if mode == 'timeline':
