@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261021a"
+SCRIPT_VERSION = "20261021b"
 
 import os
 import sys
@@ -6713,7 +6713,12 @@ _ANN_CBN_UA = ("Mozilla/5.0 (Linux; Android 9) AppleWebKit/537.36 "
                "Chrome/91 Mobile Safari/537.36;CBN")
 
 ANN_LIMITS_DEFAULT = {
-    "retention_days": 90,        # 按日期保留（与变更日志同模式），过期条目写盘前丢弃
+    # ── 公告保留天数：按运营商独立（广播广电等单源低频运营商可单独放宽窗口） ──
+    #   过期条目写盘前丢弃；date 为空/解析不出的条目同样视为过期丢弃
+    "retention_days_cmcc": 90,
+    "retention_days_ctcc": 90,
+    "retention_days_cucc": 90,
+    "retention_days_cbn": 90,
     # ── 每源保留的最新条数：各运营商源架构不同，同名配置语义不同，故按运营商独立 ──
     #   cmcc 移动：30 省各自独立列表页（静态 JSON 文件直读）→ 逐省截断后合并跨省去重入库
     #   ctcc 电信：31 省各自独立列表页（province 参数逐省接口）→ 逐省截断后合并跨省去重入库
@@ -6740,6 +6745,14 @@ def _ann_limit(lim, carrier):
         return max(1, int(lim.get("per_source_fetch_%s" % carrier)))
     except (TypeError, ValueError):
         return 15
+
+
+def _ann_retention(lim, carrier):
+    """retention_days 按运营商独立取值（配置键 retention_days_<carrier>，缺省回退 90）"""
+    try:
+        return max(1, int(lim.get("retention_days_%s" % carrier)))
+    except (TypeError, ValueError):
+        return 90
 
 ANN_KEEP_TAGS_RE = (r"(?!/?(p|br|div|a|img|strong|b|em|i|u|ul|ol|li|table|tr|td|th|"
                     r"tbody|thead|h\d|blockquote)(\s|/|>))")
@@ -7516,7 +7529,10 @@ def _ann_cbn(ann_cfg):
                           json.dumps(r, ensure_ascii=False)[:200]))
     rows.sort(key=lambda x: str(x.get("startTime") or x.get("publishTime") or ""),
               reverse=True)
+    raw_n = len(rows)
     rows = rows[: _ann_limit(lim, "cbn")]
+    logger.info("[announce][cbn] 源返回 %d 条，截断后 %d 条（保留窗口 %d 天）"
+                % (raw_n, len(rows), _ann_retention(lim, "cbn")))
     for x in rows:
         iid = str(x.get("id") or x.get("infoId") or "")
         title = (x.get("title") or "").strip()
@@ -7595,10 +7611,12 @@ def fetch_announcements(config, storage):
             logger.warning("[announce] %s 本轮 0 条（源 ok=%d/%d），跳过写盘保持线上不变"
                            % (carrier, len(ok_sources), len(sources)))
             continue
-        # retention：按日期保留（date YYYY-MM-DD 字符串比较）
-        cutoff = (datetime.date.today() - datetime.timedelta(days=lim["retention_days"])).isoformat()
+        # retention：按日期保留（date YYYY-MM-DD 字符串比较）；窗口按运营商独立（_ann_retention）
+        cutoff = (datetime.date.today() - datetime.timedelta(days=_ann_retention(lim, carrier))).isoformat()
         kept = [it for it in items if (it.get("date") or "") >= cutoff]
         kept.sort(key=lambda x: (x.get("date") or ""), reverse=True)
+        if len(kept) < len(items):
+            logger.info("[announce] %s retention(%d 天) 过滤：%d → %d 条" % (carrier, _ann_retention(lim, carrier), len(items), len(kept)))
         # 字段级正文继承（参考项目 merge_keep 同语义）：本轮详情失败的条目（content 空）
         # 沿用上轮成功内容，绝不回退成空。上轮数据来源由 storage.read_json 决定：
         # local_cache 开启读本地副本（零网络开销），未开启读线上；只补
