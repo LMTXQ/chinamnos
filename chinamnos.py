@@ -16,6 +16,9 @@ Python v2.1.0
   python chinamnos.py --deploy-frontend  # 仅部署前端文件（不采集、不重建 stats）
 """
 
+# 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
+SCRIPT_VERSION = "20261021a"
+
 import os
 import sys
 import json
@@ -6407,6 +6410,7 @@ def rebuild_stats_from_history(config, storage):
 
 
 def run():
+    logger.info('===== ChinaMNOs 采集端 v%s 启动 =====' % SCRIPT_VERSION)
     config = parse_and_validate_config()
     storage = create_storage(config)
 
