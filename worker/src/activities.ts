@@ -7,6 +7,7 @@ import { audit } from './common/audit';
 import { getPublicProfiles } from './auth/public-profile';
 import { decodeDataUrl } from './cardhub/proofs';
 import { pushNotification } from './common/notifications';
+import { CHAT_TYPES, CHAT_ID_MAX } from './communities';
 
 /* 情报酒馆（原活动集锦）：资费页「情报酒馆」tab 的双模式信息聚合（用户提交 → 管理员审核 → 公开展示）。
    mode=official 官方活动推广：沿用原活动语义（主链接必填、二维码/截止选填、按运营商维度）；
@@ -649,6 +650,178 @@ export async function handleAdminActivityDelete(request: Request, env: Env, id: 
     detail: { title: row.title, prev_status: row.status },
   });
   return ok({ deleted: true });
+}
+
+// PUT /api/admin/activities/:id：管理员直接编辑（原地改，不撤回不重审，不发通知，审计留痕）
+//   ▸ 按 条目现有 mode 分支校验，规则与各创建端点同源（official/guide 同 handleActivityCreate，
+//     chat 同 handleCommunityCreate：CHAT_TYPES 枚举、url/chat_id 至少其一）
+//   ▸ mode 不可改（形态级差异：官方活动↔攻略↔社群跨形态改动走删除重发）
+//   ▸ 仅 open/retired 可编辑（pending 走审核流、rejected/expired 编辑无展示意义）
+//   ▸ status 仅 open↔retired 切换（下架/恢复展示）
+//   ▸ 二维码三态：不传 = 保留现图；qr 对象 = 替换（decodeDataUrl 魔数 + R2 换新键清旧键）；
+//     qr_remove=true = 删除 R2 对象并置空。唠嗑聚落授权凭证（proof）不在编辑范围
+export async function handleActivityAdminUpdate(request: Request, env: Env, id: string): Promise<Response> {
+  const g = await guard(request, env, 'admin');
+  if (g instanceof Response) return g;
+
+  let body: Record<string, unknown> = {};
+  try { body = (await request.json()) as Record<string, unknown>; } catch { /* */ }
+
+  const row = await env.DB.prepare(
+    `SELECT id, mode, carrier, province, title, url, descr, links, content_md, ends_at, status, anon, qr_key, chat_id
+     FROM activities WHERE id = ?1`,
+  ).bind(id).first<ActRow>();
+  if (!row) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
+  if (!['open', 'retired'].includes(row.status)) {
+    return fail(ERR.VALIDATION_ERROR, 'NOT_EDITABLE', 400);
+  }
+  const mode = row.mode || 'official';
+
+  const fieldErr = (field: string, message: string) => fail(ERR.VALIDATION_ERROR, 'VALIDATION_ERROR', 400, { field, message });
+  const inBody = (k: string) => k in body;
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  const touched: string[] = [];
+
+  // ── 标题/简介/匿名（三形态共用规则，chat 的标题上限同 handleCommunityCreate 的 TITLE_MAX）──
+  if (inBody('title')) {
+    const v = typeof body.title === 'string' ? body.title.trim() : '';
+    if (v.length < TITLE_MIN || v.length > TITLE_MAX) return fieldErr('title', `标题需 ${TITLE_MIN}~${TITLE_MAX} 字`);
+    sets.push('title = ?'); binds.push(v); touched.push('title');
+  }
+  if (inBody('descr')) {
+    const v = typeof body.descr === 'string' ? body.descr.trim() : '';
+    if (v.length > DESCR_MAX) return fieldErr('descr', `简介不超过 ${DESCR_MAX} 字`);
+    sets.push('descr = ?'); binds.push(v); touched.push('descr');
+  }
+  if (inBody('anon')) {
+    sets.push('anon = ?'); binds.push(body.anon === true || body.anon === 1 ? 1 : 0); touched.push('anon');
+  }
+
+  // ── 范围（carrier/province）：official 运营商必填；guide/chat 可空=通用；省需运营商 ──
+  const carrier = inBody('carrier') ? String(body.carrier || '').trim() : row.carrier || '';
+  const province = inBody('province') ? String(body.province || '').trim() : row.province || '';
+  if (inBody('carrier') || inBody('province')) {
+    if (mode === 'official' && !CARRIERS.has(carrier)) return fieldErr('carrier', '运营商无效');
+    if (carrier && !CARRIERS.has(carrier)) return fieldErr('carrier', '运营商无效');
+    if (province && !PROVINCE_RE.test(province)) return fieldErr('province', '省份无效（留空为全国）');
+    if (province && !carrier) return fieldErr('province', '指定省份必须同时指定运营商');
+    sets.push('carrier = ?'); binds.push(carrier); touched.push('carrier');
+    sets.push('province = ?'); binds.push(province); touched.push('province');
+  }
+
+  // ── 主链接 url：official 必填 https；guide 选填 https；chat https + 与 chat_id 至少其一 ──
+  if (inBody('url')) {
+    const v = typeof body.url === 'string' ? body.url.trim() : '';
+    if (mode === 'official' && !validActivityUrl(v)) return fieldErr('url', '活动地址无效（必须为 https 链接）');
+    if (v && !validActivityUrl(v)) return fieldErr('url', '链接无效（必须为 https 链接）');
+    if (mode === 'chat' && !v && !(inBody('chat_id') ? String(body.chat_id || '').trim() : row.chat_id || '')) {
+      return fieldErr('url', '加入方式至少提供其一：链接或群号/账号');
+    }
+    sets.push('url = ?'); binds.push(v); touched.push('url');
+  }
+
+  // ── 附加链接（official/guide 共用；chat 无此字段，忽略）──
+  if (mode !== 'chat' && inBody('links')) {
+    const mainUrl = inBody('url') ? String(body.url || '').trim() : row.url || '';
+    const links = parseLinks(body.links, mainUrl);
+    if (links === 'invalid') {
+      return fieldErr('links', `附加链接无效（最多 ${LINK_MAX} 条，名称 ≤${LABEL_MAX} 字，须为 https 链接且不重复）`);
+    }
+    sets.push('links = ?'); binds.push(links.length ? JSON.stringify(links) : null); touched.push('links');
+  }
+
+  // ── 攻略正文（guide 专属）：编辑时传了则不允许清空（正文是攻略的存在前提）──
+  if (mode === 'guide' && inBody('content_md')) {
+    const v = typeof body.content_md === 'string' ? body.content_md.trim() : '';
+    if (!v) return fieldErr('content_md', '攻略正文不能为空');
+    if (v.length > MD_MAX) return fieldErr('content_md', `攻略正文不超过 ${MD_MAX} 字`);
+    sets.push('content_md = ?'); binds.push(v); touched.push('content_md');
+  }
+
+  // ── 社群专属：种类/群号（chat）──
+  if (mode === 'chat') {
+    if (inBody('chat_type')) {
+      const v = typeof body.chat_type === 'string' ? body.chat_type.trim() : '';
+      if (!CHAT_TYPES.includes(v)) return fieldErr('chat_type', '社群种类无效');
+      sets.push('chat_type = ?'); binds.push(v); touched.push('chat_type');
+    }
+    if (inBody('chat_id')) {
+      const v = typeof body.chat_id === 'string' ? body.chat_id.trim() : '';
+      if (v.length > CHAT_ID_MAX) return fieldErr('chat_id', `群号/账号不超过 ${CHAT_ID_MAX} 字`);
+      if (!v && !(inBody('url') ? String(body.url || '').trim() : row.url || '')) {
+        return fieldErr('chat_id', '加入方式至少提供其一：链接或群号/账号');
+      }
+      sets.push('chat_id = ?'); binds.push(v || null); touched.push('chat_id');
+    }
+  }
+
+  // ── 截止时间（official/guide；chat 无截止）：传空串/null = 清空（长期有效）──
+  if (mode !== 'chat' && inBody('ends_at')) {
+    const ends = parseEndsAt(body.ends_at);
+    if (ends === 'invalid') return fieldErr('ends_at', '截止时间无效（须为未来时间，最远一年）');
+    sets.push('ends_at = ?'); binds.push(ends); touched.push('ends_at');
+  }
+
+  // ── 状态切换：仅 open↔retired ──
+  if (inBody('status')) {
+    const v = String(body.status);
+    if (!['open', 'retired'].includes(v)) return fail(ERR.VALIDATION_ERROR, 'INVALID_STATUS', 400);
+    sets.push('status = ?'); binds.push(v); touched.push('status');
+  }
+
+  // ── 二维码：qr 对象 = 替换（新键旧键扩展名可能不同，先传新再清旧）；qr_remove = 移除 ──
+  const qrObj = (body.qr && typeof body.qr === 'object') ? body.qr as Record<string, unknown> : null;
+  let newQr: { bytes: Uint8Array; mime: string } | null = null;
+  if (qrObj) {
+    const dec = decodeDataUrl(typeof qrObj.data === 'string' ? qrObj.data : '');
+    const w = Number(qrObj.w), h = Number(qrObj.h);
+    if (!dec) return fieldErr('qr', '二维码图片无效（仅支持 PNG / JPG / WebP，≤300KB）');
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w < 16 || h < 16 || w > QR_MAX_DIM || h > QR_MAX_DIM) {
+      return fieldErr('qr', '二维码图片尺寸无效');
+    }
+    newQr = dec;
+  }
+  const qrRemove = inBody('qr_remove') && body.qr_remove === true;
+
+  if (!sets.length) return fail(ERR.VALIDATION_ERROR, 'EMPTY_UPDATE', 400);
+
+  // R2 先传新后清旧，再落库（落库失败回滚 R2：删新键、恢复旧键内容不可行 → 仅删新键防孤儿）
+  let newQrKey: string | null = null;
+  if (newQr) {
+    const ext = newQr.mime === 'image/png' ? 'png' : newQr.mime === 'image/webp' ? 'webp' : 'jpg';
+    newQrKey = `activities/${id}/qr.${ext}`;
+    try {
+      await env.PROOFS!.put(newQrKey, newQr.bytes, {
+        httpMetadata: { contentType: newQr.mime },
+        customMetadata: { activityId: id },
+      });
+    } catch {
+      return fail(ERR.INTERNAL_ERROR, 'QR_UPLOAD_FAILED', 500);
+    }
+    sets.push('qr_key = ?'); binds.push(newQrKey); touched.push('qr');
+  } else if (qrRemove) {
+    sets.push('qr_key = ?'); binds.push(null); touched.push('qr');
+  }
+
+  try {
+    await env.DB.prepare(`UPDATE activities SET ${sets.join(', ')} WHERE id = ?`).bind(...binds, id).run();
+  } catch (e) {
+    if (newQrKey) { try { await env.PROOFS!.delete(newQrKey); } catch { /* */ } }
+    throw e;
+  }
+  // 旧图清理：替换成功后删旧键（与新键同键时跳过）；移除同理
+  if ((newQr || qrRemove) && row.qr_key && row.qr_key !== newQrKey) {
+    await deleteActivityQr(env, row.qr_key);
+  }
+
+  await audit(env, request, g.viewer, {
+    action: 'admin_update_activity',
+    targetType: 'activity',
+    targetId: id,
+    detail: { mode, fields: touched, title: row.title },
+  });
+  return ok({ updated: true, fields: touched });
 }
 
 // Cron：到期活动 open → expired（读路径已有 ends_at 过滤双保险）；对每条到期内容站内通知提交者

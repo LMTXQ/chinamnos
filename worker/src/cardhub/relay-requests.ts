@@ -4,6 +4,7 @@ import { hitLimit } from '../common/ratelimit';
 import { verifyTurnstile } from '../common/turnstile';
 import { ulid } from '../common/crypto';
 import { notify } from '../mail/notifier';
+import { pushNotification } from '../common/notifications';
 import { getSetting } from '../common/settings';
 
 // POST /api/cardhub/relay-requests：站长中转意向（§10.1）

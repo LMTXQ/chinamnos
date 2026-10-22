@@ -172,9 +172,9 @@ export async function handleNavReview(request: Request, env: Env, id: string): P
   return ok({ status: approve ? 'open' : 'rejected' });
 }
 
-// PUT /api/admin/nav/:id：编辑/排序/上下架（站长）
+// PUT /api/admin/nav/:id：编辑/排序/上下架（管理组：admin 及以上，对齐酒馆编辑权限分级）
 export async function handleNavUpdate(request: Request, env: Env, id: string): Promise<Response> {
-  const g = await guard(request, env, 'owner');
+  const g = await guard(request, env, 'admin');
   if (g instanceof Response) return g;
 
   let body: Record<string, unknown> = {};

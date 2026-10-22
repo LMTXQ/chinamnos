@@ -18,11 +18,11 @@ import { getPublicProfiles } from './auth/public-profile';
    ▸ 无匿名、无截止时间（社群长期有效） */
 
 export const CHAT_TYPES = ['论坛', 'QQ群', '微信群', '贴吧', '纸飞机', '其他'];
+export const CHAT_ID_MAX = 50; // 群号/账号上限（activities 管理编辑端点共用此常量）
 
 const TITLE_MIN = 2, TITLE_MAX = 40;
 const URL_MAX = 300;
 const DESCR_MAX = 200;
-const CHAT_ID_MAX = 50;
 const SUBMIT_LIMIT = 3;    // 提交限流：3 次/时（与情报酒馆同款）
 const PENDING_QUOTA = 5;   // 同用户待审上限（activities 全 mode 共享）
 const QR_MAX_DIM = 2500;   // 二维码/凭证图宽高上限

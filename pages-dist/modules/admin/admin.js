@@ -54,6 +54,10 @@ let state = {
   reviewFilter: { source: "", board: "" }, // 审核 Tab 筛选：来源（跳蚤市集/觅珍集库/活动集锦）+ 板块
   acts: [],             // 活动全量列表（活动 Tab，客户端按状态筛选）
   actStatus: "",        // 活动 Tab 状态筛选
+  actMode: "",          // 活动 Tab 板块筛选：''=全部 | official=官方活动 | guide=个人攻略 | chat=唠嗑社群
+  actEditId: "",        // 当前编辑中的条目 id（编辑面板展开时非空）
+  actEditor: null,      // 攻略正文 mdCreateEditor 实例（guide 编辑面板挂载期存在）
+  actQrNew: null,       // 编辑面板中新选的二维码 {data,w,h}（保存时随 PUT 上传替换现图）
   relay: [],
   relayStatus: "open",
   settings: [],
@@ -158,6 +162,7 @@ function render() {
   body.innerHTML = renderTab();
   mountIcons(body);
   mountSettingMdEditors();
+  mountActEditEditor();   // 情报酒馆编辑面板（guide 攻略正文编辑器，面板存在时挂载）
   setTimeout(loadAdminProofs, 0); // 审核队列证明材料缩略图（带鉴权 blob 加载）
 }
 
@@ -769,42 +774,52 @@ async function onPromoDelete(id) {
 
 /* ── 情报酒馆管理（admin+）：状态筛选 chips（客户端过滤）+ 通过/拒绝/下架/删除 ── */
 const ACT_STATUS_LABELS = { pending: "待审核", open: "展示中", rejected: "已拒绝", retired: "已下架", expired: "已过期" };
+const ACT_MODE_LABELS = { official: "官方活动", guide: "个人攻略", chat: "唠嗑社群" };
 
 function renderActs() {
   const all = state.acts || [];
   const counts = {};
-  for (const a of all) counts[a.status] = (counts[a.status] || 0) + 1;
+  for (const a of all) { counts[a.status] = (counts[a.status] || 0) + 1; counts["m_" + (a.mode || "official")] = (counts["m_" + (a.mode || "official")] || 0) + 1; }
   const chip = (v, label, n) => `<button type="button" class="rv-chip${state.actStatus === v ? " active" : ""}" data-act="actFilter" data-v="${v}">${label} <span class="rv-chip-n">${n}</span></button>`;
+  const mchip = (v, label, n) => `<button type="button" class="rv-chip${state.actMode === v ? " active" : ""}" data-act="actModeFilter" data-v="${v}">${label} <span class="rv-chip-n">${n}</span></button>`;
   const filters = `
     <div class="rv-filters"><div class="rv-filter-row">
       <span class="rv-filter-label">状态</span>
       ${chip("", "全部", all.length)}
       ${["pending", "open", "rejected", "retired", "expired"].filter((s) => counts[s]).map((s) => chip(s, ACT_STATUS_LABELS[s], counts[s])).join("")}
+    </div><div class="rv-filter-row">
+      <span class="rv-filter-label">板块</span>
+      ${mchip("", "全部", all.length)}
+      ${["official", "guide", "chat"].filter((m) => counts["m_" + m]).map((m) => mchip(m, ACT_MODE_LABELS[m], counts["m_" + m])).join("")}
     </div></div>`;
-  const items = all.filter((a) => !state.actStatus || a.status === state.actStatus);
+  const items = all.filter((a) => (!state.actStatus || a.status === state.actStatus) && (!state.actMode || (a.mode || "official") === state.actMode));
   const cards = items.map((a) => {
+    const mode = a.mode || "official";
+    const chat = mode === "chat";
+    const guide = mode === "guide";
     const actBtns = a.status === "pending"
       ? `<button class="btn primary sm" data-act="actReview" data-id="${esc(a.id)}" data-approve="1">通过</button>
          <button class="btn ghost sm" data-act="actReview" data-id="${esc(a.id)}" data-approve="0">拒绝</button>`
-      : a.status === "open"
-        ? `<button class="btn ghost sm" data-act="actRetire" data-id="${esc(a.id)}">下架</button>
+      : a.status === "open" || a.status === "retired"
+        ? `<button class="btn ghost sm" data-act="actEdit" data-id="${esc(a.id)}">编辑</button>
+           ${a.status === "open" ? `<button class="btn ghost sm" data-act="actRetire" data-id="${esc(a.id)}">下架</button>` : ""}
            <button class="btn ghost sm" data-act="actDel" data-id="${esc(a.id)}" style="color:var(--red)">删除</button>`
         : `<button class="btn ghost sm" data-act="actDel" data-id="${esc(a.id)}" style="color:var(--red)">删除</button>`;
-    const guide = a.mode === "guide";
     const links = Array.isArray(a.links) ? a.links : [];
     return `
-    <div class="adm-item rv-card">
+    <div class="adm-item rv-card${state.actEditId === a.id ? " act-editing" : ""}">
       <div class="rv-head">
-        <span class="rv-board rv-b-act">${a.province ? esc(a.province) : "全国"}</span>
+        <span class="rv-board rv-b-act">${a.province ? esc(a.province) : (chat && !a.carrier ? "全站通用" : "全国")}</span>
         <span class="rv-title">${esc(a.title || "(无标题)")}</span>
         <span class="rv-no">${ACT_STATUS_LABELS[a.status] || esc(a.status)}</span>
       </div>
       <div class="rv-body">
         <div class="rv-specs">
-          <span class="rv-spec">${guide ? "个人攻略" : "官方活动"}</span>
+          <span class="rv-spec">${chat ? `唠嗑社群 · ${esc(a.chat_type || "其他")}` : ACT_MODE_LABELS[mode] || esc(mode)}</span>
           ${a.anon ? `<span class="rv-spec">匿名展示</span>` : ""}
-          ${a.carrier ? "" : `<span class="rv-spec">全运营商通用</span>`}
+          ${a.carrier ? `<span class="rv-spec">${esc(CARRIER_LABELS[a.carrier] || a.carrier)}</span>` : `<span class="rv-spec">${chat ? "全站通用" : "全运营商通用"}</span>`}
           ${a.ends_at ? `<span class="rv-spec">截止 ${fmtTime(a.ends_at)}</span>` : ""}
+          ${chat && a.chat_id ? `<span class="rv-spec">群号/账号：${esc(a.chat_id)}</span>` : ""}
         </div>
         ${a.url ? `<div class="rv-url">${icon("link")} <a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.url)}</a></div>` : ""}
         ${links.length ? `<div class="rv-descr">附加链接：${links.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ")}</div>` : ""}
@@ -820,9 +835,210 @@ function renderActs() {
           ${actBtns}
         </div>
       </div>
+      ${state.actEditId === a.id ? actEditPanelHTML(a) : ""}
     </div>`;
   }).join("");
   return filters + (cards || `<div class="adm-empty">没有投稿记录</div>`);
+}
+
+/* ── 管理员编辑面板：按条目 mode 渲染对应形态的字段组（与各板块提交 UI 同构）。
+   mode 不可改（跨形态走删除重发）；pending/rejected/expired 不开放编辑（列表无编辑按钮）── */
+function actEndsToDate(endsAt) {
+  if (!endsAt) return "";
+  const d = new Date(endsAt - 8 * 3600 * 1000); // 提交时存 23:59:59+08:00，平移后取东八区日期
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function actLinkRowHTML(label = "", url = "") {
+  return `<div class="act-link-row"><input class="inp" maxlength="12" placeholder="名称（≤12字）" value="${esc(label)}"><input class="inp" maxlength="300" placeholder="https://…" value="${esc(url)}"><button type="button" class="btn ghost sm act-link-del" data-act="actLinkDel" title="移除该链接">${icon("x")}</button></div>`;
+}
+
+function actEditPanelHTML(a) {
+  const mode = a.mode || "official";
+  const guide = mode === "guide";
+  const chat = mode === "chat";
+  const links = Array.isArray(a.links) ? a.links : [];
+  const carrierSel = (withAll) => `
+    <label>运营商<select class="inp" id="actECarrier">
+      ${withAll ? `<option value=""${!a.carrier ? " selected" : ""}>通用（不限定运营商）</option>` : ""}
+      ${Object.entries(CARRIER_LABELS).map(([c, n]) => `<option value="${c}"${a.carrier === c ? " selected" : ""}>${n}</option>`).join("")}
+    </select></label>`;
+  const provSel = `
+    <label>省份<select class="inp" id="actEProvince">
+      <option value=""${!a.province ? " selected" : ""}>全国${chat ? "（通用含全国）" : ""}</option>
+      ${PROMO_PROV_LIST.map((x) => `<option value="${esc(x.n)}"${a.province === x.n ? " selected" : ""}>${esc(x.n)}</option>`).join("")}
+    </select></label>`;
+  const qrBlock = `
+    <label style="flex-direction:row;align-items:center;gap:8px;flex-wrap:wrap">二维码
+      ${a.has_qr ? `<span class="opt">已上传，不选新图则保留现图</span>` : `<span class="opt">选填</span>`}
+      <button type="button" class="btn ghost sm" data-act="actQrPickAdmin">${icon("image")}${a.has_qr ? "替换图片" : "选择图片"}</button>
+      ${state.actQrNew ? `<span class="opt">已选新图</span><button type="button" class="btn ghost sm" data-act="actQrPickAdminClear">撤销新图</button>` : ""}
+      ${a.has_qr ? `<label style="flex-direction:row;align-items:center;gap:6px;margin-left:6px"><input type="checkbox" id="actEQrRemove" style="width:16px;height:16px"><span class="opt">移除二维码</span></label>` : ""}
+      <input type="file" id="actEQr" accept="image/png,image/jpeg,image/webp" hidden>
+    </label>`;
+  return `
+  <div class="act-edit-panel">
+    <div class="rv-head"><span class="rv-board rv-b-act">编辑 · ${ACT_MODE_LABELS[mode] || esc(mode)}</span><span class="rv-title">${esc(a.title || "")}</span></div>
+    <div class="act-e-form">
+      <label>标题<input class="inp" id="actETitle" maxlength="40" value="${esc(a.title || "")}"></label>
+      <label>${chat ? "说明介绍" : "简介"}<textarea class="inp" id="actEDescr" maxlength="200" rows="2">${esc(a.descr || "")}</textarea></label>
+      <div class="act-e-row">
+        ${carrierSel(guide || chat)}
+        ${provSel}
+        ${chat ? `
+          <label>社群种类<select class="inp" id="actEChatType">${["论坛", "QQ群", "微信群", "贴吧", "纸飞机", "其他"].map((t) => `<option${(a.chat_type || "其他") === t ? " selected" : ""}>${t}</option>`).join("")}</select></label>
+          <label>群号/账号<input class="inp" id="actEChatId" maxlength="50" value="${esc(a.chat_id || "")}" placeholder="论坛类可留空走链接"></label>` : ""}
+        ${!chat ? `<label>截止日期<input class="inp" id="actEEnds" type="date" value="${actEndsToDate(a.ends_at)}" title="留空 = 长期有效"></label>` : ""}
+        ${!chat ? `<label style="flex-direction:row;align-items:center;gap:8px">展示状态<select class="inp" id="actEStatus"><option value="open"${a.status === "open" ? " selected" : ""}>展示中</option><option value="retired"${a.status === "retired" ? " selected" : ""}>已下架</option></select></label>` : ""}
+      </div>
+      ${!chat ? `
+      <label>${guide ? "主链接（选填）" : "活动地址"}<input class="inp" id="actEUrl" maxlength="300" value="${esc(a.url || "")}" placeholder="https://…"></label>
+      <div class="act-e-links"><span class="opt">附加链接（选填，≤5 条）</span><div id="actELinks">${links.map((l) => actLinkRowHTML(l.label, l.url)).join("")}</div><button type="button" class="btn ghost sm" data-act="actLinkAdd">${icon("plus")}添加链接</button></div>` : `
+      <label>加入链接<input class="inp" id="actEUrl" maxlength="300" value="${esc(a.url || "")}" placeholder="https://…（与群号至少其一）"></label>`}
+      ${guide ? `<label>攻略正文（Markdown）</label><div id="actEMdHost"></div>` : ""}
+      ${guide || chat ? `<label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="actEAnon" style="width:16px;height:16px"${a.anon ? " checked" : ""}><span class="opt">匿名展示（公众侧不下发提交者信息）</span></label>` : ""}
+      ${qrBlock}
+      <div class="act-e-foot">
+        <span class="opt">保存后前端展示随下一轮站点数据更新生效（约 0-8 小时）</span>
+        <span style="flex:1"></span>
+        <button type="button" class="btn ghost" data-act="actCancelEdit">取消</button>
+        <button type="button" class="btn primary" data-act="actEditSave" data-id="${esc(a.id)}" data-mode="${mode}">${icon("check")}保存修改</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ── 管理员直接编辑（PUT /api/admin/activities/:id）：面板展开/编辑器挂载/收集保存 ── */
+function destroyActEditor() {
+  if (state.actEditor) { try { state.actEditor.destroy(); } catch { /* */ } state.actEditor = null; }
+}
+
+function onActEdit(id) {
+  destroyActEditor();
+  state.actQrNew = null;
+  state.actEditId = state.actEditId === id ? "" : id;   // 再点一次收起
+  render();
+  const card = document.querySelector(`.rv-card.act-editing`);
+  if (card && state.actEditId) card.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function onActCancelEdit() {
+  destroyActEditor();
+  state.actQrNew = null;
+  state.actEditId = "";
+  render();
+}
+
+/* guide 编辑面板的 Markdown 编辑器：整页 render() 后挂载（同 mountSettingMdEditors 模式） */
+function mountActEditEditor() {
+  if (!state.actEditId) return;
+  const host = $("actEMdHost");
+  if (!host) return;
+  const a = (state.acts || []).find((x) => x.id === state.actEditId);
+  if (!a) return;
+  state.actEditor = mdCreateEditor(host, {
+    maxlength: 10000,
+    rows: 12,
+    initial: a.content_md || "",
+    placeholder: "用 Markdown 写攻略：## 步骤标题、**重点**、[链接文字](https://…)、> 提示、列表",
+    nofollow: true,
+  });
+}
+
+/* 编辑面板选二维码：前端校验类型与 dataURL 体量（后端同款 300KB/魔数校验兜底） */
+function onActQrPickAdmin() {
+  const input = $("actEQr");
+  if (!input) return;
+  input.onchange = () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (!/^image\/(png|jpeg|jpg|webp)$/i.test(file.type)) { toast("仅支持 PNG / JPG / WebP 图片"); input.value = ""; return; }
+    const fr = new FileReader();
+    fr.onload = () => {
+      const data = String(fr.result);
+      if (data.length > 380000) { toast("图片过大（解码后需 ≤300KB），请压缩后再选"); input.value = ""; return; }
+      state.actQrNew = { data };
+      render();
+    };
+    fr.onerror = () => toast("图片读取失败");
+    fr.readAsDataURL(file);
+  };
+  input.click();
+}
+
+async function onActEditSave(id, mode) {
+  const title = ($("actETitle")?.value || "").trim();
+  const descr = ($("actEDescr")?.value || "").trim();
+  if (title.length < 2 || title.length > 40) { toast("标题需 2~40 字"); return; }
+  if (descr.length > 200) { toast("简介/说明不超过 200 字"); return; }
+
+  const body = { title, descr };
+  const anonEl = $("actEAnon");
+  if (anonEl) body.anon = anonEl.checked ? 1 : 0;
+
+  // 范围：official 运营商必填；guide/chat 可选通用
+  const carrier = $("actECarrier")?.value ?? "";
+  const province = $("actEProvince")?.value ?? "";
+  if (mode === "official" && !carrier) { toast("官方活动必须指定运营商"); return; }
+  if (province && !carrier) { toast("指定省份必须同时指定运营商"); return; }
+  body.carrier = carrier;
+  body.province = province;
+
+  const url = ($("actEUrl")?.value || "").trim();
+  if (url && !/^https:\/\/.+/i.test(url)) { toast("链接必须为 https:// 地址"); return; }
+
+  if (mode === "chat") {
+    body.chat_type = $("actEChatType")?.value || "其他";
+    body.chat_id = ($("actEChatId")?.value || "").trim();
+    if (body.chat_id.length > 50) { toast("群号/账号不超过 50 字"); return; }
+    if (!url && !body.chat_id) { toast("加入方式至少提供其一：链接或群号/账号"); return; }
+    body.url = url;
+  } else {
+    body.url = url;
+    if (mode === "official" && !/^https:\/\/.+/i.test(url)) { toast("活动地址必须为 https:// 链接"); return; }
+    // 附加链接：从动态行收集，空行忽略
+    const rows = Array.from(document.querySelectorAll("#actELinks .act-link-row"));
+    const links = rows.map((r) => {
+      const inp = r.querySelectorAll("input");
+      return { label: (inp[0]?.value || "").trim(), url: (inp[1]?.value || "").trim() };
+    }).filter((l) => l.label && l.url);
+    if (links.length > 5) { toast("附加链接最多 5 条"); return; }
+    if (links.some((l) => !/^https:\/\/.+/i.test(l.url))) { toast("附加链接必须为 https:// 地址"); return; }
+    body.links = links;
+    // 截止：空=长期有效；填了须未来
+    const endsRaw = $("actEEnds")?.value || "";
+    if (endsRaw) {
+      const ends = new Date(endsRaw + "T23:59:59+08:00").getTime();
+      if (!Number.isFinite(ends) || ends <= Date.now()) { toast("截止日期必须是未来日期"); return; }
+      body.ends_at = ends;
+    } else {
+      body.ends_at = null;
+    }
+    if (mode === "guide") {
+      const content = state.actEditor ? state.actEditor.getValue().trim() : "";
+      if (!content) { toast("攻略正文不能为空"); return; }
+      if (content.length > 10000) { toast("攻略正文不超过 10000 字"); return; }
+      body.content_md = content;
+    }
+    const stEl = $("actEStatus");
+    if (stEl) body.status = stEl.value;
+  }
+
+  // 二维码：新图优先，其次移除勾选；都不动 = 保留现图
+  if (state.actQrNew) body.qr = state.actQrNew;
+  else if ($("actEQrRemove")?.checked) body.qr_remove = true;
+
+  const r = await api.request(`/api/admin/activities/${encodeURIComponent(id)}`, { method: "PUT", body });
+  if (r.ok) {
+    destroyActEditor();
+    state.actQrNew = null;
+    state.actEditId = "";
+    toast("已保存，前端展示随下一轮站点数据更新生效（约 0-8 小时）");
+    loadTab();
+  } else {
+    toast(r.error?.message || r.error || "保存失败");
+  }
 }
 
 async function onActReview(id, approve) {
@@ -1380,6 +1596,8 @@ async function loadAll() {
 
 /* 切换标签 / 刷新：只拉当前标签的数据（带筛选与分页参数） */
 async function loadTab() {
+  destroyActEditor();     // Tab 切换/刷新时回收编辑面板状态（编辑器实例 + 未保存的新选二维码）
+  state.actQrNew = null;
   const t = state.tab;
   if (t === "stats") { const r = await api.adminStats(); if (r.ok) state.stats = r.data; }
   else if (t === "review") {
@@ -1815,6 +2033,21 @@ function bindEvents() {
       return;
     }
     if (act === "actFilter") { state.actStatus = el.dataset.v || ""; render(); return; }
+    if (act === "actModeFilter") { state.actMode = el.dataset.v || ""; render(); return; }
+    if (act === "actEdit") { onActEdit(el.dataset.id); return; }
+    if (act === "actCancelEdit") { onActCancelEdit(); return; }
+    if (act === "actEditSave") { onActEditSave(el.dataset.id, el.dataset.mode || "official"); return; }
+    if (act === "actLinkAdd") {
+      const box = $("actELinks");
+      if (box) {
+        if (box.children.length >= 5) { toast("附加链接最多 5 条"); return; }
+        box.insertAdjacentHTML("beforeend", actLinkRowHTML());
+      }
+      return;
+    }
+    if (act === "actLinkDel") { const row = el.closest(".act-link-row"); if (row) row.remove(); return; }
+    if (act === "actQrPickAdmin") { onActQrPickAdmin(); return; }
+    if (act === "actQrPickAdminClear") { state.actQrNew = null; render(); return; }
     if (act === "navRetire") { onNavToggle(el.dataset.id, "retire"); return; }
     if (act === "navRestore") { onNavToggle(el.dataset.id, "restore"); return; }
     if (act === "navDelete") { onNavDelete(el.dataset.id); return; }
@@ -1896,6 +2129,18 @@ function unbindEvents() {
 
 /* ═══════════════ 样式注入 ═══════════════ */
 const CSS = `
+.act-editing{outline:2px solid var(--accent);outline-offset:2px;border-radius:12px}
+.act-edit-panel{margin-top:12px;border-top:1px dashed var(--border);padding-top:14px}
+.act-e-form{display:flex;flex-direction:column;gap:12px;margin-top:10px}
+.act-e-form>label{display:flex;flex-direction:column;gap:6px;font-size:12.5px;font-weight:600;color:var(--text)}
+.act-e-form .inp{font-size:13px;padding:8px 10px}
+.act-e-row{display:flex;gap:10px;flex-wrap:wrap}
+.act-e-row>label{flex:1 1 150px;min-width:140px}
+.act-e-links{display:flex;flex-direction:column;gap:6px}
+.act-link-row{display:flex;gap:8px;align-items:center}
+.act-link-row .inp{flex:1 1 120px;min-width:0}
+.act-link-del{flex:none}
+.act-e-foot{display:flex;align-items:center;gap:10px;margin-top:2px;flex-wrap:wrap}
 .adm-topbar{display:flex;align-items:center;justify-content:space-between;height:56px;padding:0 16px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
 .adm-brand{display:flex;align-items:center;gap:10px}
 .adm-logo{width:32px;height:32px;border-radius:8px;background:var(--accent-bg);color:var(--accent);display:flex;align-items:center;justify-content:center;flex-shrink:0}

@@ -35,7 +35,7 @@ import { handleFavoriteToggle, handleMyFavorites } from './cardhub/favorites';
 import { handlePinPost, handleUnpinPost, handlePinBump } from './cardhub/pin';
 import { handleBoardCounts } from './cardhub/posts-list';
 import { runCardhubCron } from './cardhub/cron';
-import { handleActivityList, handleActivityCreate, handleActivityDelete, handleActivityDetail, handleActivityQr, handleActivityFavoriteToggle, handleMyActivityFavorites, handleActivityPin, handleActivityUnpin, handleAdminActivityList, handleAdminActivityReview, handleAdminActivityRetire, handleAdminActivityDelete, runActivitiesCron } from './activities';
+import { handleActivityList, handleActivityCreate, handleActivityDelete, handleActivityDetail, handleActivityQr, handleActivityFavoriteToggle, handleMyActivityFavorites, handleActivityPin, handleActivityUnpin, handleAdminActivityList, handleAdminActivityReview, handleAdminActivityRetire, handleAdminActivityDelete, handleActivityAdminUpdate, runActivitiesCron } from './activities';
 import { handleProofImage } from './cardhub/proofs';
 import { handleCommunityList, handleCommunityCreate, handleCommunityDelete, handleCommunityProof } from './communities';
 import { handleCreateTicket, handleListTickets, handleTicketDetail, handleTicketReply, handleTicketClose, handleTicketApplyTemplate } from './tickets';
@@ -297,6 +297,8 @@ export default {
           resp = await handleCommunityProof(request, env, p.split('/')[4]);
         } else if (m === 'POST' && /^\/api\/admin\/activities\/[^/]+\/review$/.test(p)) {
           resp = await handleAdminActivityReview(request, env, p.split('/')[4]);
+        } else if (m === 'PUT' && /^\/api\/admin\/activities\/[^/]+$/.test(p)) {
+          resp = await handleActivityAdminUpdate(request, env, p.split('/')[4]);
         } else if (m === 'POST' && /^\/api\/admin\/activities\/[^/]+\/retire$/.test(p)) {
           resp = await handleAdminActivityRetire(request, env, p.split('/')[4]);
         } else if (m === 'DELETE' && /^\/api\/admin\/activities\/[^/]+$/.test(p)) {
