@@ -160,6 +160,23 @@ export const api = {
     return this.request("/api/auth/profile/" + encodeURIComponent(uid));
   },
 
+  /* ── 通知渠道绑定（站外通知） ── */
+  async notifyChannels() {
+    return this.request("/api/me/notify-channels");
+  },
+  async notifyChannelCreate(channelType, cred) {
+    return this.request("/api/me/notify-channels", { method: "POST", body: { channel_type: channelType, cred } });
+  },
+  async notifyChannelVerify(code) {
+    return this.request("/api/me/notify-channels/verify", { method: "POST", body: { code } });
+  },
+  async notifyChannelPrefs(channelType, kinds) {
+    return this.request("/api/me/notify-channels/prefs", { method: "POST", body: { channel_type: channelType, kinds } });
+  },
+  async notifyChannelDelete(channelType) {
+    return this.request("/api/me/notify-channels/delete", { method: "POST", body: { channel_type: channelType } });
+  },
+
   /** 管理员：为用户设置图片头像（url = 图床直链 https://…；图片字节流不经 Worker，读取时 302 跳转） */
   async setUserAvatar(userId, url) {
     return this.request(`/api/admin/users/${encodeURIComponent(userId)}/avatar`, { method: "POST", body: { url } });

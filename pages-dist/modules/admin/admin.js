@@ -1357,6 +1357,9 @@ const SETTING_DESC = {
   mail_conversation_enabled: "市集在线沟通新消息的邮件通知开关（买家发起沟通、会话中发消息/发图时邮件通知对方）。关闭后仅发站内通知（铃铛），不再发邮件。布尔，默认开启。保存后约 30 秒内生效。仅站长可修改。",
   mail_relay_request_enabled: "站长中转意向的邮件通知开关（买家提交中转表单时邮件通知帖主）。关闭后不再发邮件（中转意向仍在后台保留可查）。布尔，默认开启。保存后约 30 秒内生效。仅站长可修改。",
   mail_post_expiring_enabled: "帖子到期前 3 天的邮件提醒开关（每日定时任务扫描，仅提醒一次）。关闭后不再发邮件（到期自动下架与站内通知不受影响）。布尔，默认开启。保存后约 30 秒内生效。仅站长可修改。",
+  notify_ext_enabled: "站外通知推送总开关。开启后，用户在「通知配置」绑定的钉钉/企业微信渠道会实时收到站内通知的同步推送（私信、审核结果、中转意向等）。关闭后仅发站内铃铛与邮件。布尔，默认关闭。保存后约 30 秒内生效。仅站长可修改。",
+  notify_throttle_minutes: "同类通知过滤窗口（分钟）。同一用户 + 同一事件类型 + 同一事件对象（如同一私信会话）在该窗口内只写一条站内铃铛且只推送一次外部渠道——防私信刷屏刷爆铃铛与外部机器人；窗口外的正常事件一条不漏。0 = 关闭过滤，上限 1440（24 小时）。注意：私信场景下窗口内同一会话的后续消息不再单独提醒，打开会话即可见全部内容。整数 0~1440，默认 10。保存后约 30 秒内生效。仅站长可修改。",
+  notify_ext_kinds: "站外通知推送的站点级事件白名单（全站放行上限）：勾选的事件类型才允许外接推送，未勾选的只进站内铃铛。用户可在其绑定渠道上再自行勾选接收子集（两级过滤取交集）；你后续放开/缩减时，用户的勾选长期有效无需重选。到期帖/临期提醒/活动到期三类由每日定时任务触发，随青龙批量管线上线后开始推送。保存后约 30 秒内生效。仅站长可修改。",
   promos: "推广列表（与全站公告共用弹窗体系，原「推广」页签已并入「公告」页签，此处仅存数据不再展示）。数据结构 [{id,enabled,title,content,version,mode,scope{carriers,provinces,modules}}]：mode=closable 可关闭每日一次 / must 强制同意；scope 三维度全空 = 全站任意页面，modules 非空 = 仅进入对应模块（资费中心/跳蚤市集/工单中心/觅珍集库）时判定弹出。请勿在设置页直接编辑本键（会绕过公告页签编辑器的规范化校验），一律在「公告」页签操作。保存后 Worker 即时生效，弹窗配置随下一轮采集部署。站长与管理员可修改。",
   promo_reswitch_enabled: "推广「切换重弹」开关（编辑入口在「公告」页签推广分组的「切换重弹」按钮，设置页不展示）。开启 = 访客在资费页切换运营商/省份时，重新判定全站推广并弹出命中新范围且未读的条目；关闭 = 切换不打断、不弹。不影响每日首次进站与模块进入两个触发点；同意记录/「今日不再」天然防重。布尔，未保存过默认开启。站长与管理员可修改。",
   cardhub_trade_merchants: "圈内卡商担保的推荐卡商列表——发帖人发布/编辑帖子勾选「圈内卡商担保」时，从此列表搜索并选择担保人（每帖最多 3 位），帖子详情页展示所选担保人及其热度统计。每行一条，格式：卡商名 | 站内用户UID（可留空） | 一句话介绍（可留空）。条数不限；卡商名必填（≤40 字）且同列表内不可重复——名称是担保人关联与统计标识，改名会使旧帖与该条目的统计关联断开（旧帖仍显示发帖时名称）。绑定 UID 后候选与详情显示头像与「站内」标识、点击弹用户资料卡（介绍随卡片展示）；UID 留空即纯文本卡商，同样可被选为担保人。绑定 UID 必须是站内 active 用户，否则拒绝保存。全部清空则发帖时无候选可选。推荐仅作参考，站点不为所推荐人承担保证。热度统计随快照更新（约 0-8 小时），Worker 兜底接口即时；其余展示在下一轮采集部署后生效。仅站长可修改。",
@@ -1430,6 +1433,26 @@ const SETTING_MERCHANT_KEYS = new Set(["cardhub_trade_merchants"]);
 const SETTING_PLACEHOLDER_KEYS = new Set(["promo_placeholders"]);
 /* 鸣谢名单类设置：多行「类别 | 名称 | 说明 | 链接」→ 保存为 [{cat,name,descr,url}] 数组 */
 const SETTING_THANKS_KEYS = new Set(["about_thanks"]);
+/* 站外通知推送事件白名单：复选框 chip → 保存为 kind 字符串数组（后端过滤未知 kind） */
+const SETTING_KINDS_KEYS = new Set(["notify_ext_kinds"]);
+/* 事件 kind → 中文标签（与 Worker notify/ext-push.ts 的 NOTIFY_KIND_LABELS 同源维护） */
+const NOTIFY_KIND_LABELS = {
+  act_approved: "情报投稿通过审核",
+  act_rejected: "情报投稿被驳回",
+  chat_approved: "社群投稿通过审核",
+  chat_rejected: "社群投稿被驳回",
+  act_retired: "情报/社群被管理组下架",
+  act_expired: "情报/社群到期自动下展",
+  link_approved: "工具提交通过审核",
+  link_rejected: "工具提交被驳回",
+  post_approved: "帖子审核通过",
+  post_rejected: "帖子审核驳回",
+  post_closed: "帖子被管理组关闭",
+  post_expired: "帖子到期自动下架",
+  post_expiring: "帖子临期提醒",
+  relay_request: "收到站长中转意向",
+  dm_message: "收到新私信",
+};
 const THANKS_CAT_LABEL = { donor: "任意打赏", feedback: "反馈建议", ref: "参考项目" };
 const THANKS_CAT_KEY = { "任意打赏": "donor", "反馈建议": "feedback", "参考项目": "ref" };
 /* 设置页分组展示（仅影响展示顺序与分组标题，不改变键名/取值/保存逻辑；未列出的键归入「其他」组）
@@ -1439,6 +1462,7 @@ const SETTING_GROUPS = [
   ["基础信息", ["site_name", "owner_email", "notification_retention_days"]],
   ["安全与准入", ["turnstile_enforced", "email_domain_whitelist", "mail_daily_cap"]],
   ["邮件通知", ["mail_post_review_enabled", "mail_conversation_enabled", "mail_relay_request_enabled", "mail_post_expiring_enabled"]],
+  ["站外通知推送", ["notify_ext_enabled", "notify_throttle_minutes", "notify_ext_kinds"]],
   ["跳蚤市集", ["module_cardhub_enabled", "cardhub_trade_site_guarantee", "cardhub_trade_merchants"]],
   ["工单系统", ["ticket_apply_guarantor"]],
   ["关于页", ["about_timeline", "about_thanks", "about_links"]],
@@ -1545,6 +1569,27 @@ function renderSettings() {
       <div class="adm-setting-actions">
         <span class="adm-setting-hint">发帖人勾选「圈内卡商担保」后从此列表选担保人（每帖最多 3 位）；快照随下一轮采集部署生效</span>
         <button class="btn primary sm" data-act="saveSetting" data-key="${s.key}"><i data-icon="check"></i>保存推荐</button>
+      </div>
+    </div>`;
+    }
+    /* 站外推送事件白名单：15 类事件复选框 chip，勾选即推送、取消即只进铃铛 */
+    if (SETTING_KINDS_KEYS.has(s.key)) {
+      const cur = Array.isArray(val) ? val : [];
+      return `
+    <div class="adm-setting adm-setting-block">
+      <div class="adm-setting-info">
+        <div class="adm-setting-key">${esc(s.key)}${SETTING_DESC[s.key] ? `<span class="help" data-tip="${esc(SETTING_DESC[s.key])}">?</span>` : ""}</div>
+        <div class="adm-setting-meta">已勾选 <b>${cur.length}</b> / ${Object.keys(NOTIFY_KIND_LABELS).length} 类事件 · 更新于 ${fmtTime(s.updated_at)}</div>
+      </div>
+      <div id="settingKindsBox" style="display:flex;flex-wrap:wrap;gap:8px 18px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)">
+        ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
+        <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
+          <input type="checkbox" data-kind="${esc(k)}" ${cur.includes(k) ? "checked" : ""}>${esc(label)}
+        </label>`).join("")}
+      </div>
+      <div class="adm-setting-actions">
+        <span class="adm-setting-hint">未勾选的事件只进站内铃铛，不推送到用户绑定的渠道</span>
+        <button class="btn primary sm" data-act="saveSetting" data-key="${s.key}"><i data-icon="check"></i>保存白名单</button>
       </div>
     </div>`;
     }
@@ -1951,6 +1996,14 @@ async function onSaveSetting(key) {
   /* MD 编辑器键（公告正文）：值在组件 handle 里，无 data-act="inputSetting" 元素 */
   const mdEd = settingMdEds && settingMdEds[key];
   const input = document.querySelector(`[data-act="inputSetting"][data-key="${key}"]`);
+  /* 事件白名单键：无 inputSetting 元素，值来自勾选的复选框 chip */
+  if (SETTING_KINDS_KEYS.has(key)) {
+    const kinds = [...document.querySelectorAll('#settingKindsBox input[type="checkbox"]:checked')].map((x) => x.dataset.kind);
+    const r = await api.adminUpdateSetting(key, kinds);
+    toast(r.ok ? delayToast("已保存", key) : (r.error || "操作失败"));
+    if (r.ok) loadTab();
+    return;
+  }
   if (!input && !mdEd) return;
   let val = mdEd ? mdEd.getValue().trim() : input.value.trim();
   // 尝试解析为数字/布尔，其余按字符串保存（后端 JSON.stringify）；模板类恒为字符串、列表类转数组、时间轴类转节点数组

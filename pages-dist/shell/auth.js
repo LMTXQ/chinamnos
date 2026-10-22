@@ -163,6 +163,25 @@ const AUTH_CSS = `
 .auth-turnstile{display:flex;justify-content:center;min-height:65px;margin:8px 0}
 .auth-close{position:absolute;top:12px;right:14px;background:none;border:none;color:var(--sub);cursor:pointer;font-size:22px;line-height:1;transition:color .15s}
 .auth-close:hover{color:var(--txt)}
+/* ── 通知配置（站外通知渠道绑定） ── */
+.nch-list{display:flex;flex-direction:column;gap:8px}
+.nch-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)}
+.nch-meta{flex:1;min-width:0}
+.nch-meta .t{font-size:13px;font-weight:700;color:var(--txt)}
+.nch-meta .h{font-size:11.5px;color:var(--sub);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nch-tag{flex:none;font-size:10.5px;font-weight:700;padding:2.5px 7px;border-radius:999px;line-height:1}
+.nch-tag.ok{color:#16a34a;background:color-mix(in oklab,#16a34a 14%,transparent)}
+.nch-tag.pending{color:#b45309;background:color-mix(in oklab,#b45309 14%,transparent)}
+.nch-del{flex:none;padding:5px 9px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--sub);font-size:12px;cursor:pointer;transition:.15s}
+.nch-del:hover{border-color:var(--red);color:var(--red)}
+.nch-card.pick{cursor:pointer;transition:border-color .15s}
+.nch-card.pick:hover{border-color:var(--acc)}
+.nch-card.soon{opacity:.55;cursor:not-allowed}
+.nch-soon{flex:none;font-size:10.5px;font-weight:600;color:var(--sub);border:1px solid var(--line);padding:2.5px 7px;border-radius:999px;line-height:1}
+.nch-empty{font-size:12px;color:var(--sub);padding:14px;border:1px dashed var(--line);border-radius:10px;text-align:center}
+.nch-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent);font-size:12.5px;font-weight:600;color:var(--txt)}
+.nch-toggle .hint{font-weight:400;margin-top:2px}
+.nch-toggle input{width:16px;height:16px;accent-color:var(--acc);flex-shrink:0}
 `;
 let cssInjected = false;
 function injectCSS() {
@@ -181,14 +200,19 @@ function getModal() {
   modalEl = document.createElement("div");
   modalEl.className = "auth-modal-mask";
   modalEl.innerHTML = `<div class="auth-modal" id="authModalBox"></div>`;
-  modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
+  modalEl.addEventListener("click", (e) => {
+    /* 锁定模式（账号设置/通知配置等含表单流程的弹窗）：点弹窗外空白不关闭，
+       仅通过关闭/取消按钮收场，防误触丢掉正在填写的表单 */
+    if (e.target === modalEl && !modalEl.dataset.lock) closeModal();
+  });
   document.body.appendChild(modalEl);
   return modalEl;
 }
-function openModal(html) {
+function openModal(html, opts = {}) {
   injectCSS();
   const m = getModal();
   m.querySelector("#authModalBox").innerHTML = html;
+  if (opts.lock) m.dataset.lock = "1"; else delete m.dataset.lock;
   m.classList.add("open");
   mountIcons(m.querySelector("#authModalBox"));
 }
@@ -278,6 +302,18 @@ export const Auth = {
     getModal().querySelector("#authModalBox").addEventListener("click", onModalClick);
   },
 
+  /** 通知配置（站外通知渠道绑定）：列表 / 添加 / 验证码回填，流程见 renderNch* 系列 */
+  openNotifyChannels() {
+    injectCSS();
+    openModal(`
+      <button class="auth-close" data-act="closeAuth" aria-label="关闭">&times;</button>
+      <h3>通知配置</h3>
+      <div id="nchBody"><p class="hint">加载中…</p></div>
+    `, { lock: true });
+    getModal().querySelector("#authModalBox").addEventListener("click", onModalClick);
+    renderNchList();
+  },
+
   /** 账号设置（改自己） */
   openSettings() { this._openSettingsBase(null); },
 
@@ -285,7 +321,7 @@ export const Auth = {
   async openSettingsFor(uid) {
     injectCSS();
     settingsTarget = null;
-    openModal(`<button class="auth-close" data-act="closeAuth" aria-label="关闭">&times;</button><h3>加载中…</h3>`);
+    openModal(`<button class="auth-close" data-act="closeAuth" aria-label="关闭">&times;</button><h3>加载中…</h3>`, { lock: true });
     getModal().querySelector("#authModalBox").addEventListener("click", onModalClick);
     const r = await api.adminUserProfile(uid);
     if (!r.ok || !r.data) {
@@ -343,7 +379,7 @@ export const Auth = {
         <div class="auth-bio-count"><span id="authBioCount">${(user?.bio || "").length}</span>/25</div>
       </div>
       <div class="actions"><button class="btn primary" data-act="authSettingsSave">保存设置</button></div>
-    `);
+    `, { lock: true });
     const box = getModal().querySelector("#authModalBox");
     box.addEventListener("click", onModalClick);
     box.addEventListener("input", onSettingsInput); // 同一函数引用，重复挂载会被浏览器去重
@@ -647,6 +683,7 @@ function openDrop(chip) {
     </div>
     ${Auth.isAdmin() ? `<button class="auth-drop-item" data-act="authAdmin"><i data-icon="shield"></i>管理后台</button>` : ""}
     <button class="auth-drop-item" data-act="authSettings"><i data-icon="user"></i>账号设置</button>
+    <button class="auth-drop-item" data-act="authNotify"><i data-icon="bell"></i>通知配置</button>
     <button class="auth-drop-item" data-act="authChangePwd"><i data-icon="key"></i>修改密码</button>
     <div class="auth-drop-divider"></div>
     <button class="auth-drop-item danger" data-act="authLogout"><i data-icon="logout"></i>退出登录</button>`;
@@ -688,6 +725,29 @@ function onModalClick(e) {
   if (act === "authSendReset") { authGuarded(el, authSendReset); return; }
   if (act === "authDoReset") { authGuarded(el, authDoReset); return; }
   if (act === "authResetBack") { resetState.step = "code"; renderResetBody(); return; }
+  if (act === "nchAdd") { nchAddState = null; renderNchSelect(); return; }
+  if (act === "nchPick") {
+    const t = NCH_TYPES.find((x) => x.type === el.dataset.ctype);
+    if (!t || !t.ready) { toast("该渠道即将上线，敬请期待"); return; }
+    renderNchForm(t.type);
+    return;
+  }
+  if (act === "nchBack") { renderNchList(); return; }
+  if (act === "nchSubmit") { authGuarded(el, nchSubmit); return; }
+  if (act === "nchVerify") { authGuarded(el, nchVerify); return; }
+  if (act === "nchResend") { authGuarded(el, nchResend); return; }
+  if (act === "nchDelete") {
+    // withPending 调用 fn() 不带实参，ctype 必须在此闭包捕获
+    const ctype = el.dataset.ctype || "";
+    withPending(el, () => nchDelete(ctype));
+    return;
+  }
+  if (act === "nchPrefs") { renderNchPrefs(el.dataset.ctype || ""); return; }
+  if (act === "nchPrefsSave") {
+    const ptype = el.dataset.ctype || "";
+    authGuarded(el, () => nchPrefsSave(ptype));
+    return;
+  }
 }
 
 document.addEventListener("click", (e) => {
@@ -700,6 +760,7 @@ document.addEventListener("click", (e) => {
   if (!act) return;
   if (act === "authLogout") { closeDrop(); Auth.logout(); return; }
   if (act === "authSettings") { closeDrop(); Auth.openSettings(); return; }
+  if (act === "authNotify") { closeDrop(); Auth.openNotifyChannels(); return; }
   if (act === "authSettingsSave") { withPending(actEl, authSettingsSave); return; }
   if (act === "authAvatarClear") { withPending(actEl, authAvatarClear); return; }
   if (act === "copyUid") {
@@ -833,6 +894,256 @@ async function authAvatarClear() {
   closeModal();
   toast("头像已恢复默认");
   refreshAll(); emit("change");
+}
+
+/* ─────────────── 通知配置（站外通知渠道绑定） ───────────────
+   渠道清单在此登记（与 Worker 渠道注册表同源扩展，新增渠道加一项即可）；
+   凭证仅在绑定流程中经内存直传，列表展示用服务端返回的脱敏 target_hint */
+const NCH_TYPES = [
+  {
+    type: "wecom",
+    label: "企业微信机器人",
+    desc: "在企业微信群（建议单人群）设置中添加「群机器人」，复制 Webhook 地址粘贴绑定。验证码与后续通知都会发到该群。",
+    ready: true,
+    fields: [
+      { key: "webhook", label: "Webhook 地址", placeholder: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" },
+    ],
+  },
+  {
+    type: "dingtalk",
+    label: "钉钉机器人",
+    desc: "在钉钉群设置中添加「自定义机器人」（安全设置建议选「加签」），复制 Webhook 地址；如选了加签请一并填入 SEC 开头的密钥。验证码与后续通知都会发到该群。",
+    ready: true,
+    fields: [
+      { key: "webhook", label: "Webhook 地址", placeholder: "https://oapi.dingtalk.com/robot/send?access_token=…" },
+      { key: "secret", label: "加签密钥（可选）", placeholder: "SEC 开头，仅安全设置选「加签」时填写" },
+    ],
+  },
+  { type: "feishu", label: "飞书机器人", desc: "群机器人 Webhook + 加签密钥", soon: true },
+  { type: "pushplus", label: "PushPlus", desc: "微信推送，填个人 token", soon: true },
+  { type: "qmsg", label: "Qmsg酱", desc: "QQ 推送，填 key + QQ 号", soon: true },
+  { type: "email", label: "邮件", desc: "一键绑定你的注册邮箱。到期提醒、采集播报等批量通知将发送到该邮箱；私信与审核类通知本就会发送到你的邮箱，不受此绑定影响。", ready: true, fields: [] },
+];
+let nchAddState = null; // 待验证绑定 { type, cred }（重新发送验证码用）
+let nchFormType = null; // 当前表单的渠道类型
+let nchItems = []; // 最近一次列表数据（渠道选择视图判断"已绑定/待验证"用）
+/* 渠道级事件偏好勾选项（与 Worker NOTIFY_KIND_LABELS 同源维护；用户在全量里勾选，
+   推送时与站点白名单取交集——站长放开/缩减后勾选长期有效） */
+const NCH_KIND_LABELS = {
+  act_approved: "情报投稿通过审核",
+  act_rejected: "情报投稿被驳回",
+  chat_approved: "社群投稿通过审核",
+  chat_rejected: "社群投稿被驳回",
+  act_retired: "情报/社群被管理组下架",
+  act_expired: "情报/社群到期自动下展",
+  link_approved: "工具提交通过审核",
+  link_rejected: "工具提交被驳回",
+  post_approved: "帖子审核通过",
+  post_rejected: "帖子审核驳回",
+  post_closed: "帖子被管理组关闭",
+  post_expired: "帖子到期自动下架",
+  post_expiring: "帖子临期提醒",
+  relay_request: "收到站长中转意向",
+  dm_message: "收到新私信",
+};
+
+function nchTypeLabel(type) {
+  const t = NCH_TYPES.find((x) => x.type === type);
+  return t ? t.label : type;
+}
+
+async function renderNchList() {
+  const body = getModal().querySelector("#nchBody");
+  if (!body) return;
+  const r = await api.notifyChannels();
+  if (!r.ok) {
+    // 401 单列：最常见原因是本地登录态失效，直接给出可操作提示而非笼统报错
+    const msg = r.code === 40100
+      ? "登录状态已失效，请退出后重新登录"
+      : (typeof r.error === "string" ? r.error : "加载失败，请稍后重试");
+    body.innerHTML = `<p class="hint">${esc(msg)}</p>`;
+    return;
+  }
+  const items = Array.isArray(r.data?.items) ? r.data.items : [];
+  nchItems = items;
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">绑定后，审核结果 / 在线沟通 / 站长中转等站内通知会同步推送到你的渠道。</p>
+    <div class="nch-list">${items.length ? items.map(nchCard).join("") : '<div class="nch-empty">还没有绑定任何通知渠道</div>'}</div>
+    <div class="nch-toggle" style="margin-top:10px">
+      <div>采集完成后推送播报<span class="hint">每轮采集结束后推送新增 / 变更 / 下架摘要（即将上线）</span></div>
+      <input type="checkbox" disabled>
+    </div>
+    <div class="actions">
+      ${items.length < 3 ? '<button class="btn primary" data-act="nchAdd"><i data-icon="plus"></i>添加渠道</button>' : '<p class="hint" style="text-align:center">最多绑定 3 个通知渠道</p>'}
+    </div>`;
+  mountIcons(body);
+}
+
+function nchCard(it) {
+  const label = nchTypeLabel(it.channel_type);
+  const tag = it.status === "active"
+    ? '<span class="nch-tag ok">已生效</span>'
+    : '<span class="nch-tag pending">待验证</span>';
+  // 渠道级偏好摘要：null = 未配置（跟随站点白名单默认全收）
+  const kindSummary = it.status === "active"
+    ? `<div class="h">接收：${Array.isArray(it.kinds) ? `${it.kinds.length} / 15 类事件` : "全部类型"}</div>`
+    : "";
+  const prefsBtn = it.status === "active"
+    ? '<button class="nch-del" data-act="nchPrefs" data-ctype="' + esc(it.channel_type) + '">接收类型</button>'
+    : "";
+  return `
+    <div class="nch-card">
+      <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}</div>
+      ${tag}
+      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${prefsBtn}
+      <button class="nch-del" data-act="nchDelete" data-ctype="${esc(it.channel_type)}">解绑</button></div>
+    </div>`;
+}
+
+function renderNchPrefs(type) {
+  const it = nchItems.find((x) => x.channel_type === type && x.status === "active");
+  const body = getModal().querySelector("#nchBody");
+  if (!body || !it) return;
+  // null = 未配置，展示为全选（即"跟随站点白名单默认全收"）
+  const cur = Array.isArray(it.kinds) ? it.kinds : Object.keys(NCH_KIND_LABELS);
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 勾选该渠道要接收的事件类型。仅在站长放开对应消息类型时生效；全部取消勾选 = 该渠道静音（不解绑）。保存即时生效。</p>
+    <div id="nchKindsBox" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
+      ${Object.entries(NCH_KIND_LABELS).map(([k, label]) => `
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
+        <input type="checkbox" data-kind="${esc(k)}" ${cur.includes(k) ? "checked" : ""}>${esc(label)}
+      </label>`).join("")}
+    </div>
+    <div class="actions">
+      <button class="btn ghost" data-act="nchBack">返回</button>
+      <button class="btn primary" data-act="nchPrefsSave" data-ctype="${esc(type)}">保存偏好</button>
+    </div>`;
+  mountIcons(body);
+}
+
+async function nchPrefsSave(type) {
+  if (!type) return;
+  const kinds = [...getModal().querySelectorAll('#nchKindsBox input[type="checkbox"]:checked')].map((x) => x.dataset.kind);
+  const r = await api.notifyChannelPrefs(type, kinds);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
+  toast("接收偏好已保存");
+  await renderNchList();
+}
+
+function renderNchSelect() {
+  const body = getModal().querySelector("#nchBody");
+  if (!body) return;
+  // 已生效渠道不可再走绑定（更换需先解绑）；待验证渠道允许重填（顶替原 pending）
+  const activeTypes = new Set(nchItems.filter((x) => x.status === "active").map((x) => x.channel_type));
+  const pendingTypes = new Set(nchItems.filter((x) => x.status === "pending").map((x) => x.channel_type));
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">选择要添加的通知渠道（最多绑定 3 个）：</p>
+    <div class="nch-list">
+      ${NCH_TYPES.map((t) => {
+        if (!t.ready) return `
+        <div class="nch-card soon">
+          <div class="nch-meta"><div class="t">${esc(t.label)}</div><div class="h">${esc(t.desc)}</div></div>
+          <span class="nch-soon">即将上线</span>
+        </div>`;
+        if (activeTypes.has(t.type)) return `
+        <div class="nch-card soon">
+          <div class="nch-meta"><div class="t">${esc(t.label)}</div><div class="h">${esc(t.desc)}</div></div>
+          <span class="nch-tag ok">已绑定</span>
+        </div>`;
+        const pend = pendingTypes.has(t.type);
+        return `
+        <div class="nch-card pick" data-act="nchPick" data-ctype="${esc(t.type)}">
+          <div class="nch-meta"><div class="t">${esc(t.label)}</div><div class="h">${esc(t.desc)}</div></div>
+          <span class="nch-tag${pend ? " pending" : " ok"}">${pend ? "待验证 · 点击重填" : "可选"}</span>
+        </div>`;
+      }).join("")}
+    </div>
+    <div class="actions"><button class="btn ghost" data-act="nchBack">返回</button></div>`;
+  mountIcons(body);
+}
+
+function renderNchForm(type) {
+  const t = NCH_TYPES.find((x) => x.type === type);
+  const body = getModal().querySelector("#nchBody");
+  if (!body || !t || !t.fields) return;
+  nchFormType = type;
+  const btnText = t.fields.length ? "发送验证码" : "一键绑定"; // 无字段渠道（邮件）：绑定即生效
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">${esc(t.desc)}</p>
+    ${t.fields.map((f) => `
+    <div class="fg">
+      <label>${esc(f.label)}</label>
+      <input class="inp" data-nchf="${esc(f.key)}" placeholder="${esc(f.placeholder || "")}">
+    </div>`).join("")}
+    <div class="actions">
+      <button class="btn ghost" data-act="nchAdd">返回</button>
+      <button class="btn primary" data-act="nchSubmit">${btnText}</button>
+    </div>`;
+  mountIcons(body);
+}
+
+function renderNchVerify() {
+  const body = getModal().querySelector("#nchBody");
+  if (!body) return;
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">验证码已发送到你填写的群机器人，请在对应企业微信群中查看（10 分钟内有效）。</p>
+    <div class="fg">
+      <label>6 位验证码</label>
+      <input class="inp" id="nchCode" type="text" inputmode="numeric" maxlength="6" placeholder="群里收到的 6 位数字">
+    </div>
+    <div class="actions">
+      <button class="btn ghost" data-act="nchResend">重新发送</button>
+      <button class="btn primary" data-act="nchVerify">确认绑定</button>
+    </div>`;
+  mountIcons(body);
+}
+
+async function nchSubmit() {
+  const t = NCH_TYPES.find((x) => x.type === nchFormType);
+  if (!t) return;
+  // 按字段清单收集非空值；必填缺失由服务端校验兜底（返回中文原因直接 toast）
+  const cred = {};
+  for (const inp of getModal().querySelectorAll("[data-nchf]")) {
+    const v = (inp.value || "").trim();
+    if (v) cred[inp.dataset.nchf] = v;
+  }
+  const r = await api.notifyChannelCreate(t.type, cred);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "发送失败，请稍后再试"); return; }
+  // 无字段渠道（邮件）绑定即生效：跳过验证码视图直接回列表
+  if (r.data?.activated) {
+    nchAddState = null;
+    toast("邮件渠道已绑定");
+    await renderNchList();
+    return;
+  }
+  nchAddState = { type: t.type, cred };
+  renderNchVerify();
+}
+
+async function nchVerify() {
+  const inp = getModal().querySelector("#nchCode");
+  const code = (inp?.value || "").trim();
+  if (!/^\d{6}$/.test(code)) { toast("请输入 6 位数字验证码"); return; }
+  const r = await api.notifyChannelVerify(code);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "验证失败，请稍后再试"); return; }
+  nchAddState = null;
+  toast("通知渠道绑定成功");
+  await renderNchList();
+}
+
+async function nchResend() {
+  if (!nchAddState) { renderNchSelect(); return; }
+  const r = await api.notifyChannelCreate(nchAddState.type, nchAddState.cred);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "发送失败，请稍后再试"); return; }
+  toast("验证码已重新发送");
+}
+
+async function nchDelete(ctype) {
+  if (!ctype) return;
+  const r = await api.notifyChannelDelete(ctype);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "解绑失败，请稍后再试"); return; }
+  toast("已解绑");
+  await renderNchList();
 }
 
 /** 静默刷新本地用户缓存（5 分钟节流）：老登录缓存缺 id/contacts/bio 时自动补齐，

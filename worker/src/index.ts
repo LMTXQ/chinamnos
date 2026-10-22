@@ -1,6 +1,7 @@
 import type { Env } from './common/env';
 import { ERR, fail, ok } from './common/envelope';
 import { handleOptions, withCors } from './common/cors';
+import { guard } from './common/auth';
 import { cachedGet } from './common/cache';
 import { handleMeta, handleAboutTimeline, handleAboutThanks, handleAboutLinks } from './common/meta';
 import { handleNotices, handlePromoPlaceholders } from './common/notices';
@@ -17,6 +18,7 @@ import { handleResetPassword } from './auth/reset-password';
 import { handleLogout } from './auth/logout';
 import { handleMe } from './auth/me';
 import { handleNickname } from './auth/nickname';
+import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete } from './auth/notify-channels';
 import { handleSetProfile, handlePublicProfile, handleAvatar, handleSetMyAvatar } from './auth/profile';
 import { handleSetAvatar } from './admin/users';
 import { moduleGuard } from './cardhub/module-guard';
@@ -159,6 +161,53 @@ export default {
         resp = await handleNotificationsDelete(request, env); // 单条删除
       } else if (p === '/api/notifications/clear-read' && m === 'POST') {
         resp = await handleNotificationsClearRead(request, env); // 清空已读
+      } else if (p === '/api/me/notify-channels' && m === 'GET') {
+        resp = await handleNotifyChannelsList(request, env); // 本人通知渠道绑定列表
+      } else if (p === '/api/me/notify-channels' && m === 'POST') {
+        resp = await handleNotifyChannelCreate(request, env); // 发起绑定（直发验证码）
+      } else if (p === '/api/me/notify-channels/verify' && m === 'POST') {
+        resp = await handleNotifyChannelVerify(request, env); // 回填验证码激活
+      } else if (p === '/api/me/notify-channels/prefs' && m === 'POST') {
+        resp = await handleNotifyChannelPrefs(request, env); // 渠道级事件偏好
+      } else if (p === '/api/me/notify-channels/delete' && m === 'POST') {
+        resp = await handleNotifyChannelDelete(request, env); // 解绑
+      } else if (p === '/api/admin/cron-run' && (m === 'GET' || m === 'POST')) {
+        // 手动触发一次日常保洁（等价于每日 scheduled 主体逻辑；owner 验收/运维用）
+        // 分任务顺序执行并逐个捕获错误——返回每一步的结果，哪步挂了直接可见
+        // 注意：guard 的错误响应也要赋值给 resp 走统一 withCors 包装（直接 return 会缺 CORS 头）
+        const g = await guard(request, env, 'owner');
+        if (g instanceof Response) {
+          resp = g;
+        } else {
+          const now = Date.now();
+          const results: Record<string, string> = {};
+          const tasks: Array<[string, () => Promise<unknown>]> = [
+            ['rate_buckets', () => env.DB.prepare('DELETE FROM rate_buckets WHERE reset_at < ?1').bind(now).run()],
+            ['auth_codes', () => env.DB.prepare('DELETE FROM auth_codes WHERE expires_at < ?1').bind(now - 24 * 3600 * 1000).run()],
+            ['sessions', () => env.DB.prepare('DELETE FROM sessions WHERE (expires_at < ?1 AND revoked_at IS NULL) OR (revoked_at < ?2)').bind(now, now - 30 * 86400 * 1000).run()],
+          ];
+          for (const [name, p2] of tasks) {
+            try {
+              await p2();
+              results[name] = 'ok';
+            } catch (e) {
+              results[name] = `FAILED: ${String(e).slice(0, 300)}`;
+            }
+          }
+          try {
+            const cardhub = await runCardhubCron(env);
+            results['cardhub_cron'] = `ok（外推 ${cardhub.rows} 行 / 青龙：${cardhub.ql}）`;
+          } catch (e) {
+            results['cardhub_cron'] = `FAILED: ${String(e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : e).slice(0, 600)}`;
+          }
+          try {
+            const acts = await runActivitiesCron(env);
+            results['activities_cron'] = `ok（外推 ${acts.rows} 行 / 青龙：${acts.ql}）`;
+          } catch (e) {
+            results['activities_cron'] = `FAILED: ${String(e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : e).slice(0, 600)}`;
+          }
+          resp = ok({ ran: true, results });
+        }
       } else if (p === '/api/mail/test' && m === 'POST') {
         resp = await handleMailTest(request, env);
       } else if (p === '/api/auth/send-code' && m === 'POST') {
@@ -313,8 +362,10 @@ export default {
       }
     } catch (e) {
       // 统一兜底 500：错误详情落实时日志（Cloudflare 后台 Real-time Logs 可查），提升线上 500 可归因性
+      // 验收期临时：错误原文+堆栈随响应返回，便于线上归因（验收结束后回收）
       console.error('[worker] unhandled error:', e);
-      resp = fail(ERR.INTERNAL_ERROR, 'INTERNAL_ERROR', 500);
+      const detail = e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e);
+      resp = fail(ERR.INTERNAL_ERROR, 'INTERNAL_ERROR', 500, { detail: detail.slice(0, 900) });
     }
     return withCors(resp, request, env);
   },

@@ -2,6 +2,8 @@ import type { Env } from './env';
 import { ERR, fail, ok } from './envelope';
 import { guard } from './auth';
 import { getSetting } from './settings';
+import { hitLimit } from './ratelimit';
+import { extPushInstant } from '../notify/ext-push';
 
 /* ── 站内通知中心（系统→用户 单向通知；发送者「用户管理组」为前端展示层概念） ──
    所有"系统→用户"事件统一入箱：审核结果（情报/社群/工具/帖子）、到期自动下架下展、
@@ -15,18 +17,42 @@ export type NotificationKind =
   | 'post_expiring' | 'relay_request'
   | 'dm_message';
 
-/* pushNotification：写一条站内通知。尽力而为——失败静默，绝不影响主流程（审核/发消息等） */
+/* pushNotification：写一条站内通知。尽力而为——失败静默，绝不影响主流程（审核/发消息等）。
+   同类过滤闸门（铃铛与外推共用）：同用户 + 同事件类型 + 同事件对象在 notify_throttle_minutes
+   窗口内只写一条/推一次（防私信刷屏刷爆铃铛与外部机器人）；0 = 关闭过滤；闸门自身异常时不拦截。
+   即时外推钩子（方案 B）：默认 src='instant' 的挂点在落库后 fire-and-forget 触发站外推送；
+   cron 挂点（到期帖/临期/活动到期）必须显式传 { src: 'cron' } 跳过——cron 批量外推由方案 C
+   的青龙管线接管，避免双发。 */
 export async function pushNotification(
   env: Env, userId: string | null | undefined,
   kind: NotificationKind, refId: string | null,
   title: string, body: string | null,
+  opts?: { src?: 'instant' | 'cron' },
 ): Promise<void> {
   if (!userId) return;
   try {
+    let throttled = false;
+    try {
+      const minutes = await getSetting<number>(env, 'notify_throttle_minutes', 10);
+      if (Number.isFinite(minutes) && minutes > 0) {
+        const t = await hitLimit(env, `notif:f:${userId}:${kind}:${refId || 'none'}`, 1, minutes * 60);
+        throttled = t.limited;
+      }
+    } catch { /* 过滤器异常不拦截，走原有写入行为 */ }
+    if (throttled) return;
     await env.DB.prepare(
       'INSERT INTO notifications (id, user_id, kind, ref_id, title, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)',
     ).bind(crypto.randomUUID(), userId, kind, refId, title.slice(0, 120), body ? body.slice(0, 1000) : null, Date.now()).run();
   } catch { /* 通知失败不影响主流程 */ }
+  if ((opts?.src ?? 'instant') === 'instant') {
+    /* 外推必须在请求生命周期内确定性执行：不注册 waitUntil 的浮动任务在响应返回后
+       可能被运行时取消（实测外推静默丢失）。竞速 3 秒上限——正常双渠道并行 ~300ms 完成；
+       超时放弃只影响外部推送（铃铛已落库），不会拖死业务请求 */
+    await Promise.race([
+      extPushInstant(env, userId, kind, title, body || '').catch(() => { /* 外推失败静默 */ }),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  }
 }
 
 /* markNotificationsReadByRef：按关联对象标已读（DM 已读联动——打开对话详情时调用；尽力而为） */

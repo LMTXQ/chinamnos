@@ -3,6 +3,7 @@ import { ERR, fail, ok } from '../common/envelope';
 import { guard } from '../common/auth';
 import { audit } from '../common/audit';
 import { normalizeSchedule } from '../common/notices';
+import { NOTIFY_KINDS } from '../notify/ext-push';
 
 /** 允许修改的设置项白名单（新增设置时同步扩展，前端 SETTING_DESC 补说明） */
 const ALLOWED_KEYS = new Set([
@@ -30,6 +31,9 @@ const ALLOWED_KEYS = new Set([
   'mail_conversation_enabled',
   'mail_relay_request_enabled',
   'mail_post_expiring_enabled',
+  'notify_ext_enabled',
+  'notify_ext_kinds',
+  'notify_throttle_minutes',
 ]);
 
 /** 白名单内尚未写入 DB 的新键的默认值（仅「空串即合法默认」的文本键；布尔/数值键的默认语义请走迁移 seed，避免误显开关状态） */
@@ -333,6 +337,20 @@ export async function handleUpdateSetting(request: Request, env: Env, key: strin
     // 邮件通知分场景开关：强校验布尔
     else if (key === 'mail_post_review_enabled' || key === 'mail_conversation_enabled' || key === 'mail_relay_request_enabled' || key === 'mail_post_expiring_enabled') {
       if (typeof value !== 'boolean') return fail(ERR.VALIDATION_ERROR, 'INVALID_VALUE', 400, { field: key });
+    }
+    // 站外通知推送（方案 B）：总开关布尔；事件白名单限定已知 kind 数组
+    // 同类过滤窗口（notify_throttle_minutes）：整数 0~1440 分钟，0 = 关闭过滤；
+    // 铃铛与外推共用闸门——同用户同事件对象窗口内只写一条铃铛且只外推一次
+    else if (key === 'notify_ext_enabled') {
+      if (typeof value !== 'boolean') return fail(ERR.VALIDATION_ERROR, 'INVALID_VALUE', 400, { field: key });
+    } else if (key === 'notify_ext_kinds') {
+      if (!Array.isArray(value)) return fail(ERR.VALIDATION_ERROR, 'INVALID_VALUE', 400, { field: key });
+      const known = new Set<string>(NOTIFY_KINDS);
+      value = [...new Set(value.map((x) => String(x)))].filter((k) => known.has(k));
+    } else if (key === 'notify_throttle_minutes') {
+      const n = typeof value === 'number' ? value : Number(value);
+      if (!Number.isInteger(n) || n < 0 || n > 1440) return fail(ERR.VALIDATION_ERROR, 'INVALID_VALUE', 400, { field: key });
+      value = n;
     }
     valueJson = JSON.stringify(value);
   } catch {

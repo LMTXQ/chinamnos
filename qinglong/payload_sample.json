@@ -1,0 +1,20 @@
+[
+  {
+    "nid": "sample-dingtalk-001",
+    "uid": "你的用户ID",
+    "kind": "post_expiring",
+    "title": "【ChinaMNOs 讯览台】消息通知",
+    "body": "站点：chinamnos.ftac.dpdns.org\n\n正文：您的帖子即将到期\n帖子「测试帖子」将在 3 天后到期自动下架，如需继续展示请到「我的发布」重新提交。\n\n若希望关闭打扰，请前往站点关闭外接消息通知或解绑通知渠道。",
+    "channel_type": "dingtalk",
+    "cred": { "webhook": "https://oapi.dingtalk.com/robot/send?access_token=替换成你的token", "secret": "SEC替换成你的加签密钥" }
+  },
+  {
+    "nid": "sample-wecom-001",
+    "uid": "你的用户ID",
+    "kind": "post_expiring",
+    "title": "【ChinaMNOs 讯览台】消息通知",
+    "body": "站点：chinamnos.ftac.dpdns.org\n\n正文：您的帖子即将到期\n帖子「测试帖子」将在 3 天后到期自动下架，如需继续展示请到「我的发布」重新提交。\n\n若希望关闭打扰，请前往站点关闭外接消息通知或解绑通知渠道。",
+    "channel_type": "wecom",
+    "cred": { "webhook": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=替换成你的key" }
+  }
+]

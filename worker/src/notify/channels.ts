@@ -1,0 +1,186 @@
+// 渠道注册表（站外通知推送方案 · §3.3）：每渠道注册 校验/脱敏/发送 三件套。
+// 新增渠道 = 在 CHANNELS 加一个 ChannelDef，绑定流与后续推送分支（方案 B/C/D）零改动。
+import type { Env } from '../common/env';
+import { aesGcmEncrypt, aesGcmDecrypt } from '../common/crypto';
+
+export interface SendResult {
+  ok: boolean;
+  error?: string;
+}
+
+export type ChannelCred = Record<string, string>;
+
+export interface ChannelField {
+  key: string;
+  label: string;
+  placeholder: string;
+}
+
+export interface ChannelDef {
+  type: string;
+  label: string;
+  desc: string; // 绑定表单说明文案
+  fields: ChannelField[];
+  /** 绑定即生效（邮件渠道：凭证即账号邮箱，无需验证码） */
+  skipVerify?: boolean;
+  /** 仅参与青龙批量管线（方案 C），即时分支跳过该渠道 */
+  bulkOnly?: boolean;
+  validate(raw: Record<string, unknown>, viewerEmail?: string): { ok: true; cred: ChannelCred } | { ok: false; error: string };
+  hint(cred: ChannelCred): string; // 脱敏展示（target_hint）
+  send(cred: ChannelCred, title: string, body: string): Promise<SendResult>;
+}
+
+// 按 UTF-8 字节截断（中文 3 字节），丢掉被切半个的尾字符避免乱码（对齐 notify.py 的 _trunc_bytes）
+export function truncBytes(s: string, limit: number): string {
+  const b = new TextEncoder().encode(s);
+  if (b.length <= limit) return s;
+  let cut = b.slice(0, limit);
+  for (let i = 0; i < 4; i++) {
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(cut) + '\n\n…（内容过长已截断）';
+    } catch {
+      cut = cut.slice(0, -1);
+    }
+  }
+  return new TextDecoder('utf-8').decode(cut) + '\n\n…（内容过长已截断）';
+}
+
+/* ── 企业微信群机器人 ──
+   群设置 → 群机器人 → 添加，复制 Webhook 地址；markdown 消息上限 4096 字节（留余量）。 */
+const wecom: ChannelDef = {
+  type: 'wecom',
+  label: '企业微信机器人',
+  desc: '在企业微信群（建议单人群）设置中添加「群机器人」，复制 Webhook 地址粘贴绑定。验证码与后续通知都会发到该群。',
+  fields: [
+    { key: 'webhook', label: 'Webhook 地址', placeholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…' },
+  ],
+  validate(raw) {
+    const v = typeof raw.webhook === 'string' ? raw.webhook.trim() : '';
+    if (!/^https:\/\/qyapi\.weixin\.qq\.com\/cgi-bin\/webhook\/send\?key=[0-9a-zA-Z-]{16,}$/.test(v)) {
+      return { ok: false, error: 'Webhook 地址格式不正确，请复制企业微信群机器人的完整 Webhook 地址' };
+    }
+    return { ok: true, cred: { webhook: v } };
+  },
+  hint(cred) {
+    const m = /key=([0-9a-zA-Z-]+)/.exec(cred.webhook || '');
+    return `企业微信机器人 · key 尾号 ${m ? m[1].slice(-4) : '****'}`;
+  },
+  async send(cred, title, body) {
+    const content = truncBytes(`## ${title}\n${body}`, 3800);
+    let res: Response;
+    try {
+      res = await fetch(cred.webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msgtype: 'markdown', markdown: { content } }),
+      });
+    } catch (e) {
+      return { ok: false, error: `网络错误: ${String(e)}` };
+    }
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { errcode?: number; errmsg?: string };
+    if (data.errcode !== 0) return { ok: false, error: `errcode=${data.errcode} ${data.errmsg || ''}`.trim() };
+    return { ok: true };
+  },
+};
+
+/* ── 钉钉群机器人（加签可选）──
+   群设置 → 智能群助手 → 添加「自定义」机器人；安全设置选「加签」则需填 SEC 开头密钥。
+   markdown 消息 title ≤64 字；频控 20 条/分钟/机器人。 */
+async function dingtalkSign(secret: string, ts: number): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(`${ts}\n${secret}`));
+  let bin = '';
+  for (const b of new Uint8Array(sig)) bin += String.fromCharCode(b);
+  return encodeURIComponent(btoa(bin));
+}
+
+const dingtalk: ChannelDef = {
+  type: 'dingtalk',
+  label: '钉钉机器人',
+  desc: '在钉钉群设置中添加「自定义机器人」（安全设置建议选「加签」），复制 Webhook 地址；如选了加签请一并填入 SEC 开头的密钥。验证码与后续通知都会发到该群。',
+  fields: [
+    { key: 'webhook', label: 'Webhook 地址', placeholder: 'https://oapi.dingtalk.com/robot/send?access_token=…' },
+    { key: 'secret', label: '加签密钥（可选）', placeholder: 'SEC 开头，仅安全设置选「加签」时填写' },
+  ],
+  validate(raw) {
+    const v = typeof raw.webhook === 'string' ? raw.webhook.trim() : '';
+    if (!/^https:\/\/oapi\.dingtalk\.com\/robot\/send\?access_token=[0-9a-zA-Z]{16,}$/.test(v)) {
+      return { ok: false, error: 'Webhook 地址格式不正确，请复制钉钉自定义机器人的完整 Webhook 地址' };
+    }
+    const s = typeof raw.secret === 'string' ? raw.secret.trim() : '';
+    if (s && !/^SEC[0-9a-zA-Z]{6,}$/.test(s)) {
+      return { ok: false, error: '加签密钥格式不正确：应为创建机器人时生成的 SEC 开头字符串' };
+    }
+    return { ok: true, cred: s ? { webhook: v, secret: s } : { webhook: v } };
+  },
+  hint(cred) {
+    const m = /access_token=([0-9a-zA-Z]+)/.exec(cred.webhook || '');
+    return `钉钉机器人 · token 尾号 ${m ? m[1].slice(-4) : '****'}${cred.secret ? '（加签）' : ''}`;
+  },
+  async send(cred, title, body) {
+    let url = cred.webhook;
+    if (cred.secret) {
+      const ts = Date.now();
+      url += `&timestamp=${ts}&sign=${await dingtalkSign(cred.secret, ts)}`;
+    }
+    const content = truncBytes(`## ${title}\n${body}`, 3800);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msgtype: 'markdown', markdown: { title: title.slice(0, 64), text: content } }),
+      });
+    } catch (e) {
+      return { ok: false, error: `网络错误: ${String(e)}` };
+    }
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { errcode?: number; errmsg?: string };
+    if (data.errcode !== 0) return { ok: false, error: `errcode=${data.errcode} ${data.errmsg || ''}`.trim() };
+    return { ok: true };
+  },
+};
+
+/* ── 邮件（账号邮箱，一键绑定）──
+   凭证即账号邮箱（绑定即激活，无验证码——所有权由账号体系天然保证）。
+   即时分支不发本渠道（私信/审核类邮件由既有 mail_* 开关链路负责，避免重复）；
+   批量分支（方案 C cron 到期帖 / 方案 D 采集播报）经青龙 SMTP 多邮箱池发送。 */
+const email: ChannelDef = {
+  type: 'email',
+  label: '邮件',
+  desc: '一键绑定你的注册邮箱。到期提醒、采集播报等批量通知将发送到该邮箱；私信与审核类通知本就会发送到你的邮箱，不受此绑定影响。',
+  fields: [],
+  skipVerify: true,
+  bulkOnly: true,
+  validate(_raw, viewerEmail) {
+    if (!viewerEmail) return { ok: false, error: '账号缺少邮箱，无法绑定邮件渠道' };
+    return { ok: true, cred: { email: viewerEmail } };
+  },
+  hint(cred) {
+    return `邮件 · ${cred.email || ''}`;
+  },
+  async send() {
+    // 即时分支占位：本渠道即时事件不发（见上），批量事件由青龙侧 SMTP 池负责
+    return { ok: true };
+  },
+};
+
+/* 注册表：dingtalk / wecom / email 已上线；feishu/pushplus/qmsg 按同结构即插即用 */
+export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email };
+
+export function getChannel(type: string): ChannelDef | undefined {
+  return CHANNELS[type];
+}
+
+/* 加解密（绑定流专用）：密钥与联系方式加密同源（CARDHUB_SECRET 派生） */
+export async function sealCred(env: Env, cred: ChannelCred): Promise<string> {
+  return aesGcmEncrypt(env.CARDHUB_SECRET || 'fallback', JSON.stringify(cred));
+}
+
+export async function openCred(env: Env, credEnc: string): Promise<ChannelCred> {
+  return JSON.parse(await aesGcmDecrypt(env.CARDHUB_SECRET || 'fallback', credEnc)) as ChannelCred;
+}

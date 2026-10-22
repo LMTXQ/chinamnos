@@ -7,6 +7,9 @@ import { audit } from './common/audit';
 import { getPublicProfiles } from './auth/public-profile';
 import { decodeDataUrl } from './cardhub/proofs';
 import { pushNotification } from './common/notifications';
+import { getSetting } from './common/settings';
+import { loadActiveBindings, SITE_NAME } from './auth/notify-channels';
+import { qlDispatchPayload, type PayloadRow } from './notify/ql-client';
 import { CHAT_TYPES, CHAT_ID_MAX } from './communities';
 
 /* 情报酒馆（原活动集锦）：资费页「情报酒馆」tab 的双模式信息聚合（用户提交 → 管理员审核 → 公开展示）。
@@ -825,7 +828,11 @@ export async function handleActivityAdminUpdate(request: Request, env: Env, id: 
 }
 
 // Cron：到期活动 open → expired（读路径已有 ends_at 过滤双保险）；对每条到期内容站内通知提交者
-export async function runActivitiesCron(env: Env): Promise<void> {
+// 站外通知走青龙批量管线（方案 C）：act_expired 按用户绑定渠道组装 payload（总开关/白名单/渠道偏好三重过滤）
+// 返回外推回执（rows = payload 行数，ql = 青龙分发结果），供手动触发端点透传
+export async function runActivitiesCron(env: Env): Promise<{ rows: number; ql: string }> {
+  let qlRows = 0;
+  let qlResult = '未触发（无到期活动或开关未开）';
   const now = Date.now();
   const expired = await env.DB.prepare(
     `SELECT id, mode, submitted_by, title FROM activities
@@ -834,10 +841,61 @@ export async function runActivitiesCron(env: Env): Promise<void> {
   await env.DB.prepare(
     `UPDATE activities SET status = 'expired' WHERE status = 'open' AND ends_at IS NOT NULL AND ends_at < ?1`,
   ).bind(now).run();
-  for (const r of expired.results || []) {
-    const isChat = (r.mode || 'official') === 'chat';
-    await pushNotification(env, r.submitted_by, 'act_expired', r.id,
-      `你提交的${isChat ? '社群' : '情报'}「${r.title}」已到期自动下展`,
-      '内容已到截止时间自动下展，不再公开展示。如需继续，欢迎重新投稿。');
+
+  const results = expired.results || [];
+
+  // 铃铛批量直写
+  if (results.length) {
+    await env.DB.batch(results.map((r) => {
+      const isChat = (r.mode || 'official') === 'chat';
+      return env.DB.prepare(
+        'INSERT INTO notifications (id, user_id, kind, ref_id, title, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)',
+      ).bind(crypto.randomUUID(), r.submitted_by, 'act_expired', r.id,
+        `你提交的${isChat ? '社群' : '情报'}「${r.title}」已到期自动下展`,
+        '内容已到截止时间自动下展，不再公开展示。如需继续，欢迎重新投稿。', Date.now());
+    }));
   }
+
+  // 站外批量（方案 C）：总开关 + 白名单（act_expired）+ 渠道级偏好 三重过滤
+  const extEnabled = await getSetting<boolean>(env, 'notify_ext_enabled', false);
+  if (extEnabled && results.length) {
+    const kindsCfg = await getSetting<unknown>(env, 'notify_ext_kinds', null);
+    const kindOk = !Array.isArray(kindsCfg) || kindsCfg.includes('act_expired');
+    if (kindOk) {
+      const site = env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org';
+      const pushTitle = `【${SITE_NAME}】消息通知`;
+      const rows: PayloadRow[] = [];
+      for (const r of results) {
+        const isChat = (r.mode || 'official') === 'chat';
+        const kindLabel = isChat ? '社群' : '情报';
+        const content =
+          `站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n` +
+          `正文：你提交的${kindLabel}「${r.title}」已到期自动下展\n` +
+          `如需继续，欢迎重新投稿。\n\n` +
+          `若希望关闭打扰，请前往站点关闭外接消息通知或解绑通知渠道。`;
+        const bindings = await loadActiveBindings(env, r.submitted_by);
+        for (const b of bindings) {
+          if (b.kinds && !b.kinds.includes('act_expired')) continue; // 渠道级偏好过滤
+          const nid = `act_expired:${r.id}:${b.channel_type}`;        // 确定性去重键：重跑不重发
+          if (b.channel_type === 'email') {
+            rows.push({ nid, uid: r.submitted_by, kind: 'act_expired', title: pushTitle, body: content, channel_type: 'email', email_target: b.cred.email });
+          } else {
+            rows.push({ nid, uid: r.submitted_by, kind: 'act_expired', title: pushTitle, body: content, channel_type: b.channel_type, cred: b.cred });
+          }
+        }
+      }
+      if (rows.length) {
+        qlRows = rows.length;
+        const filename = `batch_cron_act_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.json`;
+        try {
+          await qlDispatchPayload(env, filename, rows);
+          qlResult = `ok（${rows.length} 行）`;
+        } catch (e) {
+          qlResult = `FAILED: ${String(e).slice(0, 200)}`;
+          console.warn(`[cron-ext] 活动到期外推失败（${rows.length} 条未推送，铃铛不受影响）: ${qlResult}`);
+        }
+      }
+    }
+  }
+  return { rows: qlRows, ql: qlResult };
 }
