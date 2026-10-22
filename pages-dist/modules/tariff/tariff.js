@@ -625,13 +625,13 @@ async function renderNoticesView() {
   renderPromoList(pBody, list, ph);
 }
 
-function goProvince(code) {
+function goProvince(code, targetTab) {
   $("gProv").value = code;
   saveProvCode();
   renderDistBars();
   if (STATS) renderProvStatsRow(STATS);
   dynamicType1Keys.forEach(t1 => { listState[t1 + "_" + code] = null; });
-  const target = dynamicType1Keys.includes("2") ? "t1_2" : (dynamicType1Keys[0] ? "t1_" + dynamicType1Keys[0] : "overview");
+  const target = targetTab || (dynamicType1Keys.includes("2") ? "t1_2" : (dynamicType1Keys[0] ? "t1_" + dynamicType1Keys[0] : "overview"));
   goTab(target);
   chTabRefresh(true); // 省份变化 → 跳蚤市集 tab 重新探测（显隐与内容随省份联动）
   actTabRefreshAndRender(); // 情报酒馆列表随省份联动
@@ -2055,8 +2055,8 @@ function renderProvStatsRow(s) {
   const bdHtml = bdItems.length ? bdItems.join("") : `<span class="bd-num">-</span>`;
   el.innerHTML = `
     <div class="stat-card tilt"><div class="stat-info"><div class="stat-label">${esc(name)} 资费总数</div><div class="stat-value accent">${fmt(pTariffs)}<span style="font-size:13px;color:var(--sub);font-weight:400;margin-left:6px">占全国 ${pct}%</span></div></div><div class="stat-icon total">${icon("home")}</div></div>
-    <div class="stat-card tilt"><div class="stat-info"><div class="stat-label">今日新增</div><div class="stat-value green">${fmt(pAdd)}</div></div><div class="stat-icon added">${icon("plusCircle")}</div></div>
-    <div class="stat-card tilt"><div class="stat-info"><div class="stat-label">今日下架 / 变更</div><div class="stat-value" style="font-size:21px"><span style="color:var(--red)">${fmt(pRm)}</span> / <span style="color:var(--amber)">${fmt(pChg)}</span></div></div><div class="stat-icon removed">${icon("edit")}</div></div>
+    <div class="stat-card tilt" style="cursor:pointer" data-act="provStatCl" title="点击查看本省变更日志"><div class="stat-info"><div class="stat-label">今日新增</div><div class="stat-value green">${fmt(pAdd)}</div></div><div class="stat-icon added">${icon("plusCircle")}</div></div>
+    <div class="stat-card tilt" style="cursor:pointer" data-act="provStatCl" title="点击查看本省变更日志"><div class="stat-info"><div class="stat-label">今日下架 / 变更</div><div class="stat-value" style="font-size:21px"><span style="color:var(--red)">${fmt(pRm)}</span> / <span style="color:var(--amber)">${fmt(pChg)}</span></div></div><div class="stat-icon removed">${icon("edit")}</div></div>
     <div class="stat-card tilt stat-card-bd"><div class="stat-info"><div class="stat-label">分类资费分布</div><div class="bd-list">${bdHtml}</div></div><div class="stat-icon sum">${icon("chart")}</div></div>
   `;
 }
@@ -3719,6 +3719,44 @@ function closeModal() {
   setTimeout(() => { dlg.close(); dlg.classList.remove("modal-closing"); }, 180);
 }
 
+/* 今日新增/下架 · 省份分布弹窗：数据源 s.provinces[].today（每省按归属分组的今日计数）。
+   合计口径与顶栏一致：仅计采集成功/自动恢复省——失败省继承的旧 today 不计入，避免把过期数据当今日变化误导 */
+function openTodayProvModal(kind) {
+  if (!STATS) { ensureTariffBootstrapped().then(() => { if (STATS) openTodayProvModal(kind); }); return; }
+  const OK = st => st === "success" || st === "degrade_auto_recovered";
+  const rows = [];
+  let skipped = 0;
+  (STATS.provinces || []).forEach(p => {
+    if (!OK(p.crawl_status)) { skipped++; return; }
+    let n = 0;
+    Object.values(p.today || {}).forEach(c => { n += (c && c[kind]) || 0; });
+    if (n > 0) rows.push({ name: p.name, code: p.code, n });
+  });
+  rows.sort((a, b) => b.n - a.n);
+  const total = rows.reduce((sum, r) => sum + r.n, 0);
+  const isAdd = kind === "added";
+  const color = isAdd ? "var(--green)" : "var(--red)";
+  const label = isAdd ? "今日新增" : "今日下架";
+  const brand = (CARRIER_BRAND[currentCarrier] || {}).name || "";
+  const listHtml = rows.length
+    ? rows.map((r, i) => {
+        const pct = Math.max(2, Math.round(r.n / total * 100));
+        return `<div data-act="todayProvJump" data-code="${esc(r.code)}" data-name="${esc(r.name)}" title="点击查看「${esc(r.name)}」的变更记录" style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;border-radius:6px">
+          <span style="width:22px;text-align:right;color:var(--sub);font-size:12px;flex:none">${i + 1}</span>
+          <span style="width:64px;flex:none">${esc(r.name)}</span>
+          <div style="flex:1;height:8px;border-radius:4px;background:var(--line,#e5e7eb);overflow:hidden;min-width:0"><div style="width:${pct}%;height:100%;border-radius:4px;background:${color}"></div></div>
+          <b style="color:${color};width:40px;text-align:right;flex:none;font-variant-numeric:tabular-nums">${fmt(r.n)}</b>
+        </div>`;
+      }).join("")
+    : '<div class="empty" style="padding:24px;text-align:center">今日暂无' + esc(label) + '的省份</div>';
+  const skipHtml = skipped ? `<p class="hint" style="margin:10px 0 0">另有 ${skipped} 个省份今日未采集成功，未计入统计。</p>` : "";
+  openModal(`${label} · 省份分布${brand ? `（${brand}）` : ""}`,
+    `<div style="padding:4px 2px">
+      <p class="hint" style="margin:0 0 10px">合计 <b style="color:${color}">${fmt(total)}</b> 条 · 按数量降序</p>
+      ${listHtml}${skipHtml}
+    </div>`);
+}
+
 function initModal() {
   $("modalClose").addEventListener("click", closeModal);
   $("modalOk").addEventListener("click", closeModal);
@@ -3734,6 +3772,21 @@ function initModal() {
   };
   $("modalBody").addEventListener("click", modalDispatch);
   $("modalFootExtra").addEventListener("click", modalDispatch);
+  /* 总览「今日新增/下架」统计卡 → 省份分布弹窗（骨架静态节点，init 期绑一次委托） */
+  const ovStatsRow = $("ovStatsRow");
+  if (ovStatsRow) ovStatsRow.addEventListener("click", e => {
+    if (e.target.closest('[data-act="statTodayAdd"]')) openTodayProvModal("added");
+    else if (e.target.closest('[data-act="statTodayRm"]')) openTodayProvModal("removed");
+  });
+  /* 本省「今日新增/下架/变更」统计卡 → 本省变更日志（省份不变，清守卫后直接切页签） */
+  const provStatsRow = $("provStatsRow");
+  if (provStatsRow) provStatsRow.addEventListener("click", e => {
+    if (!e.target.closest('[data-act="provStatCl"]')) return;
+    const code = getProvCode();
+    if (!code) { toast("请先选择省份"); return; }
+    delete TAB_SHOWN["changelog"];
+    goTab("changelog");
+  });
 }
 
 /* ─────────────── 侧边栏（移动端抽屉） ─────────────── */
@@ -4335,6 +4388,14 @@ function initTariff() {
       if (!ts || !prov) return;
       closeModal();
       consumeClDeep({ kind: "cl", carrier: chkState.curCarrier || currentCarrier, prov, ts, name: name.toLowerCase(), label: name }, false);
+    },
+    /* 今日新增/下架省份分布弹窗：点省份行 → 切省并打开该省变更记录 */
+    todayProvJump: (el) => {
+      const code = el.dataset.code || "";
+      if (!code) return;
+      closeModal();
+      delete TAB_SHOWN["changelog"]; // 清一次性渲染守卫：否则 goTab 被拦截不重渲，停留旧省数据
+      goProvince(code, "changelog");
     },
   };
   /* 关于页「分享本站」（关于页区域无点击委托，走 window 挂钩） */
@@ -5211,8 +5272,8 @@ Shell.registerPage({
       <p class="page-sub">实时监控全国及各省资费套餐变化</p>
       <div class="stat-grid" id="ovStatsRow">
         <div class="stat-card tilt rise" style="--i:0" title="跨省按方案编号去重（无编号回退名称）：全国方案跨省同码只计一次；同名不同编码为不同方案分别计数"><div class="stat-info"><div class="stat-label">全网资费总量（去重）</div><div class="stat-value accent"><num-ticker id="stNational">-</num-ticker></div></div><div class="stat-icon total">${icon("package")}</div></div>
-        <div class="stat-card tilt rise" style="--i:1"><div class="stat-info"><div class="stat-label">今日新增</div><div class="stat-value green"><num-ticker id="stTodayAdd">-</num-ticker></div></div><div class="stat-icon added">${icon("plusCircle")}</div></div>
-        <div class="stat-card tilt rise" style="--i:2"><div class="stat-info"><div class="stat-label">今日下架</div><div class="stat-value red"><num-ticker id="stTodayRm">-</num-ticker></div></div><div class="stat-icon removed">${icon("minusCircle")}</div></div>
+        <div class="stat-card tilt rise" style="--i:1;cursor:pointer" data-act="statTodayAdd" title="点击查看各省份新增分布"><div class="stat-info"><div class="stat-label">今日新增</div><div class="stat-value green"><num-ticker id="stTodayAdd">-</num-ticker></div></div><div class="stat-icon added">${icon("plusCircle")}</div></div>
+        <div class="stat-card tilt rise" style="--i:2;cursor:pointer" data-act="statTodayRm" title="点击查看各省份下架分布"><div class="stat-info"><div class="stat-label">今日下架</div><div class="stat-value red"><num-ticker id="stTodayRm">-</num-ticker></div></div><div class="stat-icon removed">${icon("minusCircle")}</div></div>
       </div>
       <div class="stat-grid" id="provStatsRow"></div>
       <div class="panel">

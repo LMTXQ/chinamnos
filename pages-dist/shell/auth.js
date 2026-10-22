@@ -1038,6 +1038,9 @@ function renderNchSelect() {
   const pendingTypes = new Set(nchItems.filter((x) => x.status === "pending").map((x) => x.channel_type));
   body.innerHTML = `
     <p class="hint" style="margin-top:0">选择要添加的通知渠道（最多绑定 3 个）：</p>
+    <div class="nch-risk" style="border:1px dashed var(--line,#d0d3da);border-radius:8px;padding:8px 10px;margin:0 0 10px;font-size:12px;line-height:1.7;opacity:.85">
+      <b>风险说明：</b>绑定后，你的渠道凭证（如 Webhook 地址、加签密钥）将以 AES-GCM 加密存储于站点数据库，仅用于发送绑定验证码和你勾选的站点通知；任何页面与日志仅显示脱敏尾号，不回显完整凭证，也不会提供给任何第三方。如不接受上述存储与使用方式，请勿绑定。
+    </div>
     <div class="nch-list">
       ${NCH_TYPES.map((t) => {
         if (!t.ready) return `
@@ -1076,6 +1079,7 @@ function renderNchForm(type) {
       <input class="inp" data-nchf="${esc(f.key)}" placeholder="${esc(f.placeholder || "")}">
     </div>`).join("")}
     <div class="actions">
+      <p class="hint" style="margin:0 0 8px">凭证将加密存储、仅用于本站通知发送；不接受请勿绑定。</p>
       <button class="btn ghost" data-act="nchAdd">返回</button>
       <button class="btn primary" data-act="nchSubmit">${btnText}</button>
     </div>`;
