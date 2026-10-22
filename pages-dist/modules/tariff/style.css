@@ -2571,6 +2571,51 @@
   user-select: none;
 }
 
+/* ─────────────── 检测弹窗：运营商/省份选择（同款组件语言） + 今日变化条目胶囊 ─────────────── */
+.chk-carrier-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 12px; }
+.chk-carrier {
+  padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface-2);
+  font: 600 12.5px/1.5 var(--font); color: var(--sub);
+  transition: color .12s, border-color .12s, background .12s;
+}
+.chk-carrier b { margin-left: 5px; font-weight: 700; }
+.chk-carrier:hover { color: var(--txt); }
+.chk-carrier.active {
+  border-color: color-mix(in oklab, var(--acc) 40%, transparent);
+  background: color-mix(in oklab, var(--acc) 12%, transparent); color: var(--acc);
+}
+.chk-prov-wrap { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.chk-prov-label { flex: none; font-size: 12.5px; font-weight: 600; color: var(--sub); }
+.chk-prov-wrap .prov-picker { flex: 0 1 240px; }
+/* 检测弹窗内：省份下拉改为视口居中浮层——fixed 脱离弹窗 overflow 与锚点限制；
+   !important 压过 clampPopToViewport 的窄屏内联 left/right（弹窗内无 backdrop-filter 祖先，fixed 可靠） */
+#chkProvPicker.prov-picker .prov-pop {
+  position: fixed;
+  left: 50% !important;
+  top: 50% !important;
+  right: auto !important;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100vw - 32px));
+}
+.chk-items { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; padding: 2px; }
+.chk-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; text-align: left;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+  transition: border-color .12s;
+}
+.chk-item:hover { border-color: color-mix(in oklab, var(--acc) 40%, transparent); }
+.chk-item .chk-name {
+  flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--txt);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chk-item svg { width: 12px; height: 12px; flex: none; color: var(--sub); }
+.chk-tag { flex: none; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+.chk-tag.ok { background: color-mix(in oklab, var(--green) 14%, transparent); color: var(--green); }
+.chk-tag.del { background: color-mix(in oklab, var(--red) 14%, transparent); color: var(--red); }
+.chk-tag.chg { background: color-mix(in oklab, var(--amber) 15%, transparent); color: var(--amber); }
+.chk-empty, .chk-loading { padding: 24px; text-align: center; color: var(--sub); font-size: 13px; }
+
 .filter-btn svg,
 .btn svg {
   width: 12px;

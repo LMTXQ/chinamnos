@@ -413,12 +413,15 @@ function loadJson(path) {
 
 // 强制刷新：成功后必须回写缓存，否则 doCheck 拿到最新数据后
 // renderOverview → loadStats 会被 TTL 内的旧 localStorage 覆盖
-function fetchNoCache(path) {
-  const url = path === "stats.json" ? "./data/stats.json" : `./data/${currentCarrier}/` + path.replace(/^\//, "");
+// carrierOverride：检测弹窗跨运营商拉 changelog 用——缓存键必须跟实际数据归属，
+// 否则与 cacheKeyFor 的 currentCarrier 前缀互踩（切运营商后 loadJson 命中错误数据）
+function fetchNoCache(path, carrierOverride) {
+  const effCarrier = carrierOverride || currentCarrier;
+  const url = path === "stats.json" ? "./data/stats.json" : `./data/${effCarrier}/` + path.replace(/^\//, "");
   return fetchTimeout(url, {cache: "no-store"})
     .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
     .then(j => {
-      cache[cacheKeyFor(path)] = j;
+      cache[path === "stats.json" ? "stats.json" : effCarrier + ":" + path] = j;
       if (path === "stats.json") {
         if (j.cache && typeof j.cache.ttl_minutes === "number") {
           cacheTTL = j.cache.ttl_minutes * 60 * 1000;
@@ -3698,10 +3701,15 @@ function renderDiagnostics(diag) {
 }
 
 /* ─────────────── 模态框（<dialog>） ─────────────── */
-function openModal(title, html, footExtra) {
+function openModal(title, html, footExtra, opts) {
   $("modalTitle").textContent = title;
   $("modalBody").innerHTML = html;
   $("modalFootExtra").innerHTML = footExtra || "";
+  /* ofv 场景类：放开 modal-body/dialog 两层 overflow 裁剪（弹窗内含下拉浮层时用，如检测弹窗省选择器）；
+     每次 open 都先清再按需加，防其他弹窗串用 */
+  const ofv = !!(opts && opts.bodyOverflowVisible);
+  $("modalBody").classList.toggle("ofv", ofv);
+  $("modalDlg").classList.toggle("ofv", ofv);
   $("modalDlg").showModal();
 }
 function closeModal() {
@@ -3950,7 +3958,113 @@ function initProvListeners() {
 
 /* ─────────────── 检测资费变化 ─────────────── */
 let checking = false;
-const RK = () => `${currentCarrier}_v2_check`;
+/* 检测弹窗状态：carriersMap=stats.carriers 全四家；carriers=有变化的运营商（含今日总数）；
+   curCarrier=当前查看运营商（弹窗内可切换）；provs/cur=该运营商有变化的省与当前省 */
+const chkState = { carriersMap: null, carriers: [], curCarrier: "", provs: [], cur: null };
+
+function chkCarrierName(code) { return (CARRIER_BRAND[code] || {}).shortName || code; }
+
+/* 今日 0 点（北京时间）的 UTC 毫秒——与采集端 changelog「今日」窗口同锚点
+   （changelog ts 为 UTC ISO 串，值=北京时间-8h；北京 0 点的 UTC 表示即此式） */
+function bjMidnightMs() {
+  return Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 - 8 * 3600000;
+}
+
+function chkTagHTML(type) {
+  const cls = type === "added" ? "ok" : type === "removed" ? "del" : "chg";
+  const label = type === "added" ? "新增" : type === "removed" ? "下架" : "变更";
+  return `<span class="chk-tag ${cls}">${label}</span>`;
+}
+
+function chkBuildProvs(carrierCode) {
+  const cdata = (chkState.carriersMap || {})[carrierCode] || {};
+  return (cdata.provinces || []).map((p) => {
+    let added = 0, removed = 0, changed = 0;
+    for (const c of Object.values(p.today || {})) { added += c.added || 0; removed += c.removed || 0; changed += c.changed || 0; }
+    return { code: p.code, name: p.name, total: added + removed + changed };
+  }).filter((x) => x.total > 0).sort((a, b) => b.total - a.total);
+}
+
+/* 汇总数字行（随运营商切换更新） */
+function chkRenderSummary() {
+  const cdata = (chkState.carriersMap || {})[chkState.curCarrier] || {};
+  let add = 0, rm = 0, chg = 0;
+  for (const c of Object.values(cdata.today || {})) { add += c.added || 0; rm += c.removed || 0; chg += c.changed || 0; }
+  const el = $("chkSummary");
+  if (el) el.innerHTML = `<b style="color:var(--acc)">${esc(chkCarrierName(chkState.curCarrier))}</b> · 今日新增 <b style="color:var(--green)">${add}</b> 条，下架 <b style="color:var(--red)">${rm}</b> 条，变更 <b style="color:var(--amber)">${chg}</b> 条`;
+}
+
+/* 当前省今日变化条目胶囊：懒加载该运营商该省 changelog（no-cache），按北京时间今日 0 点筛 logs */
+async function chkRenderItems() {
+  const box = $("chkItems");
+  if (!box || !chkState.cur) return;
+  box.innerHTML = `<div class="chk-loading">加载中…</div>`;
+  let logs = [];
+  try {
+    const raw = await fetchNoCache(`changelogs/changelog_${chkState.cur.code}.json`, chkState.curCarrier);
+    logs = (raw && Array.isArray(raw.logs)) ? raw.logs : [];
+  } catch { logs = []; }   // 无变更日志文件的省按空处理
+  const start = bjMidnightMs();
+  const today = logs.filter((l) => { const t = new Date(l.ts).getTime(); return Number.isFinite(t) && t >= start; });
+  box.innerHTML = today.length
+    ? today.map((l) => `<button type="button" class="chk-item" data-act="chkJump" data-ts="${esc(String(l.ts ?? ""))}" data-name="${esc(l.name || "")}" data-prov="${esc(chkState.cur.code)}">${chkTagHTML(l.type)}<span class="chk-name">${esc(l.name || "（无名称）")}</span>${icon("chevronRight")}</button>`).join("")
+    : `<div class="chk-empty">该省今日无变更记录</div>`;
+  mountIcons(box);
+}
+
+/* 弹窗内切换运营商：重建省选项 + 汇总行 + 条目列表（省选择器组件复用 setOptions，不重建 DOM） */
+function chkSetCarrier(code) {
+  if (!(chkState.carriersMap || {})[code]) return;
+  chkState.curCarrier = code;
+  chkState.provs = chkBuildProvs(code);
+  chkState.cur = chkState.provs.find((x) => x.code === getProvCode()) || chkState.provs[0] || null;
+  chkRenderSummary();
+  const row = $("chkCarrierRow");
+  if (row) row.querySelectorAll(".chk-carrier").forEach((b) => b.classList.toggle("active", b.dataset.code === code));
+  const picker = $("chkProvPicker");
+  if (picker && picker.setOptions) picker.setOptions(chkState.provs.map((p) => ({ code: p.code, name: p.name, total: { tariffs: p.total } })), chkState.cur ? chkState.cur.code : "");
+  chkRenderItems();
+}
+
+/* 「检测到资费变化」弹窗：运营商胶囊（有变化者）+ 汇总数字 + 省选择器（顶栏同款组件，
+   仅列有变化的省，网格条数位=该省今日变化数）+ 条目胶囊（点击跳转变更日志详情，跨运营商自动切换） */
+function chkOpenChangedModal(carriersMap, fromCarrier, updated) {
+  chkState.carriersMap = carriersMap;
+  chkState.carriers = Object.keys(carriersMap).map((code) => {
+    let total = 0;
+    for (const c of Object.values((carriersMap[code] || {}).today || {})) total += (c.added || 0) + (c.removed || 0) + (c.changed || 0);
+    return { code, total };
+  }).filter((x) => x.total > 0).sort((a, b) => b.total - a.total);
+  chkState.curCarrier = chkState.carriers.some((x) => x.code === fromCarrier) ? fromCarrier : (chkState.carriers[0] ? chkState.carriers[0].code : fromCarrier);
+  chkState.provs = chkBuildProvs(chkState.curCarrier);
+  chkState.cur = chkState.provs.find((x) => x.code === getProvCode()) || chkState.provs[0] || null;
+  const hasMulti = chkState.carriers.length > 1;
+  openModal("检测到资费变化", `
+    <div class="res-row" id="chkSummary"></div>
+    ${hasMulti ? `<div class="chk-carrier-row" id="chkCarrierRow">${chkState.carriers.map((c) => `<button type="button" class="chk-carrier" data-act="chkCarrier" data-code="${esc(c.code)}">${esc(chkCarrierName(c.code))}<b>${c.total}</b></button>`).join("")}</div>` : ""}
+    <div class="chk-prov-wrap"><span class="chk-prov-label">省份</span><div id="chkProvPicker"></div></div>
+    <div class="chk-items" id="chkItems"></div>
+    <div class="res-row sub">快照时间：${esc(updated)} · 点条目跳转变更日志查看详情</div>`,
+    null, { bodyOverflowVisible: true });
+  if (hasMulti) {
+    const row = $("chkCarrierRow");
+    if (row) row.querySelectorAll(".chk-carrier").forEach((b) => b.classList.toggle("active", b.dataset.code === chkState.curCarrier));
+  }
+  const picker = $("chkProvPicker");
+  if (picker) {
+    buildProvPicker(picker);
+    picker.setOptions(chkState.provs.map((p) => ({ code: p.code, name: p.name, total: { tariffs: p.total } })), chkState.cur ? chkState.cur.code : "");
+    picker.addEventListener("change", () => {
+      const p = chkState.provs.find((x) => x.code === picker.value);
+      if (!p || (chkState.cur && chkState.cur.code === p.code)) return;
+      chkState.cur = p;
+      chkRenderItems();
+    });
+  }
+  chkRenderSummary();
+  chkRenderItems();
+}
+
 function doCheck() {
   if (checking) return;
   checking = true;
@@ -3986,34 +4100,18 @@ function doCheck() {
       fillProvSelects();
       const updated = fmtTime(s.crawl_time);
       $("updateTime").textContent = updated;
-      let prev = null;
-      try { prev = JSON.parse(localStorage.getItem(RK()) || "null"); } catch {}
-      const snap = {updated: s.crawl_time};
-
-      // 【检测变化的判断依据说明】
-      // "检测变化"弹窗的新增/下架/变更数量，直接来自服务端 stats.json 中的 s.today 字段。
-      // s.today 是服务端在采集时从 changelog 中筛选"今日 0 点以后"的变更记录，
-      // 按分类统计 added/removed/changed 数量后写入 stats 的，属于服务端计算好的"今日累计变化"。
-      // 因此此处无需在前端做快照数据对比，直接展示 s.today 即可。
-      // 注意：下方 snap 和 prev 仅用于判断是否首次点击（建立基线提示），不参与变化数量对比。
-      // 注意：若后续服务端 s.today 的计算逻辑或字段结构发生变化，此处代码需同步调整，注释仅供参考。
+      // 【检测变化的判断依据】弹窗全部来自服务端统计，前端零对比：
+      //   汇总数字 = stats 的 today（分类汇总）；省选择器 = provinces[].today（按省）；
+      //   条目明细 = 各省 changelog 文件按"北京时间今日 0 点"筛 logs
       const todayAdd = Object.values(s.today || {}).reduce((sum, c) => sum + (c && c.added ? c.added : 0), 0);
       const todayRm = Object.values(s.today || {}).reduce((sum, c) => sum + (c && c.removed ? c.removed : 0), 0);
       const todayChg = Object.values(s.today || {}).reduce((sum, c) => sum + (c && c.changed ? c.changed : 0), 0);
 
-      if (!prev) {
-        localStorage.setItem(RK(), JSON.stringify(snap));
-        openModal("检测完成", `<div class="res-row">已建立首次检测基线。</div><div class="res-row sub">数据快照时间：${esc(updated)}</div>`);
+      const hasChange = todayAdd > 0 || todayRm > 0 || todayChg > 0;
+      if (hasChange) {
+        chkOpenChangedModal(raw.carriers, currentCarrier, updated);
       } else {
-        const hasChange = todayAdd > 0 || todayRm > 0 || todayChg > 0;
-        localStorage.setItem(RK(), JSON.stringify(snap));
-        if (hasChange) {
-          openModal("检测到资费变化",
-            `<div class="res-row">今日新增 <b style="color:var(--green)">${todayAdd}</b> 条，下架 <b style="color:var(--red)">${todayRm}</b> 条，变更 <b style="color:var(--amber)">${todayChg}</b> 条</div>` +
-            `<div class="res-row sub">快照时间：${esc(updated)}</div>`);
-        } else {
-          openModal("无变化", `<div class="res-row ok">暂未检测到资费变化。</div><div class="res-row sub">快照时间：${esc(updated)}</div>`);
-        }
+        openModal("无变化", `<div class="res-row ok">暂未检测到资费变化。</div><div class="res-row sub">快照时间：${esc(updated)}</div>`);
       }
       // 用户主动检测变化，清空所有本地缓存，强制从服务器获取最新数据
       Object.keys(cache).forEach(k => delete cache[k]);
@@ -4226,6 +4324,18 @@ function initTariff() {
       const log = clModalLog;
       if (log) shareLink({ title: log.name || "变更记录", text: "一条资费变更记录", hash: "cl_" + currentCarrier + "_" + getProvCode() + "_" + String(log.ts ?? "") + "_" + encodeURIComponent(log.name || "") });
     },
+    /* 检测弹窗：切运营商 / 条目胶囊跳转变更日志详情（跨运营商由 consumeClDeep 自动 switchCarrier）；
+       切省由 provPicker 的 change 事件驱动，不经 ACT 分发 */
+    chkCarrier: (el) => {
+      if (!el.dataset.code || el.dataset.code === chkState.curCarrier) return;
+      chkSetCarrier(el.dataset.code);
+    },
+    chkJump: (el) => {
+      const ts = el.dataset.ts || "", name = el.dataset.name || "", prov = el.dataset.prov || "";
+      if (!ts || !prov) return;
+      closeModal();
+      consumeClDeep({ kind: "cl", carrier: chkState.curCarrier || currentCarrier, prov, ts, name: name.toLowerCase(), label: name }, false);
+    },
   };
   /* 关于页「分享本站」（关于页区域无点击委托，走 window 挂钩） */
   window.__cmnosShareSite = () => shareLink({ title: "ChinaMNOs 讯览台", text: "全网资费实时面板", hash: "" });
@@ -4261,6 +4371,35 @@ let pendingAnnId = "";
 let annDeepId = "";
 let annDeepScrolled = false;   // 首次命中时滚动+高亮只做一次，后续重渲染仅补展开不滚屏
 let annDeepCarrier = "";       // 深链目标运营商：范围自动放宽（外省过滤场景）仅在该运营商内生效，防误伤切运营商后的渲染
+
+/* 变更日志条目定位（cl 深链与检测弹窗「查看变更」跳转共用）：
+   等运营商就绪 → 切运营商 → 切省 → 进变更记录 tab → 按 ts+名称匹配条目弹详情。
+   boot=true（分享链接全新进站：ACTIVE_CARRIERS=[]、省份选择器未构建）先 goTab("overview") 引导数据管线；
+   boot=false（站内跳转）直达变更日志页签。数据未就绪由 pollDeep 轮询兜底（10s 上限） */
+function consumeClDeep(deep, boot) {
+  pendingDeep = deep;
+  goTab(boot ? "overview" : "changelog");
+  deepLoadingShow();
+  pollDeep(() => {
+    if (!ACTIVE_CARRIERS.length) { loadStats().catch(() => {}); return false; }
+    if (currentCarrier !== pendingDeep.carrier) { switchCarrier(pendingDeep.carrier); return false; }
+    if (!deepSwitchProv(pendingDeep.prov)) return false;
+    if (navTabs && navTabs.active !== "changelog") { goTab("changelog"); return false; }
+    /* 深链过滤词同步回填搜索框：列表被过滤但搜索框空白会反直觉（用户不知为何只剩一条） */
+    const cSearchEl = $("cSearch");
+    if (cSearchEl && cSearchEl.value !== pendingDeep.label) cSearchEl.value = pendingDeep.label;
+    const logs = (clView && Array.isArray(clView.logs)) ? clView.logs : [];
+    const hit = logs.find((l) => String(l.ts) === pendingDeep.ts && String(l.name || "").toLowerCase() === pendingDeep.name);
+    if (hit) {
+      if (clQ !== pendingDeep.name) { clQ = pendingDeep.name; renderChangelog(); }   // 过滤聚焦该条目所在批次
+      openClModal(hit);
+      pendingDeep = null;
+      return true;
+    }
+    return false;   // 数据加载中 / 该省快照无此条目（至超时停留）
+  }, () => deepLoadingHide());
+}
+
 function handleDeepLink(raw) {
   const m = raw.match(/^(act|chat|ann|cl|plan)_(.+)$/);
   if (!m) { goTab("overview"); return; }
@@ -4336,29 +4475,7 @@ function handleDeepLink(raw) {
     const ts = parts[2];   // log.ts 为 ISO 字符串（含冒号），原样字符串比较，禁止 Number()（NaN 必败）
     const name = decodeURIComponent(parts.slice(3).join("_")).toLowerCase();
     if (!/^[a-z]+$/.test(carrier) || !/^[a-z]{2,6}$/.test(prov) || !ts) { goTab("changelog"); return; }
-    pendingDeep = { kind: "cl", carrier, prov, ts, name, label: decodeURIComponent(parts.slice(3).join("_")) };
-    /* 全新进站（分享链接直达）时 ACTIVE_CARRIERS=[]：前置 switchCarrier 是 no-op、省份选择器未构建——
-       先 goTab("overview") 引导数据管线，再分阶段消费：等运营商就绪 → 切运营商 → 切省 → 进变更记录 tab 匹配 */
-    goTab("overview");
-    deepLoadingShow();
-    pollDeep(() => {
-      if (!ACTIVE_CARRIERS.length) { loadStats().catch(() => {}); return false; }
-      if (currentCarrier !== pendingDeep.carrier) { switchCarrier(pendingDeep.carrier); return false; }
-      if (!deepSwitchProv(pendingDeep.prov)) return false;
-      if (navTabs && navTabs.active !== "changelog") { goTab("changelog"); return false; }
-      /* 深链过滤词同步回填搜索框：列表被过滤但搜索框空白会反直觉（用户不知为何只剩一条） */
-      const cSearchEl = $("cSearch");
-      if (cSearchEl && cSearchEl.value !== pendingDeep.label) cSearchEl.value = pendingDeep.label;
-      const logs = (clView && Array.isArray(clView.logs)) ? clView.logs : [];
-      const hit = logs.find((l) => String(l.ts) === pendingDeep.ts && String(l.name || "").toLowerCase() === pendingDeep.name);
-      if (hit) {
-        if (clQ !== pendingDeep.name) { clQ = pendingDeep.name; renderChangelog(); }   // 过滤聚焦该条目所在批次
-        openClModal(hit);
-        pendingDeep = null;
-        return true;
-      }
-      return false;   // 数据加载中 / 该省快照无此条目（至超时停留）
-    }, () => deepLoadingHide());
+    consumeClDeep({ kind: "cl", carrier, prov, ts, name, label: decodeURIComponent(parts.slice(3).join("_")) }, true);
     return;
   }
   if (kind === "plan") {
@@ -5036,7 +5153,7 @@ Shell.registerPage({
   id: "tariff",
   route: "/",
   onEnter: async function(root) {
-    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261022a");
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261022d");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">

@@ -862,6 +862,19 @@ dialog.modal::backdrop {
   overflow: auto;
   font-size: 14px;
 }
+/* ofv 场景类：弹窗内含下拉浮层（如检测弹窗的省份选择器）时放开两层 overflow 裁剪，
+   否则 absolute 下拉被 body 滚动裁剪/被 dialog 圆角裁剪。仅限内容高度可控的弹窗使用 */
+dialog.modal.ofv {
+  overflow: visible;
+  max-height: min(88vh, 640px);
+}
+dialog.modal.ofv .modal-head {
+  border-radius: var(--r-xl) var(--r-xl) 0 0;   /* overflow 放开后头部渐变需自持圆角 */
+}
+.modal-body.ofv {
+  overflow: visible;
+  max-height: none;
+}
 .modal-foot {
   padding: 12px 20px;
   text-align: right;
