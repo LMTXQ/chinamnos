@@ -784,6 +784,11 @@ function buildConfig() {
       per_source_fetch_ctcc: parseInt(document.getElementById('annPerSourceFetchCtcc').value) || 15,
       per_source_fetch_cucc: parseInt(document.getElementById('annPerSourceFetchCucc').value) || 200,
       per_source_fetch_cbn: parseInt(document.getElementById('annPerSourceFetchCbn').value) || 15,
+      /* 单文件大小上限（KB → 字节）：留空/非法 = 不写键，用采集端内置默认 512KB */
+      file_max_bytes: (function() {
+        const kb = parseInt(document.getElementById('annFileMaxBytesKb').value);
+        return Number.isFinite(kb) && kb > 0 ? kb * 1024 : undefined;
+      })(),
       national_threshold: parseInt(document.getElementById('annNationalThreshold').value) || 5,
       sources: (function() {
         const src = {};
@@ -1069,6 +1074,7 @@ function applyConfig(config) {
   document.getElementById('annPerSourceFetchCtcc').value = annCfg.per_source_fetch_ctcc || 15;
   document.getElementById('annPerSourceFetchCucc').value = annCfg.per_source_fetch_cucc || 200;
   document.getElementById('annPerSourceFetchCbn').value = annCfg.per_source_fetch_cbn || 15;
+  document.getElementById('annFileMaxBytesKb').value = annCfg.file_max_bytes ? Math.round(annCfg.file_max_bytes / 1024) : "";
   document.getElementById('annNationalThreshold').value = annCfg.national_threshold || 5;
 
   const notify = config.notification || {};
@@ -1863,6 +1869,7 @@ Shell.registerPage({
         <div class="fg"><label>公告保留·电信<span class="help" data-tip="电信公告按日期保留的天数，过期条目写盘时丢弃。">?</span></label><input type="number" id="annRetentionDaysCtcc" value="90" min="7" max="730"></div>
         <div class="fg"><label>公告保留·联通<span class="help" data-tip="联通公告按日期保留的天数，过期条目写盘时丢弃。">?</span></label><input type="number" id="annRetentionDaysCucc" value="90" min="7" max="730"></div>
         <div class="fg"><label>公告保留·广电<span class="help" data-tip="广电公告按日期保留的天数。广电为全网单源且发布频率低，若 90 天窗口内条目过少，可放宽此项（如 365）以保留更多历史公告。">?</span></label><input type="number" id="annRetentionDaysCbn" value="90" min="7" max="730"></div>
+        <div class="fg"><label>公告文件上限 (KB)<span class="help" data-tip="单个 announce.json 的写盘体积兜底：文件超过该上限时，从最旧的条目开始丢弃直至达标。该值过小会截断保留窗口内的有效条目，导致实际入库数低于抓取与保留参数的预期；放大公告抓取或保留参数时应同步调大。留空使用内置默认 512KB。">?</span></label><input type="number" id="annFileMaxBytesKb" value="" min="64" max="10240" placeholder="512（内置默认）"></div>
         <div class="fg"><label>Schema 版本</label><input type="text" id="schemaVersion" value="4"></div>
       </div>
       <div class="cfg-hr"></div>
