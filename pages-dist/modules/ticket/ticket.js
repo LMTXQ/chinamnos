@@ -414,7 +414,7 @@ Shell.registerPage({
   route: "/ticket",
   async onEnter(root) {
     showPageLoading("工单中心加载中…");
-    await ensureStylesheet(Shell.config.base + "modules/ticket/style.css");
+    await ensureStylesheet(Shell.config.base + "modules/ticket/style.css?v=20261022a");
     if (!Auth.isLoggedIn()) {
       hidePageLoading();
       root.innerHTML = `

@@ -375,4 +375,5 @@ textarea:focus {
   .tk-f-row { grid-template-columns: 1fr; }
   .tk-msg { max-width: 94%; }
   .tk-stats { grid-template-columns: repeat(2, 1fr); }
+  .tk-brand-text { display: none; }  /* 同各站惯例：窄屏顶栏只留图标（此前唯一遗漏站） */
 }
