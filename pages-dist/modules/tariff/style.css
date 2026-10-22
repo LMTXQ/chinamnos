@@ -2965,7 +2965,19 @@
   position: absolute; top: 9px; right: 12px; width: 7px; height: 7px; border-radius: 999px;
   background: var(--red); box-shadow: 0 0 0 2px var(--surface);
 }
-.ann-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.ann-toolbar { display: flex; align-items: center; justify-content: flex-start; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+/* 工具栏控件统一视觉规格：同高 34px（seg 2+2border+4+20 / 搜索框显式高 / 按钮显式高），消除大小高低不齐 */
+.ann-toolbar .search-wrap { flex: 1 1 200px; max-width: 340px; min-width: 150px; }
+.ann-toolbar .search-wrap .search-box { height: 34px; padding-top: 0; padding-bottom: 0; font-size: 13px; }
+.ann-toolbar .search-wrap .search-mode-btn { align-self: center; line-height: 24px; padding: 0 9px; font-size: 11.5px; }  /* 胶囊随输入框 stretch 会显肥，改居中收小一圈 */
+.ann-toolbar [data-ann="annToggleAll"] { height: 34px; padding: 0 12px; font-size: 12.5px; }
+.ann-toolbar .ann-seg { padding: 2px; }
+.ann-toolbar .ann-meta { margin-left: auto; }
+@media (max-width: 640px) {
+  #annTabBody .ann-toolbar .search-wrap { flex-basis: 100%; max-width: none; order: 9; }  /* 放不下：搜索框独占一行 */
+  #annTabBody [data-ann="annToggleAll"] span { display: none; }  /* 空间不足：按钮只留图标 */
+  #annTabBody [data-ann="annToggleAll"] { padding-left: 9px; padding-right: 9px; }
+}
 .ann-seg { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
 .ann-seg-btn {
   padding: 4px 14px; border: 0; border-radius: 999px; cursor: pointer;
@@ -2982,6 +2994,9 @@
 }
 .ann-item:hover, .ann-item.open { border-color: color-mix(in oklab, var(--acc) 42%, var(--line)); }
 .ann-row { display: flex; align-items: center; gap: 10px; padding: 11px 14px; cursor: pointer; user-select: none; }
+.ann-row > .btn { flex: none; }   /* 分享按钮不被长标题挤压成线 */
+/* 深链命中高亮：与 cardhub .deep-hit 同款外描边（不挤占布局） */
+.ann-item.deep-hit { outline: 2px solid var(--acc); outline-offset: 2px; }
 .ann-date { flex: none; font: 600 12px/18px var(--mono); color: var(--sub); font-variant-numeric: tabular-nums; }
 .ann-badge {
   flex: none; font-size: 11px; font-weight: 700; padding: 1px 9px; border-radius: 999px;

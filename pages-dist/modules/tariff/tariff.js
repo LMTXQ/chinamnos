@@ -4254,6 +4254,13 @@ function initTariff() {
    解析后置 pendingDeep，由各数据就绪路径消费（轮询兜底，见 pollDeep*） */
 let pendingDeep = null;
 let pendingAnnId = "";
+/* 公告深链目标（ann_<carrier>_<id>）：跨重渲染保持展开态。
+   pendingAnnId 消费一次即清空，但进站引导管线会对公告页做多次重渲染（goTab 与 pollDeep 各一次），
+   第二次渲染 innerHTML 重建列表会抹掉第一次的展开态——annDeepId 在每次渲染后重新应用展开，
+   直到用户手动点按公告行（交还控制权）或目标失配（切运营商/搜索过滤）自动清除 */
+let annDeepId = "";
+let annDeepScrolled = false;   // 首次命中时滚动+高亮只做一次，后续重渲染仅补展开不滚屏
+let annDeepCarrier = "";       // 深链目标运营商：范围自动放宽（外省过滤场景）仅在该运营商内生效，防误伤切运营商后的渲染
 function handleDeepLink(raw) {
   const m = raw.match(/^(act|chat|ann|cl|plan)_(.+)$/);
   if (!m) { goTab("overview"); return; }
@@ -4301,6 +4308,9 @@ function handleDeepLink(raw) {
     const sep = rest.indexOf("_");
     const carrier = sep > 0 ? rest.slice(0, sep) : "";
     pendingAnnId = decodeURIComponent(sep > 0 ? rest.slice(sep + 1) : rest);
+    annDeepId = pendingAnnId;   // 深链目标：渲染后自动展开（跨重渲染保持，见 annDeepId 注释）
+    annDeepScrolled = false;
+    annDeepCarrier = carrier || currentCarrier;
     if (!carrier) {
       goTab("announce");
       annTabRefresh().then(() => { if (pendingAnnId) annRenderBody(); });
@@ -4615,6 +4625,46 @@ function annLoadScope() {
   return "home";
 }
 
+/* ── 公告搜索 / 全部展开 ── 交互与变更记录页同款（模式切换胶囊 + / 聚焦 + 搜索自动全开） */
+let annQ = "";                 // 搜索词（小写）
+let annQMode = "all";          // all=全文（标题+正文） | name=仅标题（全局记忆，跨运营商共享）
+let annExpandAll = false;      // 「全部展开」开关
+let annCollapseArmed = false;  // 搜索自动全开后点「全部收起」的压制位，词一变即失效
+const ANN_QMODE_KEY = "chinamnos_an_qmode";
+try { const _qm = localStorage.getItem(ANN_QMODE_KEY); if (_qm === "name" || _qm === "all") annQMode = _qm; } catch { /* */ }
+
+function annEffOpen() { return annExpandAll || (!!annQ && !annCollapseArmed); }   // 生效展开态：手动全开 或 搜索中自动全开
+
+function annSyncSearchMode() {
+  const btn = document.querySelector('#annTabBody [data-ann="annQMode"]');
+  if (!btn) return;
+  btn.textContent = annQMode === "name" ? "仅标题" : "全文";
+  btn.classList.toggle("name-mode", annQMode === "name");
+  const inp = $("annSearch");
+  if (inp) inp.placeholder = annQMode === "name" ? "搜索公告标题…" : "搜索标题/公告正文…";
+  try { localStorage.setItem(ANN_QMODE_KEY, annQMode); } catch { /* */ }
+}
+
+function annSyncToggleBtn() {
+  const btn = document.querySelector('#annTabBody [data-ann="annToggleAll"]');
+  if (!btn) return;
+  const open = annEffOpen();
+  btn.innerHTML = icon(open ? "chevronsUp" : "chevronsDown") + "<span>全部" + (open ? "收起" : "展开") + "</span>";
+}
+
+/* 按当前范围过滤后的公告条目（与 annRenderBody 的 items 过滤同源，供列表局部重渲染复用） */
+function annScopedItems() {
+  const data = annState.data[currentCarrier];
+  if (!data) return [];
+  const prov = chProvName();
+  const scope = annState.scope;
+  return data.items.filter(a => {
+    if (scope === "national") return !a.province;
+    if (scope === "all") return true;
+    return a.province === prov || !a.province; // home：本省 + 全国
+  });
+}
+
 /* 独立于 loadJson：announce.json 承载红点判定，始终拉最新（loadJson 有会话内存缓存会掩盖更新） */
 function annFetch(carrier) {
   return fetchTimeout(`./data/${carrier}/announce.json?v=` + Date.now(), { cache: "no-store" })
@@ -4743,20 +4793,22 @@ function annSanitize(html, atts) {
   return tpl.innerHTML;
 }
 
-function annItemHTML(a) {
+function annItemHTML(a, open) {
   const nat = !a.province;
   const date = String(a.date || ""); // 2026-10-12 完整显示（含年份，跨年公告不歧义）
   const att = (a.attachments || []).length;
+  const isOpen = !!open || a.id === annDeepId;   // 搜索自动全开/手动全开/深链目标 → 渲染时直出展开态
   return `
-  <div class="ann-item" data-id="${esc(a.id || "")}">
+  <div class="ann-item${isOpen ? " open" : ""}${a.id === annDeepId ? " deep-hit" : ""}" data-id="${esc(a.id || "")}">
     <div class="ann-row">
       <span class="ann-date">${esc(date || "--")}</span>
       <span class="ann-badge${nat ? " nat" : ""}">${nat ? "全国" : esc(a.province)}</span>
       <span class="ann-title" title="点击展开/收起正文">${esc(a.title || "（无标题）")}</span>
       ${att ? `<span class="ann-att">附件 ${att}</span>` : ""}
-      <button type="button" class="btn ghost sm" data-ann="annShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本条公告" style="padding:2px 8px"><i data-icon="share"></i></button>
+      <button type="button" class="btn ghost sm" data-ann="annShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本条公告" style="padding:2px 8px">${icon("share")}</button>
       <span class="ann-chev">${icon("chevronDown")}</span>
     </div>
+    ${isOpen ? annItemBodyHTML(a.id || "") : ""}
   </div>`;
 }
 
@@ -4826,44 +4878,120 @@ function annRenderBody() {
     return;
   }
 
-  const items = data.items.filter(a => {
-    if (scope === "national") return !a.province;
-    if (scope === "all") return true;
-    return a.province === prov || !a.province; // home：本省 + 全国
-  });
   const upd = data.updated
     ? new Date(data.updated).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
     : "";
+  annState.upd = upd;   // 供 annRenderList 更新计数行（列表局部重渲染不重建工具栏）
 
   body.innerHTML = `
     <h1 class="page-title">运营公告</h1>
     <p class="page-sub">${esc(brand)}官方公告 · ${sub}<span class="panel-sub">来自官网公开信息，自动采集整理</span></p>
     <div class="ann-toolbar">
       <div class="ann-seg">${seg}</div>
-      <span class="ann-meta">共 ${items.length} 条 · 更新于 ${esc(upd)}</span>
+      <div class="search-wrap"><button type="button" class="search-mode-btn" data-ann="annQMode" title="切换搜索范围：全文（标题+正文） / 仅标题"></button><input type="search" id="annSearch" class="search-box" placeholder="搜索标题/公告正文…"><kbd class="search-kbd" title="按 / 快速聚焦">/</kbd></div>
+      <button type="button" class="btn ghost" data-ann="annToggleAll" title="全部收起/展开"></button>
+      <span class="ann-meta" id="annMeta"></span>
     </div>
-    ${items.length
-      ? `<div class="ann-list">${items.map(annItemHTML).join("")}</div>`
-      : `<div class="ann-empty">${icon("bell", "ann-empty-ic")}<div>${scope === "home" ? "当前省份暂无公告" : "暂无公告"}</div></div>`}`;
+    <div id="annList"></div>`;
 
-  /* 深链定位：展开并滚动到目标公告（含分享链接打开场景） */
-  if (pendingAnnId) {
-    const el = body.querySelector(`.ann-item[data-id="${pendingAnnId.replace(/"/g, "")}"]`);
-    if (el) {
-      if (!el.classList.contains("open")) el.click(); // 整行点击=展开（惰性构建正文）
-      setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
-    }
-    pendingAnnId = "";
+  /* 搜索框：输入即时筛选（仅重渲染列表，工具栏不重建保焦点）；"/" 快捷键经 .view.active .search-box 通用生效 */
+  const searchEl = $("annSearch");
+  if (searchEl) {
+    searchEl.value = annQ;
+    searchEl.addEventListener("input", () => {
+      annQ = searchEl.value.trim().toLowerCase();
+      annCollapseArmed = false;   // 搜索词变化=新的搜索意图，自动全开重新生效
+      annExpandAll = false;
+      annRenderList(annScopedItems());
+    });
   }
+  annSyncSearchMode();
+  annRenderList(annScopedItems());
+  pendingAnnId = "";   // 已进入带数据的渲染，引导管线不再需要补渲染触发
 
   /* 进入 tab 即写已读（按最新一条），红点随之消除 */
   try { if (data.items[0] && data.items[0].id) localStorage.setItem(ANN_READ_KEY(), data.items[0].id); } catch { /* */ }
   annUpdateDot();
 }
 
+/* 公告列表局部渲染：scope 过滤 + 搜索筛选（标题/全文） + 展开态直出 + 深链展开应用。
+   搜索输入/模式切换/全部展开收起时只重建 #annList，工具栏（含搜索框焦点）保持不动 */
+function annRenderList(scopedItems) {
+  const list = $("annList");
+  if (!list) return;
+  const q = annQ;
+  const filtered = q ? scopedItems.filter(a => {
+    if (annQMode === "name") return String(a.title || "").toLowerCase().includes(q);
+    return (String(a.title || "") + "\n" + String(a.content || "")).toLowerCase().includes(q);
+  }) : scopedItems;
+  const effOpen = annEffOpen();
+  list.innerHTML = filtered.length
+    ? `<div class="ann-list">${filtered.map(a => annItemHTML(a, effOpen)).join("")}</div>`
+    : `<div class="ann-empty">${icon("bell", "ann-empty-ic")}<div>${q
+        ? `没有匹配的公告${annQMode === "name" ? "（当前仅搜索标题，可切换全文）" : ""}`
+        : (annState.scope === "home" ? "当前省份暂无公告" : "暂无公告")}</div></div>`;
+  /* 展开态直出路径（搜索全开/全部展开/深链）的正文图片：与点击路径同样设置懒加载+去referrer+错误移除 */
+  list.querySelectorAll(".ann-item.open img").forEach(im => {
+    im.loading = "lazy";
+    im.referrerPolicy = "no-referrer";
+    im.addEventListener("error", () => im.remove(), { once: true });
+  });
+  const meta = $("annMeta");
+  if (meta) {
+    meta.textContent = q ? `匹配 ${filtered.length}/${scopedItems.length} 条 · 更新于 ${annState.upd || ""}`
+                         : `共 ${scopedItems.length} 条 · 更新于 ${annState.upd || ""}`;
+  }
+  annSyncToggleBtn();
+  annApplyDeepTarget(list);
+}
+
+/* 公告深链展开（跨重渲染持久）：
+   ▸ 命中：确保展开（搜索/全收起等状态变化后重渲染也保持），首次命中滚动+高亮一次
+   ▸ 未命中且目标不在当前范围（如外省公告被「本省·全国」过滤）：自动切「全部」重渲染，深链必达
+   ▸ 范围放开仍无此 id（已失效/被搜索过滤/切运营商）：清态交还控制权 */
+function annApplyDeepTarget(list) {
+  if (!annDeepId) return;
+  const el = list.querySelector(`.ann-item[data-id="${annDeepId.replace(/"/g, "")}"]`);
+  if (el) {
+    if (!el.classList.contains("open")) el.click();   // 整行点击=展开（惰性构建正文）
+    if (!annDeepScrolled) {
+      setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+      annDeepScrolled = true;
+    }
+    return;
+  }
+  if (!annDeepScrolled && annState.scope !== "all" && !annQ && currentCarrier === annDeepCarrier) {
+    annState.scope = "all";
+    try { localStorage.setItem(ANN_SCOPE_KEY(), "all"); } catch { /* */ }
+    document.querySelectorAll('#annTabBody .ann-seg-btn').forEach(b => b.classList.toggle("active", b.dataset.scope === "all"));
+    const sub = document.querySelector("#annTabBody .page-sub");
+    if (sub) sub.innerHTML = `${esc((CARRIER_BRAND[currentCarrier] || {}).shortName || "")}官方公告 · 全部省份<span class="panel-sub">来自官网公开信息，自动采集整理</span>`;
+    annRenderList(annScopedItems());
+    return;
+  }
+  annDeepId = "";
+  annDeepScrolled = false;
+}
+
 function annOnBodyClick(e) {
   const scopeBtn = e.target.closest('[data-ann="annScope"]');
   if (scopeBtn) { annSetScope(scopeBtn.dataset.scope); return; }
+  /* 搜索模式切换：全文 ↔ 仅标题（与变更记录/资费搜索同款交互） */
+  const qmodeBtn = e.target.closest('[data-ann="annQMode"]');
+  if (qmodeBtn) {
+    annQMode = annQMode === "name" ? "all" : "name";
+    annSyncSearchMode();
+    if (annQ) annRenderList(annScopedItems());   // 有关键词才需重筛，无则仅切模式
+    return;
+  }
+  /* 全部展开/收起：搜索中自动全开视为「当前全开」→ 点击执行收起并压制（词一变即失效） */
+  const toggleBtn = e.target.closest('[data-ann="annToggleAll"]');
+  if (toggleBtn) {
+    if (annEffOpen()) { annExpandAll = false; annCollapseArmed = !!annQ; }
+    else { annExpandAll = true; annCollapseArmed = false; }
+    annRenderList(annScopedItems());
+    return;
+  }
   if (e.target.closest('[data-ann="annRetry"]')) {
     delete annState.data[currentCarrier];
     const body = $("annTabBody");
@@ -4882,6 +5010,14 @@ function annOnBodyClick(e) {
   if (!row) return;
   const item = row.closest(".ann-item");
   if (!item) return;
+  /* 用户手动点按公告行 = 接管展开控制权：清深链目标与全开态（搜索中则压制自动全开），
+     仅影响后续重渲染，当前 DOM 其他条目的展开状态保持不动 */
+  if (annDeepId || annExpandAll || annQ) {
+    annDeepId = "";
+    annDeepScrolled = false;
+    annExpandAll = false;
+    annCollapseArmed = !!annQ;
+  }
   if (!item.querySelector(".ann-body")) { // 惰性构建一次，反复开合复用（防重复插入多份正文）
     const html = annItemBodyHTML(item.dataset.id || "");
     if (!html) { item.remove(); return; } // 数据已不在（切运营商等）→ 移除空壳
@@ -4900,7 +5036,7 @@ Shell.registerPage({
   id: "tariff",
   route: "/",
   onEnter: async function(root) {
-    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261020a");
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261022a");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">
