@@ -8,7 +8,7 @@ import { getPublicProfiles } from './auth/public-profile';
 import { decodeDataUrl } from './cardhub/proofs';
 import { pushNotification } from './common/notifications';
 import { getSetting } from './common/settings';
-import { loadActiveBindings, SITE_NAME } from './auth/notify-channels';
+import { loadActiveBindings, getSiteName } from './auth/notify-channels';
 import { qlDispatchPayload, type PayloadRow } from './notify/ql-client';
 import { CHAT_TYPES, CHAT_ID_MAX } from './communities';
 
@@ -619,7 +619,7 @@ export async function handleAdminActivityRetire(request: Request, env: Env, id: 
 
   // 站内通知提交者：已被管理组下架
   const isChat = (row.mode || 'official') === 'chat';
-  await pushNotification(env, row.submitted_by, isChat ? 'act_retired' : 'act_retired', id,
+  await pushNotification(env, row.submitted_by, 'act_retired', id,
     `你提交的${isChat ? '社群' : '情报'}「${row.title}」已被管理组下架`,
     '管理组已将该内容下架（不再公开展示）。如有疑问请通过工单中心联系管理组。');
 
@@ -863,7 +863,8 @@ export async function runActivitiesCron(env: Env): Promise<{ rows: number; ql: s
     const kindOk = !Array.isArray(kindsCfg) || kindsCfg.includes('act_expired');
     if (kindOk) {
       const site = env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org';
-      const pushTitle = `【${SITE_NAME}】消息通知`;
+      const siteName = await getSiteName(env);
+      const pushTitle = `【${siteName}】消息通知`;
       const rows: PayloadRow[] = [];
       for (const r of results) {
         const isChat = (r.mode || 'official') === 'chat';

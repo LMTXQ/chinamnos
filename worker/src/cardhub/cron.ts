@@ -1,7 +1,7 @@
 import type { Env } from '../common/env';
 import { getSetting } from '../common/settings';
 import { deleteProofs } from './proofs';
-import { loadActiveBindings, SITE_NAME } from '../auth/notify-channels';
+import { loadActiveBindings, getSiteName } from '../auth/notify-channels';
 import { qlDispatchPayload, type PayloadRow } from '../notify/ql-client';
 
 const DAY = 86400 * 1000;
@@ -10,7 +10,7 @@ const DAY = 86400 * 1000;
 // 返回外推回执（rows = payload 行数，ql = 青龙分发结果），供手动触发端点透传
 export async function runCardhubCron(env: Env): Promise<{ rows: number; ql: string }> {
   let qlRows = 0;
-  let qlResult = '未触发（无到期帖或开关未开）';
+  let qlResult = '未触发（无到期/临期帖或开关未开）';
   const now = Date.now();
   const ninetyDaysAgo = now - 90 * DAY;
   const threeDaysLater = now + 3 * DAY;
@@ -78,10 +78,12 @@ export async function runCardhubCron(env: Env): Promise<{ rows: number; ql: stri
   const msgCutoff = now - 60 * DAY;
   await env.DB.prepare(`DELETE FROM messages WHERE created_at < ?1`).bind(msgCutoff).run();
 
-  // 5) 到期前 3 天提醒（仅提醒一次窗口 [now+2d, now+3d)）
-  //    铃铛 batch 直写；站外通知走青龙批量管线（方案 C，订阅制口径）：
-  //    邮件行（SMTP 池）只发绑定 email 渠道的用户；webhook 行（钉钉/企微）按各自绑定下发；
-  //    受「帖子到期提醒」邮件总闸 + 站外推送总开关 + 事件白名单 + 渠道级偏好四重过滤
+  // 5) 到期前 3 天提醒（仅提醒一次窗口 [now+2d, now+3d)）+ 本轮已到期帖：两类事件的站外批量
+  //    合并为一次青龙分发——同一 cron 内只触发一次青龙任务，避免并发实例 flock 冲突导致告警与文件滞留。
+  //    铃铛 batch 直写；站外行（方案 C，订阅制口径）：邮件行（SMTP 池）只发绑定 email 渠道的用户，
+  //    webhook 行（钉钉/企微）按各自绑定下发；临期提醒行受「帖子到期提醒」邮件总闸（历史口径，
+  //    该开关同时是临期站外行的总闸），到期帖行无邮件总闸场景；两类行均受 站外推送总开关 +
+  //    事件白名单 + 渠道级偏好 过滤
   const expiring = await env.DB.prepare(
     `SELECT p.id, p.title, p.user_id, p.expires_at, u.email
      FROM posts p JOIN users u ON p.user_id = u.id
@@ -98,15 +100,18 @@ export async function runCardhubCron(env: Env): Promise<{ rows: number; ql: stri
   }
 
   const mailExpiring = await getSetting<boolean>(env, 'mail_post_expiring_enabled', true);
-  const extEnabled = mailExpiring && (await getSetting<boolean>(env, 'notify_ext_enabled', false));
+  const extEnabled = await getSetting<boolean>(env, 'notify_ext_enabled', false);
 
-  if (extEnabled && expiring.results.length) {
+  if (extEnabled && (expiring.results.length || expiredCount)) {
     const kindsCfg = await getSetting<unknown>(env, 'notify_ext_kinds', null);
-    const kindOk = !Array.isArray(kindsCfg) || kindsCfg.includes('post_expiring');
-    if (kindOk) {
-      const site = env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org';
-      const pushTitle = `【${SITE_NAME}】消息通知`;
-      const rows: PayloadRow[] = [];
+    const kindOk = (k: string) => !Array.isArray(kindsCfg) || kindsCfg.includes(k);
+    const site = env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org';
+    const siteName = await getSiteName(env);
+    const pushTitle = `【${siteName}】消息通知`;
+    const rows: PayloadRow[] = [];
+
+    // 临期提醒行（post_expiring）：受「帖子到期提醒」邮件总闸
+    if (mailExpiring && expiring.results.length && kindOk('post_expiring')) {
       for (const row of expiring.results as Array<{ id: string; title: string; user_id: string }>) {
         const bindings = await loadActiveBindings(env, row.user_id);
         for (const b of bindings) {
@@ -124,17 +129,39 @@ export async function runCardhubCron(env: Env): Promise<{ rows: number; ql: stri
           }
         }
       }
-      if (rows.length) {
-        qlRows = rows.length;
-        const filename = `batch_cron_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.json`;
-        try {
-          await qlDispatchPayload(env, filename, rows);
-          qlResult = `ok（${rows.length} 行）`;
-        } catch (e) {
-          // 重试后仍失败：记日志放弃本轮外推（铃铛已落库，青龙侧遗留文件自愈机制兜底重试）
-          qlResult = `FAILED: ${String(e).slice(0, 200)}`;
-          console.warn(`[cron-ext] 到期帖外推失败（${rows.length} 条未推送）: ${qlResult}`);
+    }
+
+    // 到期帖行（post_expired，F1 补齐）：无邮件总闸场景，与 act_expired 同口径三重过滤
+    if (expiredCount && kindOk('post_expired')) {
+      for (const row of (expiringRows.results || []) as Array<{ id: string; user_id: string; title: string }>) {
+        const bindings = await loadActiveBindings(env, row.user_id);
+        for (const b of bindings) {
+          if (b.kinds && !b.kinds.includes('post_expired')) continue; // 渠道级偏好过滤
+          const nid = `post_expired:${row.id}:${b.channel_type}`;      // 确定性去重键：重跑不重发
+          const content =
+            `站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n` +
+            `正文：你的帖子「${row.title}」已到期下架\n` +
+            `帖子展示期已结束，已自动下架。\n\n` +
+            `若希望关闭打扰，请前往站点关闭外接消息通知或解绑通知渠道。`;
+          if (b.channel_type === 'email') {
+            rows.push({ nid, uid: row.user_id, kind: 'post_expired', title: pushTitle, body: content, channel_type: 'email', email_target: b.cred.email });
+          } else {
+            rows.push({ nid, uid: row.user_id, kind: 'post_expired', title: pushTitle, body: content, channel_type: b.channel_type, cred: b.cred });
+          }
         }
+      }
+    }
+
+    if (rows.length) {
+      qlRows = rows.length;
+      const filename = `batch_cron_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.json`;
+      try {
+        await qlDispatchPayload(env, filename, rows);
+        qlResult = `ok（${rows.length} 行）`;
+      } catch (e) {
+        // 重试后仍失败：记日志放弃本轮外推（铃铛已落库，青龙侧遗留文件自愈机制兜底重试）
+        qlResult = `FAILED: ${String(e).slice(0, 200)}`;
+        console.warn(`[cron-ext] 帖子类外推失败（${rows.length} 条未推送）: ${qlResult}`);
       }
     }
   }

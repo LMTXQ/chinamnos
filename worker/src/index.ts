@@ -37,6 +37,7 @@ import { handleFavoriteToggle, handleMyFavorites } from './cardhub/favorites';
 import { handlePinPost, handleUnpinPost, handlePinBump } from './cardhub/pin';
 import { handleBoardCounts } from './cardhub/posts-list';
 import { runCardhubCron } from './cardhub/cron';
+import { handleChangeEmailRequest, handleChangeEmailConfirm, handleKdfParams } from './auth/change-email';
 import { handleActivityList, handleActivityCreate, handleActivityDelete, handleActivityDetail, handleActivityQr, handleActivityFavoriteToggle, handleMyActivityFavorites, handleActivityPin, handleActivityUnpin, handleAdminActivityList, handleAdminActivityReview, handleAdminActivityRetire, handleAdminActivityDelete, handleActivityAdminUpdate, runActivitiesCron } from './activities';
 import { handleProofImage } from './cardhub/proofs';
 import { handleCommunityList, handleCommunityCreate, handleCommunityDelete, handleCommunityProof } from './communities';
@@ -171,6 +172,12 @@ export default {
         resp = await handleNotifyChannelPrefs(request, env); // 渠道级事件偏好
       } else if (p === '/api/me/notify-channels/delete' && m === 'POST') {
         resp = await handleNotifyChannelDelete(request, env); // 解绑
+      } else if (p === '/api/me/change-email/request' && m === 'POST') {
+        resp = await handleChangeEmailRequest(request, env); // 修改邮箱：验密码+发验证码
+      } else if (p === '/api/me/change-email/confirm' && m === 'POST') {
+        resp = await handleChangeEmailConfirm(request, env); // 修改邮箱：验码+落库+解绑邮件渠道
+      } else if (p === '/api/me/kdf-params' && m === 'GET') {
+        resp = await handleKdfParams(request, env); // 本人密码派生参数（盐/迭代）
       } else if (p === '/api/admin/cron-run' && (m === 'GET' || m === 'POST')) {
         // 手动触发一次日常保洁（等价于每日 scheduled 主体逻辑；owner 验收/运维用）
         // 分任务顺序执行并逐个捕获错误——返回每一步的结果，哪步挂了直接可见

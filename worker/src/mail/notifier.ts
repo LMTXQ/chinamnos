@@ -1,5 +1,6 @@
 import type { Env } from '../common/env';
 import { hitLimit } from '../common/ratelimit';
+import { getSetting } from '../common/settings';
 import { resendSend } from './resend';
 import { renderTemplate } from './templates';
 
@@ -31,7 +32,9 @@ export async function notify(
   template: string,
   vars: Record<string, string> = {},
 ): Promise<NotifyResult> {
-  const cap = Number.parseInt(env.MAIL_DAILY_CAP ?? '', 10) || 30;
+  // 日上限（F8 接线）：优先管理后台 mail_daily_cap 设置（getSetting 30 秒缓存，后台改完约 30 秒生效），
+  // 未配置回退部署环境变量 MAIL_DAILY_CAP，再回退 30；仅限老 Resend 链路（站外 webhook/青龙 SMTP 池不受限）
+  const cap = Number.parseInt(String(await getSetting<unknown>(env, 'mail_daily_cap', env.MAIL_DAILY_CAP ?? '')), 10) || 30;
   const day = utcDay();
 
   const quota = await hitLimit(env, `mail:rcp:${to}:${day}`, cap, 86400);

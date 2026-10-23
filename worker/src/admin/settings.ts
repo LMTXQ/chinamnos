@@ -3,7 +3,7 @@ import { ERR, fail, ok } from '../common/envelope';
 import { guard } from '../common/auth';
 import { audit } from '../common/audit';
 import { normalizeSchedule } from '../common/notices';
-import { NOTIFY_KINDS } from '../notify/ext-push';
+import { NOTIFY_KINDS } from '../common/notifications';
 
 /** 允许修改的设置项白名单（新增设置时同步扩展，前端 SETTING_DESC 补说明） */
 const ALLOWED_KEYS = new Set([

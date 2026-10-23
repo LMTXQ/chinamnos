@@ -55,7 +55,19 @@ export const TEMPLATES: Record<string, TemplateFn> = {
       `您的验证码为：${v.code ?? ''}`,
       '',
       `有效期 10 分钟，请勿泄露给他人。`,
-      `用途：${v.purpose === 'reset' ? '重置密码' : '注册账号'}`,
+      `用途：${v.purpose === 'reset' ? '重置密码' : v.purpose === 'change_email' ? '更换登录邮箱' : '注册账号'}`,
+      '',
+      '—— 系统自动发送，请勿回复',
+    ].join('\n'),
+  }),
+
+  // 注册邮箱变更告警（发往旧邮箱：防盗号后悄悄改邮箱；邮件通知渠道随之自动解绑）
+  email_changed: (v) => ({
+    subject: `【${BRAND}】你的注册邮箱已变更`,
+    text: [
+      `你的账号注册邮箱已由 ${v.old_email ?? ''} 变更为 ${v.new_email ?? ''}。`,
+      '',
+      '如非你本人操作，请立即前往站点重置密码，并通过工单中心联系管理组。',
       '',
       '—— 系统自动发送，请勿回复',
     ].join('\n'),
@@ -109,17 +121,6 @@ export const TEMPLATES: Record<string, TemplateFn> = {
       `留言：${v.note ?? ''}`,
       '',
       '请登录后台处理。',
-      '—— 系统自动发送，请勿回复',
-    ].join('\n'),
-  }),
-
-  // 帖子到期前 3 天提醒
-  post_expiring: (v) => ({
-    subject: `【${BRAND}】您的帖子即将到期`,
-    text: [
-      `您的帖子「${v.title ?? ''}」将在 3 天后到期。`,
-      '',
-      '如需继续展示，请登录后点击"重新发布"。',
       '—— 系统自动发送，请勿回复',
     ].join('\n'),
   }),

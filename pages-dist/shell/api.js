@@ -177,6 +177,17 @@ export const api = {
     return this.request("/api/me/notify-channels/delete", { method: "POST", body: { channel_type: channelType } });
   },
 
+  /** 修改登录邮箱（k=当前密码派生密钥；两步：request 发验证码 → confirm 落库；成功后邮件通知渠道自动解绑） */
+  async myKdfParams() {
+    return this.request("/api/me/kdf-params");
+  },
+  async changeEmailRequest(k, newEmail) {
+    return this.request("/api/me/change-email/request", { method: "POST", body: { k, new_email: newEmail } });
+  },
+  async changeEmailConfirm(k, newEmail, code) {
+    return this.request("/api/me/change-email/confirm", { method: "POST", body: { k, new_email: newEmail, code } });
+  },
+
   /** 管理员：为用户设置图片头像（url = 图床直链 https://…；图片字节流不经 Worker，读取时 302 跳转） */
   async setUserAvatar(userId, url) {
     return this.request(`/api/admin/users/${encodeURIComponent(userId)}/avatar`, { method: "POST", body: { url } });

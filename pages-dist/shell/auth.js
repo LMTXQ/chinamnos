@@ -13,6 +13,7 @@ import { icon, mountIcons, toast, withPending } from "./ui.js";
 import { api, pbkdf2Base64, randomSalt, DEFAULT_ITER } from "./api.js";
 import { getPubConfig } from "./pubcfg.js";
 import { bellHTML, refreshBell, goCardhubView } from "./notify.js";
+import { NOTIFY_KINDS, NOTIFY_KIND_LABELS } from "./notify-kinds.js";
 
 const TURNSTILE_SITEKEY = "0x4AAAAAAFFH8cKk2ttfupI-";
 /* 本地开发环境跳过 Turnstile（localhost 不在 sitekey 域名白名单，widget 必然失败） */
@@ -378,7 +379,7 @@ export const Auth = {
         <input class="inp" id="authBioInput" maxlength="25" placeholder="一句话介绍自己" value="${esc(user?.bio || "")}">
         <div class="auth-bio-count"><span id="authBioCount">${(user?.bio || "").length}</span>/25</div>
       </div>
-      <div class="actions"><button class="btn primary" data-act="authSettingsSave">保存设置</button></div>
+      <div class="actions">${target ? "" : `<button class="btn ghost" data-act="authChangeEmail">修改登录邮箱</button>`}<button class="btn primary" data-act="authSettingsSave">保存设置</button></div>
     `, { lock: true });
     const box = getModal().querySelector("#authModalBox");
     box.addEventListener("click", onModalClick);
@@ -427,6 +428,20 @@ export const Auth = {
         || `<div class="auth-profile-none">该用户未公开联系方式</div>`}
       ${Auth.isLoggedIn() ? `<div class="auth-profile-actions"><button class="btn primary" data-act="profileChat" data-uid="${esc(p.id)}"><i data-icon="message"></i>在线沟通</button></div>` : ""}`;
     mountIcons(body);
+  },
+
+  /** 修改登录邮箱（当前密码 + 新邮箱验证码；生效后「邮件」通知渠道自动解绑，提示重新绑定） */
+  openChangeEmail() {
+    injectCSS();
+    if (!this.isLoggedIn()) return;
+    chgState = { k: "", newEmail: "" };
+    openModal(`
+      <button class="auth-close" data-act="closeAuth" aria-label="关闭">&times;</button>
+      <h3>修改登录邮箱</h3>
+      <div id="chgBody"></div>
+    `, { lock: true });
+    getModal().querySelector("#authModalBox").addEventListener("click", onModalClick);
+    renderChgStep1();
   },
 };
 
@@ -703,6 +718,73 @@ function openDrop(chip) {
 }
 function closeDrop() { if (dropEl) dropEl.classList.remove("open"); }
 
+/* ─────────────── 修改登录邮箱（当前密码 + 新邮箱验证码） ─────────────── */
+let chgState = { k: "", newEmail: "" };
+const CHG_ERR = {
+  SAME_EMAIL: "新邮箱与当前邮箱相同",
+  EMAIL_EXISTS: "该邮箱已被注册",
+  EMAIL_DOMAIN_NOT_ALLOWED: "该邮箱域名不在允许列表",
+  CODE_INVALID: "验证码错误或已过期",
+  CODE_LOCKED: "尝试次数过多，请稍后再试",
+  INVALID_PASSWORD: "当前密码不正确",
+  RATE_LIMITED: "操作过于频繁，请稍后再试",
+  BANNED: "账号已被封禁，无法修改邮箱",
+};
+
+function renderChgStep1() {
+  const body = getModal().querySelector("#chgBody");
+  if (!body) return;
+  const user = Auth.getUser();
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">当前邮箱：${esc(user?.email || "-")}</p>
+    <div class="fg"><label>当前密码<span class="hint">验证身份，防会话劫持改邮箱</span></label><input class="inp" id="chgPwd" type="password" autocomplete="current-password"></div>
+    <div class="fg"><label>新邮箱<span class="hint">需可收信 · 域名需在允许列表 · 不能与他人重复</span></label><input class="inp" id="chgNewEmail" type="email" placeholder="接收验证码的新邮箱"></div>
+    <div class="actions">
+      <button class="btn ghost" data-act="chgBack">返回账号设置</button>
+      <button class="btn primary" data-act="chgSendCode">发送验证码</button>
+    </div>
+    <p class="hint">生效前需在新邮箱查收 6 位验证码；生效后旧邮箱会收到变更提醒。已绑定的「邮件」通知渠道将自动解绑，可在通知配置中重新绑定。</p>`;
+}
+
+function renderChgStep2() {
+  const body = getModal().querySelector("#chgBody");
+  if (!body) return;
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">验证码已发送至 <b>${esc(chgState.newEmail)}</b>，10 分钟内有效。</p>
+    <div class="fg"><label>验证码</label><input class="inp" id="chgCode" maxlength="6" inputmode="numeric" placeholder="6 位数字验证码"></div>
+    <div class="actions">
+      <button class="btn ghost" data-act="chgBackStep1">返回上一步</button>
+      <button class="btn primary" data-act="chgConfirm">确认修改</button>
+    </div>`;
+}
+
+async function chgSendCode() {
+  const pwd = getModal().querySelector("#chgPwd")?.value || "";
+  const newEmail = (getModal().querySelector("#chgNewEmail")?.value || "").trim().toLowerCase();
+  if (!pwd) { toast("请输入当前密码"); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) { toast("请输入有效的新邮箱"); return; }
+  const kp = await api.myKdfParams();
+  if (!kp.ok) { toast("身份参数获取失败，请重新登录后再试"); return; }
+  chgState.k = await pbkdf2Base64(pwd, kp.data.salt, kp.data.iter);
+  const r = await api.changeEmailRequest(chgState.k, newEmail);
+  if (!r.ok) { toast(CHG_ERR[r.error] || authErr(r.error) || "验证码发送失败"); return; }
+  chgState.newEmail = newEmail;
+  renderChgStep2();
+  toast("验证码已发送，请到新邮箱查收");
+}
+
+async function chgConfirm() {
+  const code = (getModal().querySelector("#chgCode")?.value || "").trim();
+  if (!/^\d{6}$/.test(code)) { toast("请输入 6 位验证码"); return; }
+  const r = await api.changeEmailConfirm(chgState.k, chgState.newEmail, code);
+  if (!r.ok) { toast(CHG_ERR[r.error] || authErr(r.error) || "修改失败"); return; }
+  const u = api.getUser();
+  if (u) { u.email = chgState.newEmail; api.setUser(u); }
+  closeModal();
+  toast(r.data?.channel_unbound ? "登录邮箱已更新；「邮件」通知渠道已自动解绑，可在通知配置中重新绑定" : "登录邮箱已更新");
+  emit("change");
+}
+
 /* ─────────────── 全局点击代理 ─────────────── */
 let authBusy = false; // 登录弹窗异步操作互斥（含回车提交路径）；按钮视觉由 withPending 负责
 async function authGuarded(btn, fn) {
@@ -748,6 +830,11 @@ function onModalClick(e) {
     authGuarded(el, () => nchPrefsSave(ptype));
     return;
   }
+  if (act === "authChangeEmail") { Auth.openChangeEmail(); return; }
+  if (act === "chgBack") { Auth.openSettings(); return; }
+  if (act === "chgBackStep1") { renderChgStep1(); return; }
+  if (act === "chgSendCode") { authGuarded(el, chgSendCode); return; }
+  if (act === "chgConfirm") { authGuarded(el, chgConfirm); return; }
 }
 
 document.addEventListener("click", (e) => {
@@ -927,25 +1014,9 @@ const NCH_TYPES = [
 let nchAddState = null; // 待验证绑定 { type, cred }（重新发送验证码用）
 let nchFormType = null; // 当前表单的渠道类型
 let nchItems = []; // 最近一次列表数据（渠道选择视图判断"已绑定/待验证"用）
-/* 渠道级事件偏好勾选项（与 Worker NOTIFY_KIND_LABELS 同源维护；用户在全量里勾选，
-   推送时与站点白名单取交集——站长放开/缩减后勾选长期有效） */
-const NCH_KIND_LABELS = {
-  act_approved: "情报投稿通过审核",
-  act_rejected: "情报投稿被驳回",
-  chat_approved: "社群投稿通过审核",
-  chat_rejected: "社群投稿被驳回",
-  act_retired: "情报/社群被管理组下架",
-  act_expired: "情报/社群到期自动下展",
-  link_approved: "工具提交通过审核",
-  link_rejected: "工具提交被驳回",
-  post_approved: "帖子审核通过",
-  post_rejected: "帖子审核驳回",
-  post_closed: "帖子被管理组关闭",
-  post_expired: "帖子到期自动下架",
-  post_expiring: "帖子临期提醒",
-  relay_request: "收到站长中转意向",
-  dm_message: "收到新私信",
-};
+/* 渠道级事件偏好勾选项：全量清单与中文标签的唯一副本在 shell/notify-kinds.js
+   （前端 auth.js / admin.js 共用；Worker 侧副本在 common/notifications.ts）。
+   用户在全量里勾选，推送时与站点白名单取交集——站长放开/缩减后勾选长期有效 */
 
 function nchTypeLabel(type) {
   const t = NCH_TYPES.find((x) => x.type === type);
@@ -986,7 +1057,7 @@ function nchCard(it) {
     : '<span class="nch-tag pending">待验证</span>';
   // 渠道级偏好摘要：null = 未配置（跟随站点白名单默认全收）
   const kindSummary = it.status === "active"
-    ? `<div class="h">接收：${Array.isArray(it.kinds) ? `${it.kinds.length} / 15 类事件` : "全部类型"}</div>`
+    ? `<div class="h">接收：${Array.isArray(it.kinds) ? `${it.kinds.length} / ${NOTIFY_KINDS.length} 类事件` : "全部类型"}</div>`
     : "";
   const prefsBtn = it.status === "active"
     ? '<button class="nch-del" data-act="nchPrefs" data-ctype="' + esc(it.channel_type) + '">接收类型</button>'
@@ -1005,11 +1076,11 @@ function renderNchPrefs(type) {
   const body = getModal().querySelector("#nchBody");
   if (!body || !it) return;
   // null = 未配置，展示为全选（即"跟随站点白名单默认全收"）
-  const cur = Array.isArray(it.kinds) ? it.kinds : Object.keys(NCH_KIND_LABELS);
+  const cur = Array.isArray(it.kinds) ? it.kinds : NOTIFY_KINDS;
   body.innerHTML = `
     <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 勾选该渠道要接收的事件类型。仅在站长放开对应消息类型时生效；全部取消勾选 = 该渠道静音（不解绑）。保存即时生效。</p>
     <div id="nchKindsBox" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
-      ${Object.entries(NCH_KIND_LABELS).map(([k, label]) => `
+      ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
       <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
         <input type="checkbox" data-kind="${esc(k)}" ${cur.includes(k) ? "checked" : ""}>${esc(label)}
       </label>`).join("")}

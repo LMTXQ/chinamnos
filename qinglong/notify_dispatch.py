@@ -218,7 +218,7 @@ def send_email(cred, title, body, row=None):
                 s = smtplib.SMTP(box["host"], port, timeout=30)
                 s.starttls()
             s.login(box["user"], box["pass"])
-            sender_name = box.get("from_name") or "资费监控"
+            sender_name = box.get("from_name") or "ChinaMNOs 讯览台"
             msg = MIMEText(body, "plain", "utf-8")
             msg["Subject"] = Header(title, "utf-8")
             msg["From"] = formataddr((str(Header(sender_name, "utf-8")), box["user"]))

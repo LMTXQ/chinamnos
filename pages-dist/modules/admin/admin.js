@@ -13,6 +13,7 @@ import { icon, mountIcons, toast, showPageLoading, hidePageLoading } from "../..
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
+import { NOTIFY_KIND_LABELS } from "../../shell/notify-kinds.js";
 import { viewFromProjection, renderListCard, renderDetailBody, BOARD_PRICE } from "../../shell/post-view.js";
 import { mdToSafeHtml, mdCreateEditor } from "../../shell/md.js";
 
@@ -1435,24 +1436,8 @@ const SETTING_PLACEHOLDER_KEYS = new Set(["promo_placeholders"]);
 const SETTING_THANKS_KEYS = new Set(["about_thanks"]);
 /* 站外通知推送事件白名单：复选框 chip → 保存为 kind 字符串数组（后端过滤未知 kind） */
 const SETTING_KINDS_KEYS = new Set(["notify_ext_kinds"]);
-/* 事件 kind → 中文标签（与 Worker notify/ext-push.ts 的 NOTIFY_KIND_LABELS 同源维护） */
-const NOTIFY_KIND_LABELS = {
-  act_approved: "情报投稿通过审核",
-  act_rejected: "情报投稿被驳回",
-  chat_approved: "社群投稿通过审核",
-  chat_rejected: "社群投稿被驳回",
-  act_retired: "情报/社群被管理组下架",
-  act_expired: "情报/社群到期自动下展",
-  link_approved: "工具提交通过审核",
-  link_rejected: "工具提交被驳回",
-  post_approved: "帖子审核通过",
-  post_rejected: "帖子审核驳回",
-  post_closed: "帖子被管理组关闭",
-  post_expired: "帖子到期自动下架",
-  post_expiring: "帖子临期提醒",
-  relay_request: "收到站长中转意向",
-  dm_message: "收到新私信",
-};
+/* 事件 kind → 中文标签：唯一副本在 shell/notify-kinds.js（前端 auth.js / admin.js 共用；
+   Worker 侧副本在 common/notifications.ts） */
 const THANKS_CAT_LABEL = { donor: "任意打赏", feedback: "反馈建议", ref: "参考项目" };
 const THANKS_CAT_KEY = { "任意打赏": "donor", "反馈建议": "feedback", "参考项目": "ref" };
 /* 设置页分组展示（仅影响展示顺序与分组标题，不改变键名/取值/保存逻辑；未列出的键归入「其他」组）

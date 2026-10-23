@@ -17,6 +17,38 @@ export type NotificationKind =
   | 'post_expiring' | 'relay_request'
   | 'dm_message';
 
+/* 全部通知事件类型清单（Worker 侧唯一副本）：settings 校验、渠道偏好过滤、
+   cron 批量外推的白名单判定共用本清单（原 ext-push.ts 定义迁入于此）。
+   前端唯一副本在 pages-dist/shell/notify-kinds.js（auth.js 渠道偏好 /
+   admin.js 站点白名单共用）——两份各自收敛、不做接口下发（省一次前端请求），
+   新增/调整事件时两处同步修改。 */
+export const NOTIFY_KINDS = [
+  'act_approved', 'act_rejected', 'chat_approved', 'chat_rejected',
+  'act_retired', 'act_expired',
+  'link_approved', 'link_rejected',
+  'post_approved', 'post_rejected', 'post_closed', 'post_expired',
+  'post_expiring', 'relay_request', 'dm_message',
+] as const satisfies readonly NotificationKind[];
+
+/* 管理后台白名单勾选项的中文标签（与前端 notify-kinds.js 的文案保持一致） */
+export const NOTIFY_KIND_LABELS: Record<string, string> = {
+  act_approved: '情报投稿通过审核',
+  act_rejected: '情报投稿被驳回',
+  chat_approved: '社群投稿通过审核',
+  chat_rejected: '社群投稿被驳回',
+  act_retired: '情报/社群被管理组下架',
+  act_expired: '情报/社群到期自动下展',
+  link_approved: '工具提交通过审核',
+  link_rejected: '工具提交被驳回',
+  post_approved: '帖子审核通过',
+  post_rejected: '帖子审核驳回',
+  post_closed: '帖子被管理组关闭',
+  post_expired: '帖子到期自动下架',
+  post_expiring: '帖子临期提醒',
+  relay_request: '收到站长中转意向',
+  dm_message: '收到新私信',
+};
+
 /* pushNotification：写一条站内通知。尽力而为——失败静默，绝不影响主流程（审核/发消息等）。
    同类过滤闸门（铃铛与外推共用）：同用户 + 同事件类型 + 同事件对象在 notify_throttle_minutes
    窗口内只写一条/推一次（防私信刷屏刷爆铃铛与外部机器人）；0 = 关闭过滤；闸门自身异常时不拦截。
@@ -46,11 +78,12 @@ export async function pushNotification(
   } catch { /* 通知失败不影响主流程 */ }
   if ((opts?.src ?? 'instant') === 'instant') {
     /* 外推必须在请求生命周期内确定性执行：不注册 waitUntil 的浮动任务在响应返回后
-       可能被运行时取消（实测外推静默丢失）。竞速 3 秒上限——正常双渠道并行 ~300ms 完成；
-       超时放弃只影响外部推送（铃铛已落库），不会拖死业务请求 */
+       可能被运行时取消（实测外推静默丢失）。竞速 1 秒上限——正常双渠道并行 ~300ms 完成，
+       1 秒内完不成基本就是推送方故障（多等无益），超时放弃只影响外部推送（铃铛已落库），
+       不会拖死业务请求（站长决策 2026-10-23：不上推送队列，保即时秒达，仅收紧超时上限） */
     await Promise.race([
       extPushInstant(env, userId, kind, title, body || '').catch(() => { /* 外推失败静默 */ }),
-      new Promise((resolve) => setTimeout(resolve, 3000)),
+      new Promise((resolve) => setTimeout(resolve, 1000)),
     ]);
   }
 }

@@ -3,12 +3,18 @@ import { ERR, fail, ok } from '../common/envelope';
 import { guard } from '../common/auth';
 import { hitLimit } from '../common/ratelimit';
 import { ulid, randomDigits, sha256Hex } from '../common/crypto';
-import { NOTIFY_KINDS } from '../notify/ext-push';
+import { NOTIFY_KINDS } from '../common/notifications';
+import { getSetting } from '../common/settings';
 import { getChannel, sealCred, openCred } from '../notify/channels';
 
-// 站点名称（验证码消息标识来源，防钓鱼仿冒）；与前端 index.html 标题一致。
-// 供站外推送消息模板（ext-push）共用。
-export const SITE_NAME = 'ChinaMNOs 讯览台';
+// 站点名称（验证码/站外推送消息标识来源，防钓鱼仿冒）：读管理后台 site_name 设置
+// （F8 接线：getSetting 带 30 秒缓存，后台改完约 30 秒内生效），未配置回退默认值。
+export const SITE_NAME_FALLBACK = 'ChinaMNOs 讯览台';
+export async function getSiteName(env: Env): Promise<string> {
+  const v = await getSetting<string>(env, 'site_name', '');
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s || SITE_NAME_FALLBACK;
+}
 
 /* ── 用户通知渠道绑定（站外通知推送方案 · 小方案 A）──
    绑定流：发起（校验凭证 → 直发验证码 → pending）→ 回填激活 → 解绑。
@@ -22,6 +28,13 @@ const MAX_BINDINGS = 3; // 用户决策：降低上限减轻服务端通知扇�
 export async function handleNotifyChannelsList(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
+
+  // F12：顺手清掉验证码已过期的待验证行（死数据——验证必被拒），保证前端
+  // 「最多绑定 3 个」的计数口径与服务端名额判定一致（都只看 生效中 + 验证期内的行）
+  await env.DB.prepare(
+    `DELETE FROM user_notify_channels
+     WHERE user_id = ?1 AND status = 'pending' AND verify_expires_at IS NOT NULL AND verify_expires_at < ?2`,
+  ).bind(g.viewer.id, Date.now()).run();
 
   const rows = await env.DB.prepare(
     `SELECT id, channel_type, target_hint, status, collect_report, kinds_json, created_at
@@ -80,7 +93,13 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
   const v = def.validate(raw, g.viewer.email);
   if (!v.ok) return fail(ERR.VALIDATION_ERROR, v.error, 400, { field: 'cred' });
 
-  // 绑定数上限（顶替同类型不占新名额）；已生效渠道禁止重复绑定（更换需先解绑）
+  // 绑定数上限（顶替同类型不占新名额）；已生效渠道禁止重复绑定（更换需先解绑）。
+  // F12：名额只统计「生效中 + 验证期内的待验证」——过期 pending 是死数据，先清掉再计数，
+  // 防止后续扩渠道（飞书/PushPlus 等验证码渠道上线）后死行占满名额
+  await env.DB.prepare(
+    `DELETE FROM user_notify_channels
+     WHERE user_id = ?1 AND status = 'pending' AND verify_expires_at IS NOT NULL AND verify_expires_at < ?2`,
+  ).bind(g.viewer.id, Date.now()).run();
   const total = await env.DB.prepare(
     'SELECT COUNT(*) AS c FROM user_notify_channels WHERE user_id = ?1',
   ).bind(g.viewer.id).first<{ c: number }>();
@@ -122,10 +141,11 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
   // 验证码真实外发（失败保留 pending，用户可重发；每次重发重新计码）
   // 消息强调站点身份与网址：群机器人收到的消息需能一眼识别来源，防钓鱼仿冒
   const site = env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org';
+  const siteName = await getSiteName(env);
   const r = await def.send(
     v.cred,
-    `【${SITE_NAME}】通知渠道绑定验证码`,
-    `站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n绑定验证码：**${code}**（10 分钟内有效）\n\n若非你本人在 ${SITE_NAME} 站点操作，请忽略本消息。`,
+    `【${siteName}】通知渠道绑定验证码`,
+    `站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n绑定验证码：**${code}**（10 分钟内有效）\n\n若非你本人在 ${siteName} 站点操作，请忽略本消息。`,
   );
   if (!r.ok) return fail(ERR.INTERNAL_ERROR, `验证码发送失败：${r.error || '渠道无响应'}`, 502);
   return ok({ sent: true, channel_type: type });
