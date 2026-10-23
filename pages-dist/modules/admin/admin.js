@@ -350,6 +350,7 @@ function reviewActCard(a) {
       <span class="rv-meta">提交者：${esc(a.submitter_nickname || "用户")}${a.anon ? "（匿名展示）" : ""} · ${fmtTime(a.created_at)}</span>
       <div class="adm-actions">
         ${a.url ? `<a class="btn ghost sm" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">打开</a>` : ""}
+        <button class="btn ghost sm" data-act="actDetail" data-id="${esc(a.id)}">详情</button>
         ${a.has_qr ? `<button class="btn ghost sm" data-act="actQrPeek" data-id="${esc(a.id)}" title="查看提交的二维码">二维码</button>` : ""}
         ${chat && a.has_proof ? `<button class="btn ghost sm" data-act="chatProof" data-id="${esc(a.id)}" title="查看提交者的授权凭证（群主/管理员身份截图）">查看凭证</button>` : ""}
         <button class="btn primary sm" data-act="actReview" data-id="${esc(a.id)}" data-approve="1">通过</button>
@@ -357,6 +358,40 @@ function reviewActCard(a) {
       </div>
     </div>
   </div>`;
+}
+
+/* 酒馆投稿详情弹窗（审核 + 管理两处共用）：完整元数据 + 攻略正文 MD 渲染（数据已在列表接口返回，无需二次请求） */
+function onActDetail(id) {
+  const a = (state.pendingActs || []).find((x) => x.id === id) || (state.acts || []).find((x) => x.id === id);
+  if (!a) { toast("未找到该投稿数据"); return; }
+  const guide = a.mode === "guide";
+  const chat = a.mode === "chat";
+  const links = Array.isArray(a.links) ? a.links : [];
+  const statusText = ACT_STATUS_LABELS[a.status || "pending"] || "待审核";
+  const statusCls = a.status === "open" ? "ok" : (a.status === "pending" || !a.status) ? "warn" : "danger";
+  const mask = document.createElement("div");
+  mask.className = "adm-modal-mask";
+  mask.innerHTML = `
+    <div class="adm-modal adm-modal-lg" role="dialog" aria-modal="true">
+      <div class="adm-modal-title">${chat ? "唠嗑社群" : guide ? "个人攻略" : "官方活动"}详情 <span class="adm-tag ${statusCls}">${statusText}</span></div>
+      <div class="adm-review-body">
+        <div class="adm-dt-row"><span class="adm-dt-k">标题</span><span class="adm-dt-v"><b>${esc(a.title || "(无标题)")}</b></span></div>
+        <div class="adm-dt-row"><span class="adm-dt-k">范围</span><span class="adm-dt-v">${esc(CARRIER_LABELS[a.carrier] || a.carrier || (chat ? "全站通用" : "全运营商通用"))} · ${esc(a.province || (chat ? "通用（含全国）" : "全国"))}</span></div>
+        ${a.ends_at ? `<div class="adm-dt-row"><span class="adm-dt-k">截止时间</span><span class="adm-dt-v">${fmtTime(a.ends_at)}</span></div>` : ""}
+        ${chat && a.chat_id ? `<div class="adm-dt-row"><span class="adm-dt-k">群号/账号</span><span class="adm-dt-v" style="user-select:all">${esc(a.chat_id)}</span></div>` : ""}
+        ${a.url ? `<div class="adm-dt-row"><span class="adm-dt-k">活动链接</span><span class="adm-dt-v"><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.url)}</a></span></div>` : ""}
+        ${links.length ? `<div class="adm-dt-row"><span class="adm-dt-k">附加链接</span><span class="adm-dt-v">${links.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join(" · ")}</span></div>` : ""}
+        ${a.descr ? `<div class="adm-dt-row"><span class="adm-dt-k">简介</span><span class="adm-dt-v adm-dt-descr">${esc(a.descr)}</span></div>` : ""}
+        ${(guide && a.content_md && a.content_md.trim()) ? `<div class="adm-dt-row"><span class="adm-dt-k">攻略正文</span></div><div class="adm-act-md">${mdToSafeHtml(a.content_md, { nofollow: true })}</div>` : ""}
+        ${a.anon ? `<div class="adm-dt-row"><span class="adm-dt-k">展示方式</span><span class="adm-dt-v">匿名展示</span></div>` : ""}
+        ${a.status === "rejected" && a.reject_reason ? `<div class="adm-dt-row"><span class="adm-dt-k">拒绝原因</span><span class="adm-dt-v" style="color:var(--red,#c0392b)">${esc(a.reject_reason)}</span></div>` : ""}
+        <div class="adm-dt-row"><span class="adm-dt-k">提交者</span><span class="adm-dt-v">${esc(a.submitter_nickname || "用户")}${a.anon ? "（匿名展示）" : ""}</span></div>
+        <div class="adm-dt-row"><span class="adm-dt-k">提交时间</span><span class="adm-dt-v">${fmtTime(a.created_at)}${a.reviewed_at ? " · 审核于 " + fmtTime(a.reviewed_at) : ""}</span></div>
+      </div>
+      <div class="adm-modal-btns"><button class="btn ghost" data-m="close">关闭</button></div>
+    </div>`;
+  document.body.appendChild(mask);
+  mask.addEventListener("click", (e) => { if (e.target === mask || e.target.closest('[data-m="close"]')) mask.remove(); });
 }
 
 function renderReview() {
@@ -831,6 +866,7 @@ function renderActs() {
       <div class="rv-foot">
         <span class="rv-meta">提交者：${esc(a.submitter_nickname || "用户")}${a.anon ? "（匿名展示）" : ""} · ${fmtTime(a.created_at)}${a.reviewed_at ? " · 审核于 " + fmtTime(a.reviewed_at) : ""}</span>
         <div class="adm-actions">
+          <button class="btn ghost sm" data-act="actDetail" data-id="${esc(a.id)}">详情</button>
           ${a.url ? `<a class="btn ghost sm" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">打开</a>` : ""}
           ${a.has_qr ? `<button class="btn ghost sm" data-act="actQrPeek" data-id="${esc(a.id)}" title="查看二维码">二维码</button>` : ""}
           ${actBtns}
@@ -1760,6 +1796,7 @@ function admRawHTML(d) {
     <div class="adm-dt-row"><span class="adm-dt-k">联系方式设置</span><span class="adm-dt-v">${esc(contactChannelsText(raw))}</span></div>
     ${trades}${fields}${contacts}
     <div class="adm-dt-row"><span class="adm-dt-k">详细描述</span><span class="adm-dt-v adm-dt-descr">${esc(raw.descr || "(无)")}</span></div>
+    ${(typeof extra.market_body === "string" && extra.market_body.trim()) ? `<div class="adm-dt-row"><span class="adm-dt-k">图文正文</span></div><div class="adm-dt-md">${mdToSafeHtml(extra.market_body, { nofollow: true })}</div>` : ""}
     ${raw.reject_reason ? `<div class="adm-dt-row"><span class="adm-dt-k">拒绝原因</span><span class="adm-dt-v" style="color:var(--red,#c0392b)">${esc(raw.reject_reason)}</span></div>` : ""}
     ${raw.review_admin_id ? `<div class="adm-alert">⚠ 该帖未上传证明材料（发布者选择「指定管理员审核」）。请确认发布者身份是否已通过其他渠道核实。</div>` : ""}
     ${(d.proofs || []).length ? `<div class="adm-dt-row"><span class="adm-dt-k">证明材料</span></div><div class="adm-proofs">${d.proofs.map((pr) => `<img data-adminproof="${esc(raw.id)}|${esc(pr.id)}" alt="证明材料" loading="lazy">`).join("")}</div>` : ""}
@@ -2060,6 +2097,7 @@ function bindEvents() {
     if (act === "goConfig") { Shell.navigate("/config"); return; }
     if (act === "navReview") { onNavReview(el.dataset.id, el.dataset.approve === "1"); return; }
     if (act === "actReview") { onActReview(el.dataset.id, el.dataset.approve === "1"); return; }
+    if (act === "actDetail") { onActDetail(el.dataset.id); return; }
     if (act === "actRetire") { onActRetire(el.dataset.id); return; }
     if (act === "actDel") { onActDel(el.dataset.id); return; }
     if (act === "actQrPeek") {
@@ -2278,6 +2316,19 @@ const CSS = `
 .adm-dt-k{flex:none;width:88px;color:var(--muted)}
 .adm-dt-v{flex:1;min-width:0;color:var(--text);word-break:break-all}
 .adm-dt-descr{white-space:pre-wrap;user-select:all}
+/* 图文正文（market_body）+ 攻略正文（content_md）渲染排版：与发布端 .act-md 同款数值（表格走 theme.css 全局 .md-tbl） */
+.adm-dt-md,.adm-act-md{margin:2px 0 10px;font-size:13.5px;line-height:1.85;color:var(--text);overflow-wrap:anywhere}
+.adm-dt-md h3,.adm-dt-md h4,.adm-dt-md h5,.adm-dt-md h6,.adm-act-md h3,.adm-act-md h4,.adm-act-md h5,.adm-act-md h6{margin:14px 0 6px;line-height:1.5;color:var(--text)}
+.adm-dt-md h3,.adm-act-md h3{font-size:15.5px}.adm-dt-md h4,.adm-act-md h4{font-size:14.5px}.adm-dt-md h5,.adm-dt-md h6,.adm-act-md h5,.adm-act-md h6{font-size:13.5px}
+.adm-dt-md p,.adm-act-md p{margin:0 0 8px}
+.adm-dt-md ul,.adm-dt-md ol,.adm-act-md ul,.adm-act-md ol{margin:0 0 8px;padding-left:20px}
+.adm-dt-md li,.adm-act-md li{margin:2px 0}
+.adm-dt-md blockquote,.adm-act-md blockquote{margin:8px 0;padding:8px 12px;border-left:3px solid color-mix(in oklab,var(--acc) 55%,transparent);background:var(--surface);border-radius:0 8px 8px 0;color:var(--muted)}
+.adm-dt-md code,.adm-act-md code{font-family:var(--mono);font-size:12px;padding:1px 5px;border-radius:5px;background:var(--surface)}
+.adm-dt-md a,.adm-act-md a{color:var(--acc)}
+.adm-dt-md hr,.adm-act-md hr{border:0;border-top:1px solid var(--border);margin:12px 0}
+.adm-dt-md .md-img,.adm-act-md .md-img{margin:10px 0;text-align:center}
+.adm-dt-md .md-img img,.adm-act-md .md-img img{max-width:100%;max-height:420px;border-radius:10px;border:1px solid var(--border)}
 .adm-pv-tabs{display:flex;gap:6px;margin:2px 0 12px;flex-wrap:wrap}
 .adm-pv-tab{border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:999px;padding:4px 14px;font-size:12.5px;cursor:pointer}
 .adm-pv-tab.active{background:var(--acc);border-color:transparent;color:#fff}
