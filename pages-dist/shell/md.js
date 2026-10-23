@@ -187,7 +187,26 @@ function ensureEditorCSS() {
   width: 100%; border: 0; outline: none; resize: vertical; padding: 10px 12px;
   font: 13px/1.8 var(--font); color: var(--txt); background: var(--surface); min-height: 180px;
 }
-.md-preview { padding: 10px 12px; min-height: 120px; max-height: 420px; overflow: auto; border-bottom: 1px solid var(--line); }
+.md-preview { padding: 10px 12px; min-height: 120px; max-height: 420px; overflow: auto; border-bottom: 1px solid var(--line);
+  font-size: 13.5px; line-height: 1.85; color: var(--txt); overflow-wrap: anywhere; }
+/* 预览内容排版：与发布端 .act-md（tariff/style.css）同款数值，保证所见即所得；
+   表格走 theme.css 全局 .md-tbl；此前预览容器无内容样式导致表格挤成一团、图片原始尺寸，与发布效果严重不符 */
+.md-preview h3, .md-preview h4, .md-preview h5, .md-preview h6 { margin: 14px 0 6px; line-height: 1.5; color: var(--txt); }
+.md-preview h3 { font-size: 15.5px; }
+.md-preview h4 { font-size: 14.5px; }
+.md-preview h5, .md-preview h6 { font-size: 13.5px; }
+.md-preview p { margin: 0 0 8px; }
+.md-preview p:last-child { margin-bottom: 0; }
+.md-preview ul, .md-preview ol { margin: 0 0 8px; padding-left: 20px; }
+.md-preview li { margin: 2px 0; }
+.md-preview blockquote { margin: 8px 0; padding: 8px 12px; border-left: 3px solid color-mix(in oklab, var(--acc) 55%, transparent); background: var(--surface-2); border-radius: 0 8px 8px 0; color: var(--sub); }
+.md-preview blockquote p { margin: 0 0 4px; }
+.md-preview blockquote p:last-child { margin-bottom: 0; }
+.md-preview code { font-family: var(--mono); font-size: 12px; padding: 1px 5px; border-radius: 5px; background: var(--surface-2); }
+.md-preview a { color: var(--acc); }
+.md-preview hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+.md-preview .md-img { margin: 10px 0; text-align: center; }
+.md-preview .md-img img { max-width: 100%; max-height: 420px; border-radius: 10px; border: 1px solid var(--line); }
 .md-foot { display: flex; align-items: center; justify-content: space-between; padding: 5px 12px; font-size: 11.5px; color: var(--sub); background: var(--surface-2); }
 .md-count { font-variant-numeric: tabular-nums; }`;
   document.head.appendChild(s);
