@@ -16,6 +16,8 @@ payload 行结构（Worker 写入，契约固定）：
 
 环境变量：
   NOTIFY_DATA_DIR   payload 与状态目录（默认：脚本同目录 data/）
+  TARIFF_CONFIG     采集端完整配置 JSON（通知分发读取 notification.smtp_accounts 作为 SMTP 发信邮箱池，
+                    未配置时回退旧环境变量 SMTP_ACCOUNTS）
 
 仅依赖标准库。
 """
@@ -166,6 +168,18 @@ COOLDOWN_MS = 10 * 60 * 1000  # 发信失败冷却 10 分钟，自动换箱
 
 
 def _load_mailboxes():
+    """发信邮箱池：首选 TARIFF_CONFIG.notification.smtp_accounts（配置页「SMTP 邮箱」页签生成），
+    回退旧环境变量 SMTP_ACCOUNTS（兼容既有部署，无需立即迁移）。"""
+    raw = _env("TARIFF_CONFIG")
+    if raw:
+        try:
+            arr = (json.loads(raw).get("notification") or {}).get("smtp_accounts")
+            if isinstance(arr, list):
+                boxes = [a for a in arr if isinstance(a, dict) and a.get("host") and a.get("user") and a.get("pass")]
+                if boxes:
+                    return boxes
+        except Exception:
+            pass
     raw = _env("SMTP_ACCOUNTS")
     if not raw:
         return []
