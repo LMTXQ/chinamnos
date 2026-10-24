@@ -14,6 +14,7 @@ import { api, pbkdf2Base64, randomSalt, DEFAULT_ITER } from "./api.js";
 import { getPubConfig } from "./pubcfg.js";
 import { bellHTML, refreshBell, goCardhubView } from "./notify.js";
 import { NOTIFY_KINDS, NOTIFY_KIND_LABELS } from "./notify-kinds.js";
+import { PROVINCES } from "./provinces.js";
 
 const TURNSTILE_SITEKEY = "0x4AAAAAAFFH8cKk2ttfupI-";
 /* 本地开发环境跳过 Turnstile（localhost 不在 sitekey 域名白名单，widget 必然失败） */
@@ -830,6 +831,17 @@ function onModalClick(e) {
     authGuarded(el, () => nchPrefsSave(ptype));
     return;
   }
+  if (act === "nchDigest") { renderNchDigest(el.dataset.ctype || ""); return; }
+  if (act === "nchDigestAll" || act === "nchDigestNone") {
+    const on = act === "nchDigestAll";
+    getModal().querySelectorAll('#nchDigestGrid input[type="checkbox"]').forEach((x) => { x.checked = on; });
+    return;
+  }
+  if (act === "nchDigestSave") {
+    const dtype = el.dataset.ctype || "";
+    authGuarded(el, () => nchDigestSave(dtype));
+    return;
+  }
   if (act === "authChangeEmail") { Auth.openChangeEmail(); return; }
   if (act === "chgBack") { Auth.openSettings(); return; }
   if (act === "chgBackStep1") { renderChgStep1(); return; }
@@ -1038,12 +1050,8 @@ async function renderNchList() {
   const items = Array.isArray(r.data?.items) ? r.data.items : [];
   nchItems = items;
   body.innerHTML = `
-    <p class="hint" style="margin-top:0">绑定后，审核结果 / 在线沟通 / 站长中转等站内通知会同步推送到你的渠道。</p>
+    <p class="hint" style="margin-top:0">绑定后，站内通知会同步推送到你的渠道；每个渠道还可单独订阅「采集播报」（关注省份的资费变更摘要）。</p>
     <div class="nch-list">${items.length ? items.map(nchCard).join("") : '<div class="nch-empty">还没有绑定任何通知渠道</div>'}</div>
-    <div class="nch-toggle" style="margin-top:10px">
-      <div>采集完成后推送播报<span class="hint">每轮采集结束后推送新增 / 变更 / 下架摘要（即将上线）</span></div>
-      <input type="checkbox" disabled>
-    </div>
     <div class="actions">
       ${items.length < 3 ? '<button class="btn primary" data-act="nchAdd"><i data-icon="plus"></i>添加渠道</button>' : '<p class="hint" style="text-align:center">最多绑定 3 个通知渠道</p>'}
     </div>`;
@@ -1059,14 +1067,21 @@ function nchCard(it) {
   const kindSummary = it.status === "active"
     ? `<div class="h">接收：${Array.isArray(it.kinds) ? `${it.kinds.length} / ${NOTIFY_KINDS.length} 类事件` : "全部类型"}</div>`
     : "";
+  // 采集播报摘要：collect_report 布尔 + provinces 数组（空 = 全部省份）
+  const digestSummary = it.status === "active"
+    ? `<div class="h">采集播报：${it.collect_report ? (Array.isArray(it.provinces) && it.provinces.length ? `${it.provinces.length} 省` : "全部省份") : "未开启"}</div>`
+    : "";
   const prefsBtn = it.status === "active"
     ? '<button class="nch-del" data-act="nchPrefs" data-ctype="' + esc(it.channel_type) + '">接收类型</button>'
     : "";
+  const digestBtn = it.status === "active"
+    ? '<button class="nch-del" data-act="nchDigest" data-ctype="' + esc(it.channel_type) + '">采集播报</button>'
+    : "";
   return `
     <div class="nch-card">
-      <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}</div>
+      <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}${digestSummary}</div>
       ${tag}
-      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${prefsBtn}
+      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${prefsBtn}${digestBtn}
       <button class="nch-del" data-act="nchDelete" data-ctype="${esc(it.channel_type)}">解绑</button></div>
     </div>`;
 }
@@ -1098,6 +1113,47 @@ async function nchPrefsSave(type) {
   const r = await api.notifyChannelPrefs(type, kinds);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   toast("接收偏好已保存");
+  await renderNchList();
+}
+
+/* ── 采集播报订阅（方案批次四）：渠道级开关 + 关注省份网格（不选 = 全部省份）── */
+function renderNchDigest(type) {
+  const it = nchItems.find((x) => x.channel_type === type && x.status === "active");
+  const body = getModal().querySelector("#nchBody");
+  if (!body || !it) return;
+  const enabled = it.collect_report === true;
+  const cur = new Set(Array.isArray(it.provinces) ? it.provinces : []);
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后推送你关注省份的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注省份有变化时才会推送。保存即时生效。</p>
+    <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;cursor:pointer">
+      <input type="checkbox" id="nchDigestEnabled" ${enabled ? "checked" : ""}>
+      <span>采集完成后推送播报</span>
+    </label>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <button class="btn ghost sm" type="button" data-act="nchDigestAll">全选</button>
+      <button class="btn ghost sm" type="button" data-act="nchDigestNone">清空</button>
+      <span class="hint">不勾选任何省份 = 接收全部省份</span>
+    </div>
+    <div id="nchDigestGrid" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
+      ${PROVINCES.map((p) => `
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
+        <input type="checkbox" data-prov="${esc(p.code)}" ${cur.has(p.code) ? "checked" : ""}>${esc(p.name)}
+      </label>`).join("")}
+    </div>
+    <div class="actions">
+      <button class="btn ghost" data-act="nchBack">返回</button>
+      <button class="btn primary" data-act="nchDigestSave" data-ctype="${esc(type)}">保存</button>
+    </div>`;
+  mountIcons(body);
+}
+
+async function nchDigestSave(type) {
+  if (!type) return;
+  const enabled = getModal().querySelector("#nchDigestEnabled")?.checked === true;
+  const provinces = [...getModal().querySelectorAll('#nchDigestGrid input[type="checkbox"]:checked')].map((x) => x.dataset.prov);
+  const r = await api.notifyDigestPrefs(type, enabled, provinces);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
+  toast("采集播报偏好已保存");
   await renderNchList();
 }
 

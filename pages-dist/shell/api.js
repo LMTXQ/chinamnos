@@ -173,6 +173,9 @@ export const api = {
   async notifyChannelPrefs(channelType, kinds) {
     return this.request("/api/me/notify-channels/prefs", { method: "POST", body: { channel_type: channelType, kinds } });
   },
+  async notifyDigestPrefs(channelType, enabled, provinces) {
+    return this.request("/api/me/notify-channels/digest-prefs", { method: "POST", body: { channel_type: channelType, enabled, provinces } });
+  },
   async notifyChannelDelete(channelType) {
     return this.request("/api/me/notify-channels/delete", { method: "POST", body: { channel_type: channelType } });
   },
