@@ -470,7 +470,52 @@ def build_digest_message(sub, digest, site=""):
 
     round_lines, has_round, round_html = section(round_part)
     today_lines, has_today, today_html = section(today_part)
-    if not has_round and not has_today:
+
+    # 公告新增段（订户公告开关开 + 货单含 announce 段才渲染；按订户 运营商×省份 过滤）
+    ann_lines = []
+    ann_html = []
+    if sub.get("announce") is True:
+        ann_list = digest.get("announce") if isinstance(digest.get("announce"), list) else []
+        groups, order = {}, []
+        for it in ann_list:
+            if not isinstance(it, dict):
+                continue
+            carrier = str(it.get("carrier") or "")
+            prov_code = str(it.get("province") or "")
+            prov_set = _prov_set_for(pref, carrier)
+            if prov_set is not None:
+                if not prov_set:
+                    continue  # 该运营商未订阅
+                if prov_code and prov_code not in prov_set:
+                    continue  # 省份不在订阅范围
+            if carrier not in groups:
+                groups[carrier] = []
+                order.append(carrier)
+            groups[carrier].append(it)
+        for carrier in order:
+            cname = CARRIER_NAMES.get(carrier, carrier)
+            ann_lines.append("══ %s ══" % cname)
+            rows = []
+            for it in groups[carrier]:
+                t = str(it.get("title") or "").strip() or "(无标题公告)"
+                iid = str(it.get("id") or "")
+                link = ("%s/#ann_%s_%s" % (site, carrier, iid)) if (site and iid) else ""
+                if link:
+                    ann_lines.append("  · %s\n    %s" % (t, link))
+                else:
+                    ann_lines.append("  · %s" % t)
+                dt = str(it.get("date") or "")
+                et = t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                if link:
+                    rows.append('<tr><td style="%s"><a href="%s" style="color:#1a56db;text-decoration:none">%s</a></td>'
+                                '<td style="%s;text-align:center">%s</td></tr>' % (_td, link, et, _td, dt))
+                else:
+                    rows.append('<tr><td style="%s">%s</td><td style="%s;text-align:center">%s</td></tr>' % (_td, et, _td, dt))
+            ann_html.append('<p style="%s">%s</p>' % (_h, cname))
+            ann_html.append('<table style="%s"><tr><th style="%s">公告标题（点击查看）</th>'
+                            '<th style="%s">日期</th></tr>%s</table>' % (_tbl, _td, _td, "".join(rows)))
+
+    if not has_round and not has_today and not ann_lines:
         return None  # 该订户关注的范围本轮与今日均无变化 → 不发
 
     lines = ["═══ 本轮采集 ═══"]
@@ -478,6 +523,10 @@ def build_digest_message(sub, digest, site=""):
     lines.append("")
     lines.append("═══ 今日累计 ═══")
     lines.extend(today_lines if has_today else ["  你关注的范围今日暂无变化"])
+    if ann_lines:
+        lines.append("")
+        lines.append("═══ 公告新增 ═══")
+        lines.extend(ann_lines)
     lines.append("")
     lines.append("（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）")
     if site:
@@ -489,6 +538,9 @@ def build_digest_message(sub, digest, site=""):
     html.extend(round_html if has_round else ['<p style="margin:0 0 12px">（你关注的范围本轮无变化）</p>'])
     html.append('<p style="%s">今日累计</p>' % _h)
     html.extend(today_html if has_today else ['<p style="margin:0 0 12px">（你关注的范围今日暂无变化）</p>'])
+    if ann_html:
+        html.append('<p style="%s">公告新增</p>' % _h)
+        html.extend(ann_html)
     html.append('<p style="%s">（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）</p>' % _trailer)
     if site:
         html.append('<p style="%s">站点：<a href="%s">%s</a></p>' % (_site, site, site))
