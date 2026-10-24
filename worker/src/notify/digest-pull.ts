@@ -44,19 +44,26 @@ export async function handleDigestSubscribers(request: Request, env: Env): Promi
   }
 
   const rows = await env.DB.prepare(
-    `SELECT user_id, channel_type, cred_enc, provinces_json FROM user_notify_channels
-     WHERE status = 'active' AND collect_report = 1 ORDER BY user_id, channel_type`,
-  ).all<{ user_id: string; channel_type: string; cred_enc: string; provinces_json: string | null }>();
+    `SELECT c.user_id, c.channel_type, c.cred_enc, c.provinces_json, c.digest_mode, g.pref_json AS global_pref
+     FROM user_notify_channels c
+     LEFT JOIN user_digest_prefs g ON g.user_id = c.user_id
+     WHERE c.status = 'active' AND c.collect_report = 1
+     ORDER BY c.user_id, c.channel_type`,
+  ).all<{ user_id: string; channel_type: string; cred_enc: string; provinces_json: string | null; digest_mode: string; global_pref: string | null }>();
 
   const subscribers: Array<Record<string, unknown>> = [];
   for (const r of rows.results || []) {
     try {
       const cred = await openCred(env, r.cred_enc);
+      // 范围来源：'custom' 用渠道自有配置；'follow'（默认）用账号全局偏好（未设置 = 全收）
+      const resolved = r.digest_mode === 'custom'
+        ? parseProvincesPref(r.provinces_json)
+        : parseProvincesPref(r.global_pref);
       const sub: Record<string, unknown> = {
         uid: r.user_id,
         channel_type: r.channel_type,
         cred,
-        provinces: parseProvincesPref(r.provinces_json),
+        provinces: resolved,
       };
       if (r.channel_type === 'email' && typeof cred.email === 'string') {
         sub.email_target = cred.email;

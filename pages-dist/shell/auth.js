@@ -832,6 +832,16 @@ function onModalClick(e) {
     return;
   }
   if (act === "nchDigest") { renderNchDigest(el.dataset.ctype || ""); return; }
+  if (act === "nchDigestGlobal") { renderNchDigestGlobal(); return; }
+  if (act === "nchDigestGlobalSave") { authGuarded(el, nchDigestGlobalSave); return; }
+  if (act === "nchDigestScope") {
+    if (nchProvEditor) nchProvEditor.scope = el.dataset.scope === "custom" ? "custom" : "follow";
+    getModal().querySelectorAll('#nchBody .seg-btn[data-scope]').forEach((b) => {
+      b.classList.toggle("active", b.dataset.scope === nchProvEditor?.scope);
+    });
+    renderNchDigestScopeBody();
+    return;
+  }
   if (act === "nchDigestTab") {
     if (nchDigestState) nchDigestState.active = el.dataset.carrier || "cmcc";
     getModal().querySelectorAll('#nchDigestCarriers .seg-btn').forEach((b) => {
@@ -1059,9 +1069,18 @@ async function renderNchList() {
   }
   const items = Array.isArray(r.data?.items) ? r.data.items : [];
   nchItems = items;
+  // 账号全局播报范围（拉取失败静默降级：摘要显示"未设置"，不影响渠道操作）
+  const gr = await api.digestGlobal();
+  nchGlobalPref = gr.ok ? (gr.data?.provinces ?? null) : null;
   body.innerHTML = `
-    <p class="hint" style="margin-top:0">绑定后，站内通知会同步推送到你的渠道；每个渠道还可单独订阅「采集播报」（关注省份的资费变更摘要）。</p>
-    <div class="nch-list">${items.length ? items.map(nchCard).join("") : '<div class="nch-empty">还没有绑定任何通知渠道</div>'}</div>
+    <p class="hint" style="margin-top:0">绑定后，站内通知会同步推送到你的渠道；每个渠道还可订阅「采集播报」（关注范围的资费变更摘要），范围可选跟随账号全局或独立配置。</p>
+    <div class="nch-list">
+      <div class="nch-card pick" data-act="nchDigestGlobal">
+        <div class="nch-meta"><div class="t">账号全局播报范围</div><div class="h">一次配置，跟随它的渠道自动生效 · 当前：${esc(nchDigestSummaryText(nchGlobalPref))}</div></div>
+        <span class="nch-tag ok">配置</span>
+      </div>
+      ${items.length ? items.map(nchCard).join("") : '<div class="nch-empty">还没有绑定任何通知渠道</div>'}
+    </div>
     <div class="actions">
       ${items.length < 3 ? '<button class="btn primary" data-act="nchAdd"><i data-icon="plus"></i>添加渠道</button>' : '<p class="hint" style="text-align:center">最多绑定 3 个通知渠道</p>'}
     </div>`;
@@ -1077,9 +1096,9 @@ function nchCard(it) {
   const kindSummary = it.status === "active"
     ? `<div class="h">接收：${Array.isArray(it.kinds) ? `${it.kinds.length} / ${NOTIFY_KINDS.length} 类事件` : "全部类型"}</div>`
     : "";
-  // 采集播报摘要：collect_report 布尔 + provinces（旧数组=全运营商 / 新对象=按运营商）
+  // 采集播报摘要：collect_report 布尔 + 范围来源（跟随全局 / 独立配置）
   const digestSummary = it.status === "active"
-    ? `<div class="h">采集播报：${it.collect_report ? nchDigestSummaryText(it.provinces) : "未开启"}</div>`
+    ? `<div class="h">采集播报：${it.collect_report ? (it.digest_mode === "custom" ? `独立 · ${nchDigestSummaryText(it.provinces)}` : "跟随账号全局") : "未开启"}</div>`
     : "";
   const prefsBtn = it.status === "active"
     ? '<button class="nch-del" data-act="nchPrefs" data-ctype="' + esc(it.channel_type) + '">接收类型</button>'
@@ -1144,13 +1163,13 @@ function nchDigestSummaryText(p) {
    旧格式平铺数组（全运营商同一份）载入时展开到各运营商；
    某运营商未勾选任何省 = 不收该运营商；四家均未勾选 = 本渠道不推送（相当于暂停）。 */
 const NCH_DIGEST_CARRIERS = [["cmcc", "移动"], ["cucc", "联通"], ["ctcc", "电信"], ["cbn", "广电"]];
-let nchDigestState = null; // { type, carriers: {cmcc:Set,...}, active: "cmcc" }
+let nchGlobalPref = null; // 账号全局播报范围（null = 未设置 = 全收）
+let nchProvEditor = null; // 省份编辑器状态 { scope: 'channel'|'global', type?, carriers: {cmcc:Set,...}, active }
 
-function nchDigestLoadPref(it) {
+function nchDigestLoadPref(raw) {
   const allCodes = PROVINCES.map((p) => p.code);
   const carriers = {};
   for (const [c] of NCH_DIGEST_CARRIERS) carriers[c] = new Set(allCodes); // 默认全收
-  const raw = it.provinces;
   if (Array.isArray(raw) && raw.length) {
     // 旧格式：全运营商同一份省份清单
     for (const [c] of NCH_DIGEST_CARRIERS) carriers[c] = new Set(raw);
@@ -1163,21 +1182,15 @@ function nchDigestLoadPref(it) {
 function renderNchDigestGrid() {
   const body = getModal();
   const grid = body.querySelector("#nchDigestGrid");
-  if (!grid || !nchDigestState) return;
-  const cur = nchDigestState.carriers[nchDigestState.active] || new Set();
+  if (!grid || !nchProvEditor) return;
+  const cur = nchProvEditor.carriers[nchProvEditor.active] || new Set();
   grid.innerHTML = PROVINCES.map((p) => `
     <label class="nch-prov${cur.has(p.code) ? " on" : ""}">
       <input type="checkbox" data-prov="${esc(p.code)}" ${cur.has(p.code) ? "checked" : ""}>${esc(p.name)}
     </label>`).join("");
 }
 
-function renderNchDigest(type) {
-  const it = nchItems.find((x) => x.channel_type === type && x.status === "active");
-  const body = getModal().querySelector("#nchBody");
-  if (!body || !it) return;
-  const enabled = it.collect_report === true;
-  nchDigestState = { type, carriers: nchDigestLoadPref(it), active: "cmcc" };
-  const nchProvStyle = `
+const NCH_PROV_EDITOR_STYLE = `
     <style>
       #nchDigestGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)}
       .nch-prov{display:flex;align-items:center;justify-content:center;gap:5px;padding:7px 4px;border:1px solid var(--line);border-radius:8px;cursor:pointer;user-select:none;font-size:12.5px;color:var(--txt);transition:border-color .15s,color .15s,background .15s}
@@ -1185,40 +1198,117 @@ function renderNchDigest(type) {
       .nch-prov.on{border-color:var(--acc);color:var(--acc);background:color-mix(in oklab,var(--acc) 8%,transparent)}
       .nch-prov input{accent-color:var(--acc);margin:0}
     </style>`;
+
+function nchProvEditorTabs() {
+  return NCH_DIGEST_CARRIERS.map(([c, l]) => `
+    <button type="button" class="seg-btn${c === nchProvEditor.active ? " active" : ""}" data-act="nchDigestTab" data-carrier="${c}">${esc(l)}</button>`).join("");
+}
+
+/* 渠道级订阅视图：范围来源（跟随账号全局 / 独立配置）+ 开关；独立配置时展示省份编辑器 */
+function renderNchDigest(type) {
+  const it = nchItems.find((x) => x.channel_type === type && x.status === "active");
+  const body = getModal().querySelector("#nchBody");
+  if (!body || !it) return;
+  const enabled = it.collect_report === true;
+  const mode = it.digest_mode === "custom" ? "custom" : "follow";
+  nchProvEditor = { scope: "channel", type, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : null), active: "cmcc" };
   body.innerHTML = `
-    ${nchProvStyle}
-    <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后按运营商推送你关注省份的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注范围内有变化时才会推送。保存即时生效。</p>
+    ${NCH_PROV_EDITOR_STYLE}
+    <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后推送关注范围的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注范围内有变化时才会推送。保存即时生效。</p>
     <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;cursor:pointer">
       <input type="checkbox" id="nchDigestEnabled" ${enabled ? "checked" : ""}>
       <span>采集完成后推送播报</span>
     </label>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-      <div class="seg" id="nchDigestCarriers" style="flex:none">
-        ${NCH_DIGEST_CARRIERS.map(([c, l]) => `
-        <button type="button" class="seg-btn${c === nchDigestState.active ? " active" : ""}" data-act="nchDigestTab" data-carrier="${c}">${esc(l)}</button>`).join("")}
-      </div>
-      <button class="btn ghost sm" type="button" data-act="nchDigestAll">全选本运营商</button>
-      <button class="btn ghost sm" type="button" data-act="nchDigestNone">清空本运营商</button>
+    <p class="hint" style="margin:0 0 6px">接收范围：</p>
+    <div class="seg" style="margin-bottom:10px">
+      <button type="button" class="seg-btn${mode === "follow" ? " active" : ""}" data-act="nchDigestScope" data-scope="follow">跟随账号全局</button>
+      <button type="button" class="seg-btn${mode === "custom" ? " active" : ""}" data-act="nchDigestScope" data-scope="custom">独立配置</button>
     </div>
-    <div id="nchDigestGrid"></div>
-    <p class="hint" style="margin:8px 2px 0">某运营商内不勾选任何省份 = 不接收该运营商的播报；四家全部清空 = 本渠道暂停接收（开关仍开启）。</p>
+    <div id="nchDigestScopeBody"></div>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
       <button class="btn primary" data-act="nchDigestSave" data-ctype="${esc(type)}">保存</button>
     </div>`;
   mountIcons(body);
+  renderNchDigestScopeBody();
+}
+
+/* 渠道订阅视图的范围区：跟随 = 只读展示全局摘要；独立 = 运营商页签 + 省份网格 */
+function renderNchDigestScopeBody() {
+  const body = getModal().querySelector("#nchDigestScopeBody");
+  if (!body || !nchProvEditor) return;
+  if (nchProvEditor.scope === "follow") {
+    body.innerHTML = `
+      <div style="padding:10px 12px;border:1px dashed var(--line);border-radius:10px">
+        <div style="font-size:13px">当前全局范围：<b>${esc(nchDigestSummaryText(nchGlobalPref))}</b></div>
+        <div class="hint" style="margin-top:4px">全局范围变化时本渠道自动跟随，无需逐渠道修改。如需单独调整本渠道，切到「独立配置」。</div>
+      </div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <div class="seg" id="nchDigestCarriers" style="flex:none">
+        ${nchProvEditorTabs()}
+      </div>
+      <button class="btn ghost sm" type="button" data-act="nchDigestAll">全选本运营商</button>
+      <button class="btn ghost sm" type="button" data-act="nchDigestNone">清空本运营商</button>
+    </div>
+    <div id="nchDigestGrid"></div>
+    <p class="hint" style="margin:8px 2px 0">某运营商内不勾选任何省份 = 不接收该运营商的播报；四家全部清空 = 本渠道暂停接收（开关仍开启）。</p>`;
   renderNchDigestGrid();
 }
 
-async function nchDigestSave(type) {
-  if (!type || !nchDigestState) return;
-  const enabled = getModal().querySelector("#nchDigestEnabled")?.checked === true;
+/* 账号全局播报范围编辑视图（列表页「账号全局播报范围」入口） */
+function renderNchDigestGlobal() {
+  const body = getModal().querySelector("#nchBody");
+  if (!body) return;
+  nchProvEditor = { scope: "global", carriers: nchDigestLoadPref(nchGlobalPref), active: "cmcc" };
+  body.innerHTML = `
+    ${NCH_PROV_EDITOR_STYLE}
+    <p class="hint" style="margin-top:0">账号全局采集播报范围：一次配置，所有选择「跟随账号全局」的渠道自动生效。按运营商推送关注省份的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）；仅当关注范围内有变化时才会推送（当前约每 6 小时一轮）。保存即时生效。</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <div class="seg" id="nchDigestCarriers" style="flex:none">
+        ${nchProvEditorTabs()}
+      </div>
+      <button class="btn ghost sm" type="button" data-act="nchDigestAll">全选本运营商</button>
+      <button class="btn ghost sm" type="button" data-act="nchDigestNone">清空本运营商</button>
+    </div>
+    <div id="nchDigestGrid"></div>
+    <p class="hint" style="margin:8px 2px 0">某运营商内不勾选任何省份 = 不接收该运营商的播报；全部不勾 = 未设置（各渠道跟随模式下收全部省份）。</p>
+    <div class="actions">
+      <button class="btn ghost" data-act="nchBack">返回</button>
+      <button class="btn primary" data-act="nchDigestGlobalSave">保存全局范围</button>
+    </div>`;
+  mountIcons(body);
+  renderNchDigestGrid();
+}
+
+async function nchDigestGlobalSave() {
+  if (!nchProvEditor) return;
   const provinces = {};
   for (const [c] of NCH_DIGEST_CARRIERS) {
-    const codes = [...(nchDigestState.carriers[c] || new Set())];
+    const codes = [...(nchProvEditor.carriers[c] || new Set())];
     if (codes.length) provinces[c] = codes;
   }
-  const r = await api.notifyDigestPrefs(type, enabled, provinces);
+  const r = await api.digestGlobalSave(provinces);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
+  nchGlobalPref = r.data?.provinces ?? null;
+  toast("账号全局播报范围已保存");
+  renderNchDigestGlobal();
+}
+
+async function nchDigestSave(type) {
+  if (!type || !nchProvEditor) return;
+  const enabled = getModal().querySelector("#nchDigestEnabled")?.checked === true;
+  const mode = nchProvEditor.scope;
+  const provinces = {};
+  if (mode === "custom") {
+    for (const [c] of NCH_DIGEST_CARRIERS) {
+      const codes = [...(nchProvEditor.carriers[c] || new Set())];
+      if (codes.length) provinces[c] = codes;
+    }
+  }
+  const r = await api.notifyDigestPrefs(type, enabled, mode, provinces);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   toast("采集播报偏好已保存");
   await renderNchList();

@@ -173,8 +173,14 @@ export const api = {
   async notifyChannelPrefs(channelType, kinds) {
     return this.request("/api/me/notify-channels/prefs", { method: "POST", body: { channel_type: channelType, kinds } });
   },
-  async notifyDigestPrefs(channelType, enabled, provinces) {
-    return this.request("/api/me/notify-channels/digest-prefs", { method: "POST", body: { channel_type: channelType, enabled, provinces } });
+  async notifyDigestPrefs(channelType, enabled, mode, provinces) {
+    return this.request("/api/me/notify-channels/digest-prefs", { method: "POST", body: { channel_type: channelType, enabled, mode, provinces } });
+  },
+  async digestGlobal() {
+    return this.request("/api/me/digest-prefs");
+  },
+  async digestGlobalSave(provinces) {
+    return this.request("/api/me/digest-prefs", { method: "PUT", body: { provinces } });
   },
   async notifyChannelDelete(channelType) {
     return this.request("/api/me/notify-channels/delete", { method: "POST", body: { channel_type: channelType } });

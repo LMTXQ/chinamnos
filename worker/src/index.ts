@@ -18,7 +18,7 @@ import { handleResetPassword } from './auth/reset-password';
 import { handleLogout } from './auth/logout';
 import { handleMe } from './auth/me';
 import { handleNickname } from './auth/nickname';
-import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete, handleNotifyChannelDigestPrefs } from './auth/notify-channels';
+import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete, handleNotifyChannelDigestPrefs, handleDigestGlobalGet, handleDigestGlobalSet } from './auth/notify-channels';
 import { handleDigestSubscribers } from './notify/digest-pull';
 import { handleSetProfile, handlePublicProfile, handleAvatar, handleSetMyAvatar } from './auth/profile';
 import { handleSetAvatar } from './admin/users';
@@ -174,7 +174,11 @@ export default {
       } else if (p === '/api/me/notify-channels/delete' && m === 'POST') {
         resp = await handleNotifyChannelDelete(request, env); // 解绑
       } else if (p === '/api/me/notify-channels/digest-prefs' && m === 'POST') {
-        resp = await handleNotifyChannelDigestPrefs(request, env); // 渠道级采集播报订阅（开关+省份）
+        resp = await handleNotifyChannelDigestPrefs(request, env); // 渠道级采集播报订阅（开关+模式+省份）
+      } else if (p === '/api/me/digest-prefs' && m === 'GET') {
+        resp = await handleDigestGlobalGet(request, env); // 账号全局播报范围
+      } else if (p === '/api/me/digest-prefs' && m === 'PUT') {
+        resp = await handleDigestGlobalSet(request, env); // 保存账号全局播报范围
       } else if (p === '/api/internal/digest-subscribers' && m === 'GET') {
         resp = await handleDigestSubscribers(request, env); // 青龙拉订户名单（密钥鉴权）
       } else if (p === '/api/me/change-email/request' && m === 'POST') {

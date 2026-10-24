@@ -37,9 +37,9 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
   ).bind(g.viewer.id, Date.now()).run();
 
   const rows = await env.DB.prepare(
-    `SELECT id, channel_type, target_hint, status, collect_report, kinds_json, provinces_json, created_at
+    `SELECT id, channel_type, target_hint, status, collect_report, kinds_json, provinces_json, digest_mode, created_at
      FROM user_notify_channels WHERE user_id = ?1 ORDER BY created_at DESC`,
-  ).bind(g.viewer.id).all<{ id: string; channel_type: string; target_hint: string; status: string; collect_report: number; kinds_json: string | null; provinces_json: string | null; created_at: number }>();
+  ).bind(g.viewer.id).all<{ id: string; channel_type: string; target_hint: string; status: string; collect_report: number; kinds_json: string | null; provinces_json: string | null; digest_mode: string; created_at: number }>();
   const items = (rows.results || []).map((r) => {
     let kinds: string[] | null = null;
     if (r.kinds_json) {
@@ -49,7 +49,7 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
     if (r.provinces_json) {
       try { provinces = JSON.parse(r.provinces_json) as unknown; } catch { provinces = []; }
     }
-    return { id: r.id, channel_type: r.channel_type, target_hint: r.target_hint, status: r.status, collect_report: r.collect_report === 1, provinces, created_at: r.created_at, kinds };
+    return { id: r.id, channel_type: r.channel_type, target_hint: r.target_hint, status: r.status, collect_report: r.collect_report === 1, digest_mode: r.digest_mode === 'custom' ? 'custom' : 'follow', provinces, created_at: r.created_at, kinds };
   });
   return ok({ items });
 }
@@ -107,9 +107,10 @@ function normalizeProvincesPref(raw: unknown): string | null {
   return null;
 }
 
-// POST /api/me/notify-channels/digest-prefs  body: { channel_type, enabled, provinces }
-//   渠道级采集播报订阅（方案批次二）：enabled → collect_report（0037 预留列）；
-//   provinces → provinces_json（旧格式平铺数组 = 全运营商；新格式按运营商分组对象）。
+// POST /api/me/notify-channels/digest-prefs  body: { channel_type, enabled, mode, provinces? }
+//   渠道级采集播报订阅（方案批次二，批次四追加全局/独立模式）：
+//   enabled → collect_report；mode 'follow' 跟随账号全局（provinces_json 忽略）
+//   | 'custom' 独立配置（provinces → provinces_json，旧平铺数组=全运营商/新对象=按运营商分组）。
 export async function handleNotifyChannelDigestPrefs(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
@@ -119,18 +120,53 @@ export async function handleNotifyChannelDigestPrefs(request: Request, env: Env)
   const type = typeof body.channel_type === 'string' ? body.channel_type : '';
   if (!type || !getChannel(type)) return fail(ERR.VALIDATION_ERROR, '该渠道类型暂不支持', 400, { field: 'channel_type' });
   const enabled = body.enabled === true;
-  const provincesJson = body.provinces == null ? null : normalizeProvincesPref(body.provinces);
-  if (body.provinces != null && provincesJson === null) {
-    return fail(ERR.VALIDATION_ERROR, 'provinces 格式无效（需为省份代码数组或按运营商分组对象）', 400, { field: 'provinces' });
+  const mode = body.mode === 'follow' ? 'follow' : 'custom';
+  let provincesJson: string | null = null;
+  if (mode === 'custom') {
+    provincesJson = body.provinces == null ? null : normalizeProvincesPref(body.provinces);
+    if (body.provinces != null && provincesJson === null) {
+      return fail(ERR.VALIDATION_ERROR, 'provinces 格式无效（需为省份代码数组或按运营商分组对象）', 400, { field: 'provinces' });
+    }
   }
 
   // 仅限有效绑定（active）；未绑定/待验证 → 404
   const r = await env.DB.prepare(
-    `UPDATE user_notify_channels SET collect_report = ?1, provinces_json = ?2
-     WHERE user_id = ?3 AND channel_type = ?4 AND status = 'active'`,
-  ).bind(enabled ? 1 : 0, provincesJson, g.viewer.id, type).run();
+    `UPDATE user_notify_channels SET collect_report = ?1, digest_mode = ?2, provinces_json = ?3
+     WHERE user_id = ?4 AND channel_type = ?5 AND status = 'active'`,
+  ).bind(enabled ? 1 : 0, mode, mode === 'custom' ? provincesJson : null, g.viewer.id, type).run();
   if (!r.meta.changes) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定', 404, { field: 'channel_type' });
-  return ok({ channel_type: type, enabled, provinces: provincesJson === null ? [] : JSON.parse(provincesJson) });
+  return ok({ channel_type: type, enabled, mode, provinces: mode === 'custom' && provincesJson ? JSON.parse(provincesJson) : [] });
+}
+
+// GET /api/me/digest-prefs —— 账号全局播报范围（0041；null = 未设置 = 全收）
+export async function handleDigestGlobalGet(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+  const row = await env.DB.prepare(
+    'SELECT pref_json FROM user_digest_prefs WHERE user_id = ?1',
+  ).bind(g.viewer.id).first<{ pref_json: string | null }>();
+  let provinces: unknown = null;
+  if (row?.pref_json) {
+    try { provinces = JSON.parse(row.pref_json) as unknown; } catch { provinces = null; }
+  }
+  return ok({ provinces });
+}
+
+// PUT /api/me/digest-prefs  body: { provinces } —— 保存账号全局播报范围（upsert）
+export async function handleDigestGlobalSet(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+  let body: Record<string, unknown> = {};
+  try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
+  const prefJson = body.provinces == null ? null : normalizeProvincesPref(body.provinces);
+  if (body.provinces != null && prefJson === null) {
+    return fail(ERR.VALIDATION_ERROR, 'provinces 格式无效（需为省份代码数组或按运营商分组对象）', 400, { field: 'provinces' });
+  }
+  await env.DB.prepare(
+    `INSERT INTO user_digest_prefs (user_id, pref_json, updated_at) VALUES (?1, ?2, ?3)
+     ON CONFLICT(user_id) DO UPDATE SET pref_json = excluded.pref_json, updated_at = excluded.updated_at`,
+  ).bind(g.viewer.id, prefJson, Date.now()).run();
+  return ok({ provinces: prefJson === null ? null : JSON.parse(prefJson) });
 }
 
 // POST /api/me/notify-channels  body: { channel_type, cred }
