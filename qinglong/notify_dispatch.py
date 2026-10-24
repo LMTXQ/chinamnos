@@ -311,8 +311,11 @@ def dispatch_row(row, processed):
 #    "round":  {carrier: {省代码: {"name": 省名, "added": n, "changed": n, "removed": n}}},
 #    "today": {同结构，当日累计}}
 # 订户结构（Worker /api/internal/digest-subscribers 返回）：
-#   {"uid", "channel_type", "cred", "provinces": [省代码...], "email_target?": 仅 email 行}
-# provinces 空数组 = 不限省份全收（与站长配置语义一致）。
+#   {"uid", "channel_type", "cred", "provinces": ..., "email_target?": 仅 email 行}
+# provinces 偏好（批次四升级为按运营商分组）：
+#   - null / [] / {}         → 未设置偏好 = 全收（全部运营商全部省份）
+#   - ["hun","gd"]           → 旧格式：全运营商同一份省份清单
+#   - {"cmcc":["hun"], ...}  → 新格式：按运营商分组；缺失的运营商键 = 不收该运营商
 
 
 def fetch_digest_subscribers():
@@ -348,13 +351,24 @@ def fetch_digest_subscribers():
     return None
 
 
-def _pick_provinces(carrier_counts, provinces):
-    """按订户省份代码从某运营商的计数中抽取 → {省名: 计数}（空名单 = 不限全收）。"""
-    if not provinces:
+def _prov_set_for(pref, carrier):
+    """订户省份偏好 → 指定运营商的省代码集合。None = 不限（全收该运营商）。"""
+    if pref is None or pref == [] or pref == {}:
+        return None
+    if isinstance(pref, dict):
+        return set(pref.get(carrier) or [])
+    if isinstance(pref, list):
+        return set(pref)
+    return None
+
+
+def _pick_provinces(carrier_counts, prov_set):
+    """按省代码集合从某运营商的计数中抽取 → {省名: 计数}（prov_set None = 不限全收）。"""
+    if prov_set is None:
         return {p.get("name") or code: p for code, p in carrier_counts.items()}
     out = {}
     for code, p in carrier_counts.items():
-        if code in provinces:
+        if code in prov_set:
             out[p.get("name") or code] = p
     return out
 
@@ -367,8 +381,8 @@ def _tot(prov_map):
 
 
 def build_digest_message(sub, digest):
-    """按订户省份从货单抽取并组装消息；与本订户无关（本轮+今日均无变化）返回 None。"""
-    provinces = sub.get("provinces") or []
+    """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化）返回 None。"""
+    pref = sub.get("provinces")
     round_part = digest.get("round") if isinstance(digest.get("round"), dict) else {}
     today_part = digest.get("today") if isinstance(digest.get("today"), dict) else {}
     round_at = int(digest.get("round_at") or 0)
@@ -377,7 +391,7 @@ def build_digest_message(sub, digest):
     body = []
     has_round = False
     for key in ("cmcc", "cucc", "ctcc", "cbn"):
-        picks = _pick_provinces(round_part.get(key) or {}, provinces)
+        picks = _pick_provinces(round_part.get(key) or {}, _prov_set_for(pref, key))
         if not picks:
             continue
         has_round = True
@@ -396,14 +410,14 @@ def build_digest_message(sub, digest):
     ta = tc = tr = 0
     tprovs = 0
     for key in ("cmcc", "cucc", "ctcc", "cbn"):
-        picks = _pick_provinces(today_part.get(key) or {}, provinces)
+        picks = _pick_provinces(today_part.get(key) or {}, _prov_set_for(pref, key))
         a, c, r = _tot(picks)
         ta += a
         tc += c
         tr += r
         tprovs += len(picks)
     if not has_round and tprovs == 0:
-        return None  # 该订户关注的省份本轮与今日均无变化 → 不发
+        return None  # 该订户关注的范围本轮与今日均无变化 → 不发
 
     lines = ["══ 本轮 ══"]
     lines.extend(body if has_round else ["  （你关注的省份本轮无变化）"])

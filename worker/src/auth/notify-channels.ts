@@ -45,12 +45,9 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
     if (r.kinds_json) {
       try { kinds = JSON.parse(r.kinds_json) as string[]; } catch { kinds = null; }
     }
-    let provinces: string[] = [];
+    let provinces: unknown = [];
     if (r.provinces_json) {
-      try {
-        const p = JSON.parse(r.provinces_json) as unknown;
-        if (Array.isArray(p)) provinces = p.filter((x): x is string => typeof x === 'string');
-      } catch { provinces = []; }
+      try { provinces = JSON.parse(r.provinces_json) as unknown; } catch { provinces = []; }
     }
     return { id: r.id, channel_type: r.channel_type, target_hint: r.target_hint, status: r.status, collect_report: r.collect_report === 1, provinces, created_at: r.created_at, kinds };
   });
@@ -80,10 +77,39 @@ export async function handleNotifyChannelPrefs(request: Request, env: Env): Prom
   return ok({ channel_type: type, kinds });
 }
 
+/* 采集播报省份偏好归一化：入库 JSON 字符串（非法返回 null → 由调用方 400）。
+   两种格式（批次四升级：按运营商分组）：
+   - 旧格式 Array<string>：平铺省份代码 = 全运营商同一份；空数组 → null（不限全收）
+   - 新格式 Record<carrier, string[]>：按运营商分组；无勾选的运营商键被剔除 = 不收该运营商；
+     全空 → '{}'（分发自按"缺失键 = 不收"处理，等效不推送）。
+   省份代码权威来源在采集端 PROVINCES 表，此处不做白名单——未知代码在分发 join 时自然失效。 */
+function normalizeProvincesPref(raw: unknown): string | null {
+  const normCodes = (arr: unknown[]): string[] =>
+    [...new Set(
+      arr.filter((x): x is string => typeof x === 'string')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    )].slice(0, 34);
+  if (Array.isArray(raw)) {
+    const codes = normCodes(raw);
+    return codes.length ? JSON.stringify(codes) : null;
+  }
+  if (typeof raw === 'object' && raw !== null) {
+    const out: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      const key = k.trim().toLowerCase();
+      if (!key || !Array.isArray(v)) continue;
+      const codes = normCodes(v);
+      if (codes.length) out[key] = codes;
+    }
+    return JSON.stringify(out);
+  }
+  return null;
+}
+
 // POST /api/me/notify-channels/digest-prefs  body: { channel_type, enabled, provinces }
 //   渠道级采集播报订阅（方案批次二）：enabled → collect_report（0037 预留列）；
-//   provinces → provinces_json（省份代码数组，空 = 不限省份全收，与站长配置语义一致）。
-//   省份代码权威来源在采集端 PROVINCES 表，此处不做白名单——未知代码在分发 join 时自然失效。
+//   provinces → provinces_json（旧格式平铺数组 = 全运营商；新格式按运营商分组对象）。
 export async function handleNotifyChannelDigestPrefs(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
@@ -93,24 +119,18 @@ export async function handleNotifyChannelDigestPrefs(request: Request, env: Env)
   const type = typeof body.channel_type === 'string' ? body.channel_type : '';
   if (!type || !getChannel(type)) return fail(ERR.VALIDATION_ERROR, '该渠道类型暂不支持', 400, { field: 'channel_type' });
   const enabled = body.enabled === true;
-  let provinces: string[] = [];
-  if (body.provinces != null) {
-    if (!Array.isArray(body.provinces)) return fail(ERR.VALIDATION_ERROR, 'provinces 必须为数组', 400, { field: 'provinces' });
-    provinces = [...new Set(
-      (body.provinces as unknown[])
-        .filter((x): x is string => typeof x === 'string')
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean),
-    )].slice(0, 34);
+  const provincesJson = body.provinces == null ? null : normalizeProvincesPref(body.provinces);
+  if (body.provinces != null && provincesJson === null) {
+    return fail(ERR.VALIDATION_ERROR, 'provinces 格式无效（需为省份代码数组或按运营商分组对象）', 400, { field: 'provinces' });
   }
 
   // 仅限有效绑定（active）；未绑定/待验证 → 404
   const r = await env.DB.prepare(
     `UPDATE user_notify_channels SET collect_report = ?1, provinces_json = ?2
      WHERE user_id = ?3 AND channel_type = ?4 AND status = 'active'`,
-  ).bind(enabled ? 1 : 0, provinces.length ? JSON.stringify(provinces) : null, g.viewer.id, type).run();
+  ).bind(enabled ? 1 : 0, provincesJson, g.viewer.id, type).run();
   if (!r.meta.changes) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定', 404, { field: 'channel_type' });
-  return ok({ channel_type: type, enabled, provinces });
+  return ok({ channel_type: type, enabled, provinces: provincesJson === null ? [] : JSON.parse(provincesJson) });
 }
 
 // POST /api/me/notify-channels  body: { channel_type, cred }

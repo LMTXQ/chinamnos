@@ -832,9 +832,19 @@ function onModalClick(e) {
     return;
   }
   if (act === "nchDigest") { renderNchDigest(el.dataset.ctype || ""); return; }
+  if (act === "nchDigestTab") {
+    if (nchDigestState) nchDigestState.active = el.dataset.carrier || "cmcc";
+    getModal().querySelectorAll('#nchDigestCarriers .seg-btn').forEach((b) => {
+      b.classList.toggle("active", b.dataset.carrier === nchDigestState?.active);
+    });
+    renderNchDigestGrid();
+    return;
+  }
   if (act === "nchDigestAll" || act === "nchDigestNone") {
-    const on = act === "nchDigestAll";
-    getModal().querySelectorAll('#nchDigestGrid input[type="checkbox"]').forEach((x) => { x.checked = on; });
+    if (!nchDigestState) return;
+    const codes = PROVINCES.map((p) => p.code);
+    nchDigestState.carriers[nchDigestState.active] = new Set(act === "nchDigestAll" ? codes : []);
+    renderNchDigestGrid();
     return;
   }
   if (act === "nchDigestSave") {
@@ -1067,9 +1077,9 @@ function nchCard(it) {
   const kindSummary = it.status === "active"
     ? `<div class="h">接收：${Array.isArray(it.kinds) ? `${it.kinds.length} / ${NOTIFY_KINDS.length} 类事件` : "全部类型"}</div>`
     : "";
-  // 采集播报摘要：collect_report 布尔 + provinces 数组（空 = 全部省份）
+  // 采集播报摘要：collect_report 布尔 + provinces（旧数组=全运营商 / 新对象=按运营商）
   const digestSummary = it.status === "active"
-    ? `<div class="h">采集播报：${it.collect_report ? (Array.isArray(it.provinces) && it.provinces.length ? `${it.provinces.length} 省` : "全部省份") : "未开启"}</div>`
+    ? `<div class="h">采集播报：${it.collect_report ? nchDigestSummaryText(it.provinces) : "未开启"}</div>`
     : "";
   const prefsBtn = it.status === "active"
     ? '<button class="nch-del" data-act="nchPrefs" data-ctype="' + esc(it.channel_type) + '">接收类型</button>'
@@ -1116,41 +1126,98 @@ async function nchPrefsSave(type) {
   await renderNchList();
 }
 
-/* ── 采集播报订阅（方案批次四）：渠道级开关 + 关注省份网格（不选 = 全部省份）── */
+/* ── 采集播报订阅（方案批次四）：渠道级开关 + 按运营商分组的省份选择 ── */
+const NCH_DIGEST_CARRIER_LABELS = { cmcc: "移动", cucc: "联通", ctcc: "电信", cbn: "广电" };
+
+function nchDigestSummaryText(p) {
+  if (p == null) return "全部省份";
+  if (Array.isArray(p)) return p.length ? `${p.length} 省（全运营商）` : "全部省份";
+  if (typeof p === "object") {
+    const parts = Object.entries(p).map(([c, arr]) =>
+      `${NCH_DIGEST_CARRIER_LABELS[c] || c}${Array.isArray(arr) ? arr.length : 0}省`);
+    return parts.length ? parts.join(" · ") : "暂停";
+  }
+  return "全部省份";
+}
+
+   数据格式（批次四升级）：provinces = {cmcc:[...], cucc:[...], ...}；
+   旧格式平铺数组（全运营商同一份）载入时展开到各运营商；
+   某运营商未勾选任何省 = 不收该运营商；四家均未勾选 = 本渠道不推送（相当于暂停）。 */
+const NCH_DIGEST_CARRIERS = [["cmcc", "移动"], ["cucc", "联通"], ["ctcc", "电信"], ["cbn", "广电"]];
+let nchDigestState = null; // { type, carriers: {cmcc:Set,...}, active: "cmcc" }
+
+function nchDigestLoadPref(it) {
+  const allCodes = PROVINCES.map((p) => p.code);
+  const carriers = {};
+  for (const [c] of NCH_DIGEST_CARRIERS) carriers[c] = new Set(allCodes); // 默认全收
+  const raw = it.provinces;
+  if (Array.isArray(raw) && raw.length) {
+    // 旧格式：全运营商同一份省份清单
+    for (const [c] of NCH_DIGEST_CARRIERS) carriers[c] = new Set(raw);
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [c] of NCH_DIGEST_CARRIERS) carriers[c] = new Set(Array.isArray(raw[c]) ? raw[c] : []);
+  }
+  return carriers;
+}
+
+function renderNchDigestGrid() {
+  const body = getModal();
+  const grid = body.querySelector("#nchDigestGrid");
+  if (!grid || !nchDigestState) return;
+  const cur = nchDigestState.carriers[nchDigestState.active] || new Set();
+  grid.innerHTML = PROVINCES.map((p) => `
+    <label class="nch-prov${cur.has(p.code) ? " on" : ""}">
+      <input type="checkbox" data-prov="${esc(p.code)}" ${cur.has(p.code) ? "checked" : ""}>${esc(p.name)}
+    </label>`).join("");
+}
+
 function renderNchDigest(type) {
   const it = nchItems.find((x) => x.channel_type === type && x.status === "active");
   const body = getModal().querySelector("#nchBody");
   if (!body || !it) return;
   const enabled = it.collect_report === true;
-  const cur = new Set(Array.isArray(it.provinces) ? it.provinces : []);
+  nchDigestState = { type, carriers: nchDigestLoadPref(it), active: "cmcc" };
+  const nchProvStyle = `
+    <style>
+      #nchDigestGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)}
+      .nch-prov{display:flex;align-items:center;justify-content:center;gap:5px;padding:7px 4px;border:1px solid var(--line);border-radius:8px;cursor:pointer;user-select:none;font-size:12.5px;color:var(--txt);transition:border-color .15s,color .15s,background .15s}
+      .nch-prov:hover{border-color:var(--acc)}
+      .nch-prov.on{border-color:var(--acc);color:var(--acc);background:color-mix(in oklab,var(--acc) 8%,transparent)}
+      .nch-prov input{accent-color:var(--acc);margin:0}
+    </style>`;
   body.innerHTML = `
-    <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后推送你关注省份的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注省份有变化时才会推送。保存即时生效。</p>
+    ${nchProvStyle}
+    <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后按运营商推送你关注省份的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注范围内有变化时才会推送。保存即时生效。</p>
     <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;cursor:pointer">
       <input type="checkbox" id="nchDigestEnabled" ${enabled ? "checked" : ""}>
       <span>采集完成后推送播报</span>
     </label>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-      <button class="btn ghost sm" type="button" data-act="nchDigestAll">全选</button>
-      <button class="btn ghost sm" type="button" data-act="nchDigestNone">清空</button>
-      <span class="hint">不勾选任何省份 = 接收全部省份</span>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <div class="seg" id="nchDigestCarriers" style="flex:none">
+        ${NCH_DIGEST_CARRIERS.map(([c, l]) => `
+        <button type="button" class="seg-btn${c === nchDigestState.active ? " active" : ""}" data-act="nchDigestTab" data-carrier="${c}">${esc(l)}</button>`).join("")}
+      </div>
+      <button class="btn ghost sm" type="button" data-act="nchDigestAll">全选本运营商</button>
+      <button class="btn ghost sm" type="button" data-act="nchDigestNone">清空本运营商</button>
     </div>
-    <div id="nchDigestGrid" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
-      ${PROVINCES.map((p) => `
-      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
-        <input type="checkbox" data-prov="${esc(p.code)}" ${cur.has(p.code) ? "checked" : ""}>${esc(p.name)}
-      </label>`).join("")}
-    </div>
+    <div id="nchDigestGrid"></div>
+    <p class="hint" style="margin:8px 2px 0">某运营商内不勾选任何省份 = 不接收该运营商的播报；四家全部清空 = 本渠道暂停接收（开关仍开启）。</p>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
       <button class="btn primary" data-act="nchDigestSave" data-ctype="${esc(type)}">保存</button>
     </div>`;
   mountIcons(body);
+  renderNchDigestGrid();
 }
 
 async function nchDigestSave(type) {
-  if (!type) return;
+  if (!type || !nchDigestState) return;
   const enabled = getModal().querySelector("#nchDigestEnabled")?.checked === true;
-  const provinces = [...getModal().querySelectorAll('#nchDigestGrid input[type="checkbox"]:checked')].map((x) => x.dataset.prov);
+  const provinces = {};
+  for (const [c] of NCH_DIGEST_CARRIERS) {
+    const codes = [...(nchDigestState.carriers[c] || new Set())];
+    if (codes.length) provinces[c] = codes;
+  }
   const r = await api.notifyDigestPrefs(type, enabled, provinces);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   toast("采集播报偏好已保存");

@@ -24,11 +24,13 @@ function tokenMatches(expected: string | undefined, got: string | null): boolean
   return diff === 0;
 }
 
-function parseProvinces(raw: string | null): string[] {
+/* provinces 偏好解析：旧格式 Array<string>（全运营商同一份）或新格式 Record<carrier, string[]>
+   （按运营商分组，缺失键 = 不收该运营商）。损坏按 [] 处理（[] 在分发端 = 未设置偏好 = 全收）。 */
+function parseProvincesPref(raw: string | null): unknown {
   if (!raw) return [];
   try {
     const p = JSON.parse(raw) as unknown;
-    if (Array.isArray(p)) return p.filter((x): x is string => typeof x === 'string');
+    if (Array.isArray(p) || (typeof p === 'object' && p !== null)) return p;
   } catch { /* 损坏按空处理 */ }
   return [];
 }
@@ -54,7 +56,7 @@ export async function handleDigestSubscribers(request: Request, env: Env): Promi
         uid: r.user_id,
         channel_type: r.channel_type,
         cred,
-        provinces: parseProvinces(r.provinces_json),
+        provinces: parseProvincesPref(r.provinces_json),
       };
       if (r.channel_type === 'email' && typeof cred.email === 'string') {
         sub.email_target = cred.email;
