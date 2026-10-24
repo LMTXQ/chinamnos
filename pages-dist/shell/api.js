@@ -179,8 +179,8 @@ export const api = {
   async digestGlobal() {
     return this.request("/api/me/digest-prefs");
   },
-  async digestGlobalSave(provinces, kinds) {
-    return this.request("/api/me/digest-prefs", { method: "PUT", body: { provinces, kinds } });
+  async digestGlobalSave(provinces, kinds, announcePush) {
+    return this.request("/api/me/digest-prefs", { method: "PUT", body: { provinces, kinds, announce_push: announcePush } });
   },
   async notifyChannelDelete(channelType) {
     return this.request("/api/me/notify-channels/delete", { method: "POST", body: { channel_type: channelType } });
