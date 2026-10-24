@@ -2214,19 +2214,22 @@ class CuccApi(_BaseCarrierApi):
         if not cucc_prov:
             return {'data': {'beans': []}}
 
-        # 业务码非 '0000' → 自身重试3次，仍败抛异常 → 通用循环分类级重试接管（原：静默返回空，产生假下架）
-        three_result = self._call_with_business_retry(
-            lambda: self._post('/queryTariffNew/threeLevelName', {
+        # 注意：非 '0000'（0001）是上游"该组合无数据"的正常语义（实测 44 组合中 14 个常态返回 0001），
+        # 不能按异常重试；数据组合的瞬时 0001 由省份层"疑似假清空核验"兜底（见 crawl_one_carrier）
+        try:
+            three_result = self._post('/queryTariffNew/threeLevelName', {
                 'provinceId': cucc_prov,
                 'cityId': cucc_city,
                 'tariffAttributes': int(tariff_attr) if str(tariff_attr) in ('1', '2') else 1,
                 'firstLevel': _cucc_first or '1',
                 'secondLevel': _cucc_second or '1001',
-            }),
-            desc=f'联通 threeLevelName(prov={cucc_prov}, first={_cucc_first}, second={_cucc_second})',
-            expect_fn=lambda r: (bool(r and r.get('code') == '0000'), 'code!=0000' if r else '空响应'),
-            retry_base_ms=retry_base_ms, retry_max_ms=retry_max_ms, retry_jitter=retry_jitter,
-        )
+            })
+        except Exception as e:
+            logger.warning(f'  联通 threeLevelName 失败: {e}')
+            return {'data': {'beans': []}}
+
+        if not three_result or three_result.get('code') != '0000':
+            return {'data': {'beans': []}}
 
         items = three_result.get('data', {}).get('dataList', [])
         if not items:
@@ -5455,6 +5458,33 @@ def _write_digest_json(path, obj):
     os.replace(tmp, path)
 
 
+# ════════════════════════════════════════════════════════════
+#  分类级假清空核验状态（旧有新无）：连续 N 轮为空才接受真实清空
+#  背景：联通 threeLevelName 对"无数据"与"瞬时异常"都返回 0001，请求层无法区分，
+#  2026-10-24 江苏"停售套餐/营销活动"组合瞬时 0001 → 379 条被当真实下架发布。
+# ════════════════════════════════════════════════════════════
+SUSPECT_EMPTY_CONFIRM_ROUNDS = 2
+_SUSPECT_EMPTY_LOCK = threading.Lock()
+
+
+def _load_suspect_empty_state(config):
+    try:
+        path = os.path.join(resolve_digest_dir(config), 'coll_suspect_empty.json')
+        with open(path, encoding='utf-8') as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_suspect_empty_state(config, state):
+    try:
+        path = os.path.join(resolve_digest_dir(config), 'coll_suspect_empty.json')
+        _write_digest_json(path, state)
+    except Exception as e:
+        logger.warning(f'[suspect-empty] 状态写盘失败(不影响采集主流程): {e}')
+
+
 def write_collector_digest(config, all_crawl_results, announce_new=None):
     """每轮采集结束后调用：写本轮 digest（含当日累计与公告新增）→ 叫醒分发脚本。
     资费无变更且公告无新增 → 不写文件不叫醒（免打扰，已确认口径）；
@@ -6234,6 +6264,61 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
                     if restored:
                         new_count = len(items)
                         logger.warning(f'  {prov_name}: 失败分类沿用旧条目 {restored} 条（合计 {new_count} 条）')
+
+            # ===== 分类级假清空核验（旧有新无）：联通 2026-10-24 江苏假下架的根因防御 =====
+            # threeLevelName 对"无数据"与"瞬时异常"都返回 0001（实测 44 组合中 14 个常态 0001），
+            # 请求层无法区分——数据组合瞬时 0001 会让该组合条目整体消失并被 diff 判定下架。
+            # 本层在 diff 前按"旧快照有数、本轮为 0"的 (attr,t1,t2) 识别疑似假清空，
+            # 借用上方 partial 沿用机制保留旧条目；连续 SUSPECT_EMPTY_CONFIRM_ROUNDS 轮仍为空才接受真实清空。
+            with _SUSPECT_EMPTY_LOCK:
+                old_key_counts = {}
+                for _oit in old_items:
+                    _ok = (str(_oit.get('tariff_attr', '')), str(_oit.get('type1', '')), str(_oit.get('type2', '')))
+                    old_key_counts[_ok] = old_key_counts.get(_ok, 0) + 1
+                new_key_counts = {}
+                for _nit in items:
+                    _nk = (str(_nit.get('tariff_attr', '')), str(_nit.get('type1', '')), str(_nit.get('type2', '')))
+                    new_key_counts[_nk] = new_key_counts.get(_nk, 0) + 1
+                suspect_keys = [k for k, n in old_key_counts.items() if n > 0 and new_key_counts.get(k, 0) == 0]
+                _prefix = f'{carrier_key}/{prov_short}|'
+                suspect_state = _load_suspect_empty_state(config)
+                _prov_state = {sk: suspect_state[sk] for sk in suspect_state if sk.startswith(_prefix)}
+                for sk in list(_prov_state):   # 已恢复（本轮有数据）的键清除计数
+                    if tuple(sk.split('|', 1)[1].split('|')) in new_key_counts:
+                        _prov_state.pop(sk, None)
+                if suspect_keys:
+                    pin_keys = set()
+                    for k in suspect_keys:
+                        sk = _prefix + '|'.join(k)
+                        cnt = _prov_state.get(sk, 0) + 1
+                        if cnt <= SUSPECT_EMPTY_CONFIRM_ROUNDS:
+                            _prov_state[sk] = cnt
+                            pin_keys.add(k)
+                        else:
+                            _prov_state.pop(sk, None)
+                            logger.warning(f'  {prov_name}: 分类 {"/".join(k)} 连续{cnt}轮为空, 接受真实清空')
+                    if pin_keys:
+                        fresh_ids = {it['id'] for it in items}
+                        restored = 0
+                        for old_it in old_items:
+                            _ok = (str(old_it.get('tariff_attr', '')), str(old_it.get('type1', '')), str(old_it.get('type2', '')))
+                            if _ok in pin_keys and old_it.get('id') not in fresh_ids:
+                                items.append(old_it)
+                                fresh_ids.add(old_it['id'])
+                                restored += 1
+                        if restored:
+                            new_count = len(items)
+                            _labels = [f'{"-".join(k)}(疑似假清空)' for k in sorted(pin_keys)]
+                            if result.get('partial_warning'):
+                                result['partial_warning']['failed_categories'] = list(
+                                    result['partial_warning'].get('failed_categories') or []) + _labels
+                            else:
+                                result['partial_warning'] = {'province': prov_name, 'failed_categories': _labels}
+                            logger.warning(f'  {prov_name}: {len(pin_keys)} 个分类疑似假清空(旧有新无), 沿用旧条目 {restored} 条')
+                for sk in [s for s in suspect_state if s.startswith(_prefix)]:
+                    suspect_state.pop(sk, None)
+                suspect_state.update(_prov_state)
+                _save_suspect_empty_state(config, suspect_state)
 
             vol = check_volatility(old_count, new_count, carrier_cfg)
             if vol['level'] != 'normal':
