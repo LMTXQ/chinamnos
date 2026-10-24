@@ -1916,6 +1916,36 @@ class _BaseCarrierApi:
         self._last_retry_count = rt - 1
         raise last_error
 
+    # ===== 业务码级重试（第2层）：修复联通江苏 2026-10-24 假下架事故 =====
+    # 事故：cucc 江苏 operateData 批次返回非 '0000' 被静默 continue，379 条被当真实下架发布。
+    # 分层设计：HTTP 层(_call_with_retry) → 业务码层(本方法，自身重试3次) → 分类级重试(通用循环)
+    #   → partial 沿用旧快照。业务码异常在此自愈，自愈不了抛异常升级，永不静默丢弃。
+    def _call_with_business_retry(self, request_fn, *, desc, expect_fn,
+                                  retry_times=3, retry_base_ms=None,
+                                  retry_max_ms=None, retry_jitter=None):
+        """业务码校验重试：request_fn 返回后用 expect_fn 校验，不过则退避重试 retry_times 次；
+        仍不过 → 抛 RuntimeError 交由上层分类级重试接管。
+        request_fn 抛出的 HTTP 层异常直接传播（_post 内已做请求级重试，此处不重复兜底）。
+        expect_fn(result) -> (bool, 失败原因描述)"""
+        crawl = self.config.get('crawl', {})
+        rb = retry_base_ms if retry_base_ms is not None else crawl.get('retry_base_ms', 1000)
+        rm = retry_max_ms if retry_max_ms is not None else crawl.get('retry_max_ms', 30000)
+        rj = retry_jitter if retry_jitter is not None else crawl.get('retry_jitter', 0.3)
+        last_reason = None
+        for i in range(retry_times):
+            result = request_fn()
+            ok, reason = expect_fn(result)
+            if ok:
+                return result
+            last_reason = reason
+            if i < retry_times - 1:
+                base_wait = rb / 1000 * (2 ** i)
+                jitter_offset = base_wait * rj * (2 * random.random() - 1)
+                wait = min(max(0.1, base_wait + jitter_offset), rm / 1000)
+                logger.warning(f'  {desc} 业务返回异常({reason}), {wait:.1f}s 后重试({i + 2}/{retry_times})')
+                time.sleep(wait)
+        raise RuntimeError(f'{desc} 业务返回异常, 自身重试{retry_times}次仍失败: {last_reason}')
+
     def resolve_categories(self, prov_code, category_mode, fixed_categories, **kwargs):
         if category_mode == 'fixed':
             return fixed_categories
@@ -2184,20 +2214,19 @@ class CuccApi(_BaseCarrierApi):
         if not cucc_prov:
             return {'data': {'beans': []}}
 
-        try:
-            three_result = self._post('/queryTariffNew/threeLevelName', {
+        # 业务码非 '0000' → 自身重试3次，仍败抛异常 → 通用循环分类级重试接管（原：静默返回空，产生假下架）
+        three_result = self._call_with_business_retry(
+            lambda: self._post('/queryTariffNew/threeLevelName', {
                 'provinceId': cucc_prov,
                 'cityId': cucc_city,
                 'tariffAttributes': int(tariff_attr) if str(tariff_attr) in ('1', '2') else 1,
                 'firstLevel': _cucc_first or '1',
                 'secondLevel': _cucc_second or '1001',
-            })
-        except Exception as e:
-            logger.warning(f'  联通 threeLevelName 失败: {e}')
-            return {'data': {'beans': []}}
-
-        if not three_result or three_result.get('code') != '0000':
-            return {'data': {'beans': []}}
+            }),
+            desc=f'联通 threeLevelName(prov={cucc_prov}, first={_cucc_first}, second={_cucc_second})',
+            expect_fn=lambda r: (bool(r and r.get('code') == '0000'), 'code!=0000' if r else '空响应'),
+            retry_base_ms=retry_base_ms, retry_max_ms=retry_max_ms, retry_jitter=retry_jitter,
+        )
 
         items = three_result.get('data', {}).get('dataList', [])
         if not items:
@@ -2212,19 +2241,18 @@ class CuccApi(_BaseCarrierApi):
         for i in range(0, len(menu_ids), batch_size):
             batch = menu_ids[i:i + batch_size]
             joined_ids = '_'.join(batch)
-            try:
-                detail = self._post(f'/queryTariffNew/operateData/{joined_ids}', {
+            # 业务码非 '0000'/空 → 自身重试3次，仍败抛异常 → 分类级重试整类重跑（原：静默 continue 丢批次，2026-10-24 江苏假下架根因）
+            detail = self._call_with_business_retry(
+                lambda: self._post(f'/queryTariffNew/operateData/{joined_ids}', {
                     'provinceId': cucc_prov,
                     'cityId': cucc_city,
                     'page': page,
                     'size': limit,
-                })
-            except Exception as e:
-                logger.warning(f'  联通 operateData 批量失败 (batch={i//batch_size + 1}): {e}')
-                continue
-
-            if not detail or detail.get('code') != '0000':
-                continue
+                }),
+                desc=f'联通 operateData 批次{i // batch_size + 1}',
+                expect_fn=lambda d: (bool(d and d.get('code') == '0000'), 'code!=0000' if d else '空响应'),
+                retry_base_ms=retry_base_ms, retry_max_ms=retry_max_ms, retry_jitter=retry_jitter,
+            )
 
             data_obj = detail.get('data', {})
             detail_list = []
@@ -2775,20 +2803,19 @@ class CtccApi(_BaseCarrierApi):
             return {'data': {'beans': []}}
 
         self._set_city_code_cookie(prov_code)
-        try:
-            result = self._fetch_with_retry('newTarifZone3Title.do', {
+        # 业务码非 '0'/异常 → 自身重试3次，仍败抛异常 → 分类级重试接管（原：静默返回空）
+        result = self._call_with_business_retry(
+            lambda: self._fetch_with_retry('newTarifZone3Title.do', {
                 'provCode': ctcc_prov,
                 'lable1Id': _ctcc_lable1Id,
                 'page': page,
                 'limit': limit,
             }, retry_times=retry_times, retry_base_ms=retry_base_ms,
-               retry_max_ms=retry_max_ms, retry_jitter=retry_jitter)
-        except Exception as e:
-            logger.warning(f'  电信 newTarifZone3Title 失败: {e}')
-            return {'data': {'beans': []}}
-
-        if not result or str(result.get('code')) != '0':
-            return {'data': {'beans': []}}
+               retry_max_ms=retry_max_ms, retry_jitter=retry_jitter),
+            desc=f'电信 newTarifZone3Title(lable1Id={_ctcc_lable1Id}, page={page})',
+            expect_fn=lambda r: (bool(r and str(r.get('code')) == '0'), 'code!=0' if r else '空响应'),
+            retry_base_ms=retry_base_ms, retry_max_ms=retry_max_ms, retry_jitter=retry_jitter,
+        )
 
         beans = []
         for item in result.get('dataObject', []):
@@ -2920,8 +2947,9 @@ class CbnApi(_BaseCarrierApi):
         if not cbn_prov:
             return {'data': {'beans': []}}
 
-        try:
-            result = self._post('/goods/queryTariffAllByCond', {
+        # 业务码 ok 非 true/异常 → 自身重试3次，仍败抛异常 → 分类级重试接管（原：静默返回空）
+        result = self._call_with_business_retry(
+            lambda: self._post('/goods/queryTariffAllByCond', {
                 'channelId': self.CHANNEL_ID,
                 'type1': _cbn_type1,
                 'type2': _cbn_type2,
@@ -2933,13 +2961,11 @@ class CbnApi(_BaseCarrierApi):
                 'applicableArea': cbn_prov,
                 'pageNum': page,
                 'pageSize': limit,
-            })
-        except Exception as e:
-            logger.warning(f'  广电 queryTariffAllByCond 失败: {e}')
-            return {'data': {'beans': []}}
-
-        if not result or not result.get('ok'):
-            return {'data': {'beans': []}}
+            }),
+            desc=f'广电 queryTariffAllByCond(area={cbn_prov}, page={page})',
+            expect_fn=lambda r: (bool(r and r.get('ok')), 'ok!=true' if r else '空响应'),
+            retry_base_ms=retry_base_ms, retry_max_ms=retry_max_ms, retry_jitter=retry_jitter,
+        )
 
         cbn_type2_map = {'TC': '1', 'JZB': '2', 'YXHD': '3'}
         cbn_type1_map = {'GZ': '1', 'ZQ': '2'}
