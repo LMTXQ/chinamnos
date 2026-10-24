@@ -56,6 +56,7 @@ function renderTurnstile(containerId) {
 /* ─────────────── 样式注入（一次性） ─────────────── */
 /* 变量对齐 shell/theme.css 设计系统：--acc/--acc-deep/--surface/--surface-2/--line/--txt/--sub/--red */
 const AUTH_CSS = `
+#nchBody{max-height:min(72vh,640px);overflow-y:auto}
 .auth-chip{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 5px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);cursor:pointer;transition:border-color .15s,box-shadow .15s;user-select:none}
 .auth-chip:hover{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in oklab,var(--acc) 14%,transparent)}
 .auth-chip svg{width:14px;height:14px;color:var(--sub);flex-shrink:0}
@@ -834,6 +835,14 @@ function onModalClick(e) {
   if (act === "nchDigest") { renderNchDigest(el.dataset.ctype || ""); return; }
   if (act === "nchDigestGlobal") { renderNchDigestGlobal(); return; }
   if (act === "nchDigestGlobalSave") { authGuarded(el, nchDigestGlobalSave); return; }
+  if (act === "nchKindsScope") {
+    if (nchKindsEditor) nchKindsEditor.mode = el.dataset.scope === "custom" ? "custom" : "follow";
+    getModal().querySelectorAll('#nchBody .seg-btn[data-scope]').forEach((b) => {
+      b.classList.toggle("active", b.dataset.scope === nchKindsEditor?.mode);
+    });
+    renderNchKindsScopeBody();
+    return;
+  }
   if (act === "nchDigestScope") {
     if (nchProvEditor) nchProvEditor.mode = el.dataset.scope === "custom" ? "custom" : "follow";
     getModal().querySelectorAll('#nchBody .seg-btn[data-scope]').forEach((b) => {
@@ -1072,12 +1081,12 @@ async function renderNchList() {
   nchItems = items;
   // 账号全局播报范围（拉取失败静默降级：摘要显示"未设置"，不影响渠道操作）
   const gr = await api.digestGlobal();
-  nchGlobalPref = gr.ok ? (gr.data?.provinces ?? null) : null;
+  nchGlobalPref = gr.ok ? (gr.data ?? null) : null; // { provinces, kinds }
   body.innerHTML = `
     <p class="hint" style="margin-top:0">绑定后，站内通知会同步推送到你的渠道；每个渠道还可订阅「采集播报」（关注范围的资费变更摘要），范围可选跟随账号全局或独立配置。</p>
     <div class="nch-list">
       <div class="nch-card pick" data-act="nchDigestGlobal">
-        <div class="nch-meta"><div class="t">账号全局播报范围</div><div class="h">一次配置，跟随它的渠道自动生效 · 当前：${esc(nchDigestSummaryText(nchGlobalPref))}</div></div>
+        <div class="nch-meta"><div class="t">账号全局播报偏好</div><div class="h">一次配置，跟随它的渠道自动生效 · 范围：${esc(nchDigestSummaryText(nchGlobalPref?.provinces))} · 类型：${esc(nchGlobalPref?.kinds == null ? "全部" : `${nchGlobalPref.kinds.length} 类`)}</div></div>
         <span class="nch-tag ok">配置</span>
       </div>
       ${items.length ? items.map(nchCard).join("") : '<div class="nch-empty">还没有绑定任何通知渠道</div>'}
@@ -1101,6 +1110,10 @@ function nchCard(it) {
   const digestSummary = it.status === "active"
     ? `<div class="h">采集播报：${it.collect_report ? (it.digest_mode === "custom" ? `独立 · ${nchDigestSummaryText(it.provinces)}` : "跟随账号全局") : "未开启"}</div>`
     : "";
+  // 接收类型摘要：kinds_mode（跟随全局 / 独立配置）
+  const kindsSummary = it.status === "active"
+    ? `<div class="h">接收类型：${it.kinds_mode === "custom" ? `独立 · ${it.kinds ? `${it.kinds.length} 类` : "全部"}` : "跟随账号全局"}</div>`
+    : "";
   const prefsBtn = it.status === "active"
     ? '<button class="nch-del" data-act="nchPrefs" data-ctype="' + esc(it.channel_type) + '">接收类型</button>'
     : "";
@@ -1109,38 +1122,69 @@ function nchCard(it) {
     : "";
   return `
     <div class="nch-card">
-      <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}${digestSummary}</div>
+      <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}${kindsSummary}${digestSummary}</div>
       ${tag}
       <div style="display:flex;flex-direction:column;gap:6px;flex:none">${prefsBtn}${digestBtn}
       <button class="nch-del" data-act="nchDelete" data-ctype="${esc(it.channel_type)}">解绑</button></div>
     </div>`;
 }
 
+/* ── 接收类型（15 类事件偏好，方案追加）：跟随账号全局 / 独立配置 ── */
+let nchKindsEditor = null; // { type, mode }
+
 function renderNchPrefs(type) {
   const it = nchItems.find((x) => x.channel_type === type && x.status === "active");
   const body = getModal().querySelector("#nchBody");
   if (!body || !it) return;
-  // null = 未配置，展示为全选（即"跟随站点白名单默认全收"）
-  const cur = Array.isArray(it.kinds) ? it.kinds : NOTIFY_KINDS;
+  const mode = it.kinds_mode === "custom" ? "custom" : "follow";
+  nchKindsEditor = { type, mode };
   body.innerHTML = `
     <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 勾选该渠道要接收的事件类型。仅在站长放开对应消息类型时生效；全部取消勾选 = 该渠道静音（不解绑）。保存即时生效。</p>
-    <div id="nchKindsBox" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
-      ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
-      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
-        <input type="checkbox" data-kind="${esc(k)}" ${cur.includes(k) ? "checked" : ""}>${esc(label)}
-      </label>`).join("")}
+    <p class="hint" style="margin:0 0 6px">事件偏好来源：</p>
+    <div class="seg" style="margin-bottom:10px">
+      <button type="button" class="seg-btn${mode === "follow" ? " active" : ""}" data-act="nchKindsScope" data-scope="follow">跟随账号全局</button>
+      <button type="button" class="seg-btn${mode === "custom" ? " active" : ""}" data-act="nchKindsScope" data-scope="custom">独立配置</button>
     </div>
+    <div id="nchKindsScopeBody"></div>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
       <button class="btn primary" data-act="nchPrefsSave" data-ctype="${esc(type)}">保存偏好</button>
     </div>`;
   mountIcons(body);
+  renderNchKindsScopeBody();
+}
+
+function renderNchKindsScopeBody() {
+  const body = getModal().querySelector("#nchKindsScopeBody");
+  if (!body || !nchKindsEditor) return;
+  const it = nchItems.find((x) => x.channel_type === nchKindsEditor.type && x.status === "active");
+  if (nchKindsEditor.mode === "follow") {
+    const gk = nchGlobalPref?.kinds;
+    body.innerHTML = `
+      <div style="padding:10px 12px;border:1px dashed var(--line);border-radius:10px">
+        <div style="font-size:13px">当前全局事件偏好：<b>${esc(gk == null ? "全部类型" : `${gk.length} 类`)}</b></div>
+        <div class="hint" style="margin-top:4px">全局偏好变化时本渠道自动跟随。如需单独调整本渠道，切到「独立配置」。</div>
+      </div>`;
+    return;
+  }
+  // null = 未配置，展示为全选（即"跟随站点白名单默认全收"）
+  const cur = Array.isArray(it?.kinds) ? it.kinds : NOTIFY_KINDS;
+  body.innerHTML = `
+    <div id="nchKindsBox" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
+      ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
+        <input type="checkbox" data-kind="${esc(k)}" ${cur.includes(k) ? "checked" : ""}>${esc(label)}
+      </label>`).join("")}
+    </div>`;
 }
 
 async function nchPrefsSave(type) {
-  if (!type) return;
-  const kinds = [...getModal().querySelectorAll('#nchKindsBox input[type="checkbox"]:checked')].map((x) => x.dataset.kind);
-  const r = await api.notifyChannelPrefs(type, kinds);
+  if (!type || !nchKindsEditor) return;
+  const mode = nchKindsEditor.mode;
+  const kinds = mode === "custom"
+    ? [...getModal().querySelectorAll('#nchKindsBox input[type="checkbox"]:checked')].map((x) => x.dataset.kind)
+    : [];
+  const r = await api.notifyChannelPrefs(type, kinds, mode);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   toast("接收偏好已保存");
   await renderNchList();
@@ -1161,7 +1205,7 @@ function nchDigestSummaryText(p) {
 }
 
 const NCH_DIGEST_CARRIERS = [["cmcc", "移动"], ["cucc", "联通"], ["ctcc", "电信"], ["cbn", "广电"]];
-let nchGlobalPref = null; // 账号全局播报范围（null = 未设置 = 全收）
+let nchGlobalPref = null; // 账号全局偏好 { provinces, kinds }（null 字段 = 未设置 = 全收）
 let nchProvEditor = null; // 省份编辑器状态 { scope: 'channel'|'global', type?, carriers: {cmcc:Set,...}, active }
 
 function nchDigestLoadPref(raw) {
@@ -1210,7 +1254,7 @@ function renderNchDigest(type) {
   const enabled = it.collect_report === true;
   const mode = it.digest_mode === "custom" ? "custom" : "follow";
   // 载入范围：独立配置用渠道自有省份；跟随全局时预载全局范围（切换到独立的起始值）
-  nchProvEditor = { scope: "channel", mode, type, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : nchGlobalPref), active: "cmcc" };
+  nchProvEditor = { scope: "channel", mode, type, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : nchGlobalPref?.provinces), active: "cmcc" };
   body.innerHTML = `
     ${NCH_PROV_EDITOR_STYLE}
     <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后推送关注范围的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注范围内有变化时才会推送。保存即时生效。</p>
@@ -1239,7 +1283,7 @@ function renderNchDigestScopeBody() {
   if (nchProvEditor.mode === "follow") {
     body.innerHTML = `
       <div style="padding:10px 12px;border:1px dashed var(--line);border-radius:10px">
-        <div style="font-size:13px">当前全局范围：<b>${esc(nchDigestSummaryText(nchGlobalPref))}</b></div>
+        <div style="font-size:13px">当前全局范围：<b>${esc(nchDigestSummaryText(nchGlobalPref?.provinces))}</b></div>
         <div class="hint" style="margin-top:4px">全局范围变化时本渠道自动跟随，无需逐渠道修改。如需单独调整本渠道，切到「独立配置」。</div>
       </div>`;
     return;
@@ -1261,7 +1305,7 @@ function renderNchDigestScopeBody() {
 function renderNchDigestGlobal() {
   const body = getModal().querySelector("#nchBody");
   if (!body) return;
-  nchProvEditor = { scope: "global", carriers: nchDigestLoadPref(nchGlobalPref), active: "cmcc" };
+  nchProvEditor = { scope: "global", carriers: nchDigestLoadPref(nchGlobalPref?.provinces), active: "cmcc" };
   body.innerHTML = `
     ${NCH_PROV_EDITOR_STYLE}
     <p class="hint" style="margin-top:0">账号全局采集播报范围：一次配置，所有选择「跟随账号全局」的渠道自动生效。按运营商推送关注省份的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）；仅当关注范围内有变化时才会推送（当前约每 6 小时一轮）。保存即时生效。</p>
@@ -1274,9 +1318,16 @@ function renderNchDigestGlobal() {
     </div>
     <div id="nchDigestGrid"></div>
     <p class="hint" style="margin:8px 2px 0">某运营商内不勾选任何省份 = 不接收该运营商的播报；全部不勾 = 未设置（各渠道跟随模式下收全部省份）。</p>
+    <p class="hint" style="margin:10px 2px 6px">接收类型（事件偏好）：勾选跟随渠道要接收的站点事件类型。全部勾选/不设置 = 全部类型。</p>
+    <div id="nchGlobalKindsBox" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
+      ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
+        <input type="checkbox" data-kind="${esc(k)}" ${(nchGlobalPref?.kinds ?? NOTIFY_KINDS).includes(k) ? "checked" : ""}>${esc(label)}
+      </label>`).join("")}
+    </div>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
-      <button class="btn primary" data-act="nchDigestGlobalSave">保存全局范围</button>
+      <button class="btn primary" data-act="nchDigestGlobalSave">保存全局偏好</button>
     </div>`;
   mountIcons(body);
   renderNchDigestGrid();
@@ -1289,10 +1340,11 @@ async function nchDigestGlobalSave() {
     const codes = [...(nchProvEditor.carriers[c] || new Set())];
     if (codes.length) provinces[c] = codes;
   }
-  const r = await api.digestGlobalSave(provinces);
+  const kinds = [...getModal().querySelectorAll('#nchGlobalKindsBox input[type="checkbox"]:checked')].map((x) => x.dataset.kind);
+  const r = await api.digestGlobalSave(provinces, kinds);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
-  nchGlobalPref = r.data?.provinces ?? null;
-  toast("账号全局播报范围已保存");
+  nchGlobalPref = r.data ?? null; // { provinces, kinds }
+  toast("账号全局播报偏好已保存");
   renderNchDigestGlobal();
 }
 
@@ -1307,7 +1359,7 @@ async function nchDigestSave(type) {
       if (codes.length) provinces[c] = codes;
     }
   }
-  const r = await api.notifyDigestPrefs(type, enabled, mode, provinces);
+  const r = await api.notifyDigestPrefs(type, { enabled, mode, provinces });
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   toast("采集播报偏好已保存");
   await renderNchList();

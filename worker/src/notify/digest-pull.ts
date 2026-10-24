@@ -73,5 +73,8 @@ export async function handleDigestSubscribers(request: Request, env: Env): Promi
       console.warn(`[digest-pull] 订户 ${r.user_id}/${r.channel_type} 凭证解密失败，跳过: ${String(e).slice(0, 100)}`);
     }
   }
-  return ok({ subscribers });
+  return ok({
+    subscribers,
+    site: env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org', // 分发脚本拼进消息尾部的站点链接
+  });
 }

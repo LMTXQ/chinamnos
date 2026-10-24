@@ -37,9 +37,9 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
   ).bind(g.viewer.id, Date.now()).run();
 
   const rows = await env.DB.prepare(
-    `SELECT id, channel_type, target_hint, status, collect_report, kinds_json, provinces_json, digest_mode, created_at
+    `SELECT id, channel_type, target_hint, status, collect_report, kinds_json, kinds_mode, provinces_json, digest_mode, created_at
      FROM user_notify_channels WHERE user_id = ?1 ORDER BY created_at DESC`,
-  ).bind(g.viewer.id).all<{ id: string; channel_type: string; target_hint: string; status: string; collect_report: number; kinds_json: string | null; provinces_json: string | null; digest_mode: string; created_at: number }>();
+  ).bind(g.viewer.id).all<{ id: string; channel_type: string; target_hint: string; status: string; collect_report: number; kinds_json: string | null; kinds_mode: string; provinces_json: string | null; digest_mode: string; created_at: number }>();
   const items = (rows.results || []).map((r) => {
     let kinds: string[] | null = null;
     if (r.kinds_json) {
@@ -49,13 +49,15 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
     if (r.provinces_json) {
       try { provinces = JSON.parse(r.provinces_json) as unknown; } catch { provinces = []; }
     }
-    return { id: r.id, channel_type: r.channel_type, target_hint: r.target_hint, status: r.status, collect_report: r.collect_report === 1, digest_mode: r.digest_mode === 'custom' ? 'custom' : 'follow', provinces, created_at: r.created_at, kinds };
+    return { id: r.id, channel_type: r.channel_type, target_hint: r.target_hint, status: r.status, collect_report: r.collect_report === 1, digest_mode: r.digest_mode === 'custom' ? 'custom' : 'follow', kinds_mode: r.kinds_mode === 'custom' ? 'custom' : 'follow', provinces, created_at: r.created_at, kinds };
   });
   return ok({ items });
 }
 
-// POST /api/me/notify-channels/prefs  body: { channel_type, kinds }
+// POST /api/me/notify-channels/prefs  body: { channel_type, kinds, scope? }
 //   渠道级事件偏好：kinds 为全量 15 类的子集（空数组 = 该渠道静音）；
+//   scope='global' → 写账号全局事件偏好（user_digest_prefs.kinds_json，所有跟随渠道生效）；
+//   缺省 scope='channel' → 写渠道 kinds_json（仅在 kinds_mode='custom' 时被推送消费）。
 //   推送时与站点白名单取交集——用户在全量里勾选，站长放开/缩减后勾选长期有效
 export async function handleNotifyChannelPrefs(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
@@ -63,18 +65,78 @@ export async function handleNotifyChannelPrefs(request: Request, env: Env): Prom
 
   let body: Record<string, unknown> = {};
   try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
-  const type = typeof body.channel_type === 'string' ? body.channel_type : '';
-  if (!type) return fail(ERR.VALIDATION_ERROR, '缺少渠道类型', 400, { field: 'channel_type' });
+  const scope = body.scope === 'global' ? 'global' : 'channel';
   if (!Array.isArray(body.kinds)) return fail(ERR.VALIDATION_ERROR, 'kinds 必须为数组', 400, { field: 'kinds' });
-
   const known = new Set<string>(NOTIFY_KINDS);
   const kinds = [...new Set(body.kinds.map((x) => String(x)))].filter((k) => known.has(k));
+
+  if (scope === 'global') {
+    await env.DB.prepare(
+      `INSERT INTO user_digest_prefs (user_id, kinds_json, updated_at) VALUES (?1, ?2, ?3)
+       ON CONFLICT(user_id) DO UPDATE SET kinds_json = excluded.kinds_json, updated_at = excluded.updated_at`,
+    ).bind(g.viewer.id, JSON.stringify(kinds), Date.now()).run();
+    return ok({ scope, kinds });
+  }
+
+  const type = typeof body.channel_type === 'string' ? body.channel_type : '';
+  if (!type) return fail(ERR.VALIDATION_ERROR, '缺少渠道类型', 400, { field: 'channel_type' });
 
   const r = await env.DB.prepare(
     'UPDATE user_notify_channels SET kinds_json = ?1 WHERE user_id = ?2 AND channel_type = ?3',
   ).bind(JSON.stringify(kinds), g.viewer.id, type).run();
   if (!r.meta.changes) return fail(ERR.NOT_FOUND, '未找到该渠道绑定', 404, { field: 'channel_type' });
   return ok({ channel_type: type, kinds });
+}
+
+// GET /api/me/digest-prefs —— 账号全局播报范围 + 事件偏好（0041/0042；null = 未设置 = 全收）
+export async function handleDigestGlobalGet(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+  const row = await env.DB.prepare(
+    'SELECT pref_json, kinds_json FROM user_digest_prefs WHERE user_id = ?1',
+  ).bind(g.viewer.id).first<{ pref_json: string | null; kinds_json: string | null }>();
+  let provinces: unknown = null;
+  if (row?.pref_json) {
+    try { provinces = JSON.parse(row.pref_json) as unknown; } catch { provinces = null; }
+  }
+  let kinds: string[] | null = null;
+  if (row?.kinds_json) {
+    try { kinds = JSON.parse(row.kinds_json) as string[]; } catch { kinds = null; }
+  }
+  return ok({ provinces, kinds });
+}
+
+// PUT /api/me/digest-prefs  body: { provinces?, kinds? } —— 保存账号全局播报范围/事件偏好（upsert，字段级合并）
+export async function handleDigestGlobalSet(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+  let body: Record<string, unknown> = {};
+  try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
+  const prefJson = body.provinces == null ? null : normalizeProvincesPref(body.provinces);
+  if (body.provinces != null && prefJson === null) {
+    return fail(ERR.VALIDATION_ERROR, 'provinces 格式无效（需为省份代码数组或按运营商分组对象）', 400, { field: 'provinces' });
+  }
+  let kindsJson: string | null = null;
+  if (body.kinds != null) {
+    if (!Array.isArray(body.kinds)) return fail(ERR.VALIDATION_ERROR, 'kinds 必须为数组', 400, { field: 'kinds' });
+    const known = new Set<string>(NOTIFY_KINDS);
+    const ks = [...new Set(body.kinds.map((x) => String(x)))].filter((k) => known.has(k));
+    kindsJson = JSON.stringify(ks);
+  }
+  // 字段级合并：只更新请求里出现的字段（未提供的保留原值）
+  const row = await env.DB.prepare(
+    'SELECT pref_json, kinds_json FROM user_digest_prefs WHERE user_id = ?1',
+  ).bind(g.viewer.id).first<{ pref_json: string | null; kinds_json: string | null }>();
+  const nextPref = body.provinces != null ? prefJson : (row?.pref_json ?? null);
+  const nextKinds = body.kinds != null ? kindsJson : (row?.kinds_json ?? null);
+  await env.DB.prepare(
+    `INSERT INTO user_digest_prefs (user_id, pref_json, kinds_json, updated_at) VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT(user_id) DO UPDATE SET pref_json = excluded.pref_json, kinds_json = excluded.kinds_json, updated_at = excluded.updated_at`,
+  ).bind(g.viewer.id, nextPref, nextKinds, Date.now()).run();
+  return ok({
+    provinces: nextPref === null ? null : JSON.parse(nextPref),
+    kinds: nextKinds === null ? null : JSON.parse(nextKinds),
+  });
 }
 
 /* 采集播报省份偏好归一化：入库 JSON 字符串（非法返回 null → 由调用方 400）。
@@ -307,15 +369,18 @@ export interface ActiveBinding {
 
 export async function loadActiveBindings(env: Env, userId: string): Promise<ActiveBinding[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, channel_type, cred_enc, kinds_json FROM user_notify_channels
-     WHERE user_id = ?1 AND status = 'active'`,
-  ).bind(userId).all<{ id: string; channel_type: string; cred_enc: string; kinds_json: string | null }>();
+    `SELECT c.id, c.channel_type, c.cred_enc, c.kinds_json, c.kinds_mode, g.kinds_json AS g_kinds
+     FROM user_notify_channels c LEFT JOIN user_digest_prefs g ON g.user_id = c.user_id
+     WHERE c.user_id = ?1 AND c.status = 'active'`,
+  ).bind(userId).all<{ id: string; channel_type: string; cred_enc: string; kinds_json: string | null; kinds_mode: string; g_kinds: string | null }>();
   const out: ActiveBinding[] = [];
   for (const r of rows.results || []) {
     try {
+      // 事件偏好来源（0042）：kinds_mode='follow' 用账号全局（null = 全收）；'custom' 用渠道自有
       let kinds: string[] | null = null;
-      if (r.kinds_json) {
-        try { kinds = JSON.parse(r.kinds_json) as string[]; } catch { kinds = null; }
+      const raw = r.kinds_mode === 'custom' ? r.kinds_json : r.g_kinds;
+      if (raw) {
+        try { kinds = JSON.parse(raw) as string[]; } catch { kinds = null; }
       }
       out.push({ id: r.id, channel_type: r.channel_type, cred: await openCred(env, r.cred_enc), kinds });
     } catch { /* 单条解密失败跳过，不影响其余 */ }

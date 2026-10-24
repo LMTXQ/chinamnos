@@ -170,17 +170,17 @@ export const api = {
   async notifyChannelVerify(code) {
     return this.request("/api/me/notify-channels/verify", { method: "POST", body: { code } });
   },
-  async notifyChannelPrefs(channelType, kinds) {
-    return this.request("/api/me/notify-channels/prefs", { method: "POST", body: { channel_type: channelType, kinds } });
+  async notifyChannelPrefs(channelType, kinds, kindsMode) {
+    return this.request("/api/me/notify-channels/prefs", { method: "POST", body: { channel_type: channelType, kinds, kinds_mode: kindsMode } });
   },
-  async notifyDigestPrefs(channelType, enabled, mode, provinces) {
-    return this.request("/api/me/notify-channels/digest-prefs", { method: "POST", body: { channel_type: channelType, enabled, mode, provinces } });
+  async notifyDigestPrefs(channelType, opts) {
+    return this.request("/api/me/notify-channels/digest-prefs", { method: "POST", body: { channel_type: channelType, ...opts } });
   },
   async digestGlobal() {
     return this.request("/api/me/digest-prefs");
   },
-  async digestGlobalSave(provinces) {
-    return this.request("/api/me/digest-prefs", { method: "PUT", body: { provinces } });
+  async digestGlobalSave(provinces, kinds) {
+    return this.request("/api/me/digest-prefs", { method: "PUT", body: { provinces, kinds } });
   },
   async notifyChannelDelete(channelType) {
     return this.request("/api/me/notify-channels/delete", { method: "POST", body: { channel_type: channelType } });
