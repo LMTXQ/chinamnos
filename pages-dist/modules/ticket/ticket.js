@@ -14,6 +14,7 @@ import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
+import { shareLink } from "../../shell/share.js";
 
 const CATEGORIES = ["举报", "申诉", "建议", "咨询", "毛遂自荐", "其他"];
 const OPEN_QUOTA = 3;
@@ -61,8 +62,9 @@ function skeletonHTML() {
   </div>
   <div class="tk-topbar-actions">
     <div id="tkAppsMenuSlot"></div>
-    <div id="tkAuthSlot"></div>
+    <button class="icon-btn magnetic" id="tkShareBtn" title="分享本页（复制链接或唤起系统分享）"><i data-icon="share"></i></button>
     <button class="icon-btn magnetic" id="tkThemeBtn" title="切换主题"></button>
+    <div id="tkAuthSlot"></div>
   </div>
 </header>
 <main class="tk-content" id="tkContent"><div class="loading" style="padding:60px 0">加载中…</div></main>
@@ -452,6 +454,9 @@ Shell.registerPage({
       paint();
       tb.addEventListener("click", () => { theme.toggle(); paint(); });
     }
+    /* 页面级分享按钮：#ticket 静态路由直达本页 */
+    const sb = $("tkShareBtn");
+    if (sb) sb.addEventListener("click", () => shareLink({ title: "工单中心", text: "与管理组的正式沟通通道", hash: "/ticket" }));
     // 管理组成员列表（「指定成员可见」范围用；公开字段仅 id/昵称）
     const sch = await api.request("/api/cardhub/schema");
     if (sch.ok) S.admins = sch.data.admins || [];

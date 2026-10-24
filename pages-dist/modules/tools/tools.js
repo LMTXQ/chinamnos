@@ -15,6 +15,7 @@ import { icon, mountIcons, toast, showPageLoading, hidePageLoading } from "../..
 import { mountAppsMenu } from "../../shell/apps-menu.js";
 import { Auth, mountAuth } from "../../shell/auth.js";
 import { api } from "../../shell/api.js";
+import { shareLink } from "../../shell/share.js";
 import { getPubConfig } from "../../shell/pubcfg.js";
 
 const COLLECTION = "toolbox";
@@ -53,8 +54,9 @@ function skeletonHTML() {
   </div>
   <div class="tl-topbar-actions">
     <div id="toolsAppsMenuSlot"></div>
-    <div id="toolsAuthSlot"></div>
+    <button class="icon-btn magnetic" id="toolsShareBtn" title="分享本页（复制链接或唤起系统分享）"><i data-icon="share"></i></button>
     <button class="icon-btn magnetic" id="toolsThemeBtn" title="切换主题"></button>
+    <div id="toolsAuthSlot"></div>
   </div>
 </header>
 <main class="tl-content" id="toolsContent">
@@ -401,6 +403,9 @@ Shell.registerPage({
       tb.addEventListener("click", () => { theme.toggle(); paint(); });
       paint();
     }
+    /* 页面级分享按钮：#tools 静态路由直达本页 */
+    var sb = $("toolsShareBtn");
+    if (sb) sb.addEventListener("click", () => shareLink({ title: "觅珍集库", text: "好站点与实用工具精选集库", hash: "/tools" }));
     document.addEventListener("click", onRootClick);
     document.addEventListener("error", onImgError, true);
     loadLinks();

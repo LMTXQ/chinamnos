@@ -296,8 +296,9 @@ function skeletonHTML() {
   </div>
   <div class="ch-topbar-actions">
     <div id="chAppsMenuSlot"></div>
-    <div id="chAuthSlot"></div>
+    <button class="icon-btn magnetic" id="chShareBtn" title="分享本页（复制链接或唤起系统分享）"><i data-icon="share"></i></button>
     <button class="icon-btn magnetic" id="chThemeBtn" title="切换主题"></button>
+    <div id="chAuthSlot"></div>
   </div>
 </header>
 
@@ -2683,6 +2684,10 @@ Shell.registerPage({
     };
     paint();
     themeBtn.addEventListener("click", () => { theme.toggle(); paint(); });
+
+    /* 页面级分享按钮：#cardhub 静态路由直达本页 */
+    const pageShareBtn = $("chShareBtn");
+    if (pageShareBtn) pageShareBtn.addEventListener("click", () => shareLink({ title: "跳蚤市集", text: "求购、出让、出租、求租信息一站览", hash: "/cardhub" }));
 
     /* 帖子分享深链（#post_<id>，shell.js 已路由到本页）：渲染完成后直达该帖详情并切对应分类；
        帖子已下架/过期时 toast 提示（openPostDeep 内处理） */

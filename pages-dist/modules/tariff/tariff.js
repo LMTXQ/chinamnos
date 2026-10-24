@@ -29,7 +29,7 @@ const cache = {};
 
 /* 前端版本号：与 frontend-config.js 中 tariff 的 ?v= 同步 bump；
    文件内自包含，关于页展示用——显示值即文件真实版本，判断缓存是否更新零歧义 */
-const TARIFF_VER = "20261015g";
+const TARIFF_VER = "20261025a";
 
 const AREA_CODE_MAP = {
 "0100":"北京","0200":"广州","0210":"上海","0220":"天津",
@@ -4410,7 +4410,15 @@ function initTariff() {
     pendingTab = raw;
     goTab("overview");   // renderOverview 自有全链路引导，pendingTab 由 stats 就绪路径消费
   } else if (/^(act|chat|ann|cl|plan)_/.test(raw)) {
-    handleDeepLink(raw);   // 条目深链自带引导（含切运营商/省）
+    handleDeepLink(raw);   // 条目/页面级深链自带引导（含切运营商/省）
+  } else if (/^monitor_/.test(raw) && isScopePair(raw.slice(8), "hun")) {
+    consumeScopePage(raw.slice(8), getProvCode(), "monitor");   // 页面级 monitor_<carrier>：切运营商进采集监控（诊断数据无省维度）
+  } else if (/^notices_/.test(raw)) {
+    /* 页面级 notices_<carrier>_<prov>：公告推广范围过滤（ntcScopeFilter）读 localStorage，
+       consumeScopePage 先切运营商/省（写入记忆）再进页签，渲染时即命中目标范围 */
+    const np = raw.slice(8).split("_");
+    if (np.length === 2 && isScopePair(np[0], np[1])) consumeScopePage(np[0], np[1], "notices");
+    else goTab("notices");   // 格式不符回退静态页签
   } else {
     goTab("overview");
   }
@@ -4422,6 +4430,8 @@ function initTariff() {
    #ann_<carrier>_<id>             运营公告条目展开定位（自动切运营商）
    #cl_<carrier>_<prov>_<ts>_<name(URI编码)>   变更记录：切运营商/省份 + 按名称过滤 + 弹该条详情
    #plan_<carrier>_<prov>_<方案编号(URI编码)>   资费列表：切运营商/省份 + 全分类搜索过滤该方案
+   页面级（去 id 化，见上方「页面级分享/深链」注释）：
+   #act|chat|cl_<carrier>_<prov>   切范围后进对应页签；#plan_<carrier>_<prov>[_<t1>] 进资费列表/分类
    解析后置 pendingDeep，由各数据就绪路径消费（轮询兜底，见 pollDeep*） */
 let pendingDeep = null;
 let pendingAnnId = "";
@@ -4432,6 +4442,56 @@ let pendingAnnId = "";
 let annDeepId = "";
 let annDeepScrolled = false;   // 首次命中时滚动+高亮只做一次，后续重渲染仅补展开不滚屏
 let annDeepCarrier = "";       // 深链目标运营商：范围自动放宽（外省过滤场景）仅在该运营商内生效，防误伤切运营商后的渲染
+
+/* ─────────────── 页面级分享/深链（条目格式「去 id 化」） ───────────────
+   分享按钮按当前页签+运营商（+省份，有省维度者）拼 hash；落地时切范围后进对应页签。
+   同前缀下段数递减 = 粒度递粗：
+     plan_<carrier>_<prov>_<t1>_<方案编号>  条目级（已有）
+     plan_<carrier>_<prov>_<t1>            资费列表 + 指定分类页签
+     plan_<carrier>_<prov>                 资费页面（数据总览，范围已切）
+     act_/chat_/cl_<carrier>_<prov>        情报酒馆/唠嗑聚落/变更记录页面级
+     ann_<carrier>                         运营公告页面级（公告按运营商一份，无省维度；条目格式 ann_<carrier>_<id> 不受影响）
+     monitor_<carrier>                     采集监控页面级（诊断 _diag.json 按运营商一份，无省维度）
+     notices_<carrier>_<prov>              公告推广页面级（范围过滤读 localStorage，须先切范围再渲染）
+     compare/favs/about/cardhub            静态页签裸 hash（onEnter 静态分支直达，无范围维度或个人数据） */
+
+/* 范围段合法性：运营商限定四码，省代码 2-6 位小写（与条目级 hasScope 校验口径一致）。
+   不合法的两段式回退旧格式解析，保证旧链接（act_<id> 等）永不误判 */
+function isScopePair(c, p) {
+  return ["cmcc", "cucc", "ctcc", "cbn"].indexOf(c) >= 0 && /^[a-z]{2,6}$/.test(p);
+}
+
+/* 页面级深链消费：引导数据管线 → 切运营商 → 切省 → 进目标页签（幂等，进齐即落地） */
+function consumeScopePage(carrier, prov, tab) {
+  goTab("overview");
+  deepLoadingShow();
+  pollDeep(() => {
+    if (!ACTIVE_CARRIERS.length) { loadStats().catch(() => {}); return false; }
+    if (currentCarrier !== carrier) { switchCarrier(carrier); return false; }
+    if (!deepSwitchProv(prov)) return false;
+    if (!navTabs) return false;
+    if (navTabs.active !== tab) { goTab(tab); return false; }
+    return true;
+  }, () => deepLoadingHide());
+}
+
+/* 顶栏「分享当前页面」：按激活页签映射深链前缀（去 id 化页面级格式，见顶部注释） */
+function shareCurrentView() {
+  const tab = navTabs ? navTabs.active : "overview";
+  const scope = currentCarrier + "_" + getProvCode();
+  let hash = tab || "overview";
+  let title = "资费监测";
+  if (tab === "overview") { hash = "plan_" + scope; title = "资费页面"; }
+  else if (tab.startsWith("t1_")) { hash = "plan_" + scope + "_" + tab.slice(3); title = "资费列表"; }
+  else if (tab === "changelog") { hash = "cl_" + scope; title = "变更记录"; }
+  else if (tab === "acts") { hash = "act_" + scope; title = "情报酒馆"; }
+  else if (tab === "chat") { hash = "chat_" + scope; title = "唠嗑聚落"; }
+  else if (tab === "compare") { title = "资费对比"; }
+  else if (tab === "announce") { hash = "ann_" + currentCarrier; title = "运营公告"; }
+  else if (tab === "monitor") { hash = "monitor_" + currentCarrier; title = "采集监控"; }
+  else if (tab === "notices") { hash = "notices_" + scope; title = "公告推广"; }
+  shareLink({ title, text: "来自 ChinaMNOs 讯览台的分享", hash });
+}
 
 /* 变更日志条目定位（cl 深链与检测弹窗「查看变更」跳转共用）：
    等运营商就绪 → 切运营商 → 切省 → 进变更记录 tab → 按 ts+名称匹配条目弹详情。
@@ -4482,6 +4542,7 @@ function handleDeepLink(raw) {
     }, () => deepLoadingHide());
   }
   if (kind === "act") {
+    if (scopeParts.length === 2 && isScopePair(scopeParts[0], scopeParts[1])) { consumeScopePage(scopeParts[0], scopeParts[1], "acts"); return; }   // 页面级：切范围进情报酒馆
     if (hasScope) {
       consumeWithScope((id) => { goTab("acts"); actOpenDetail(id); return true; });   // 详情弹窗独立拉接口，自带加载态
       return;
@@ -4491,6 +4552,7 @@ function handleDeepLink(raw) {
     return;
   }
   if (kind === "chat") {
+    if (scopeParts.length === 2 && isScopePair(scopeParts[0], scopeParts[1])) { consumeScopePage(scopeParts[0], scopeParts[1], "chat"); return; }   // 页面级：切范围进唠嗑聚落
     if (hasScope) {
       consumeWithScope((id) => {
         goTab("chat");   // 幂等（TAB_SHOWN 拦截重复渲染），列表异步拉取后出现卡片
@@ -4506,8 +4568,12 @@ function handleDeepLink(raw) {
   }
   if (kind === "ann") {
     const sep = rest.indexOf("_");
-    const carrier = sep > 0 ? rest.slice(0, sep) : "";
-    pendingAnnId = decodeURIComponent(sep > 0 ? rest.slice(sep + 1) : rest);
+    /* 页面级 ann_<carrier>（rest 无下划线且为合法运营商码）：切运营商进公告页签。
+       条目级 ann_<carrier>_<id>（id 数字/ULID，与运营商码无重叠）不受影响；
+       旧无下划线格式 ann_<id> 仍按 id 解析落当前运营商 */
+    const carrier = sep > 0 ? rest.slice(0, sep) : (isScopePair(rest, "hun") ? rest : "");
+    const pageLevel = !sep && !!carrier;
+    pendingAnnId = decodeURIComponent(pageLevel ? "" : (sep > 0 ? rest.slice(sep + 1) : rest));
     annDeepId = pendingAnnId;   // 深链目标：渲染后自动展开（跨重渲染保持，见 annDeepId 注释）
     annDeepScrolled = false;
     annDeepCarrier = carrier || currentCarrier;
@@ -4531,6 +4597,7 @@ function handleDeepLink(raw) {
   }
   if (kind === "cl") {
     const parts = rest.split("_");
+    if (parts.length === 2 && isScopePair(parts[0], parts[1])) { consumeScopePage(parts[0], parts[1], "changelog"); return; }   // 页面级：切范围进变更记录
     if (parts.length < 4) { goTab("changelog"); return; }
     const carrier = parts[0], prov = parts[1];
     const ts = parts[2];   // log.ts 为 ISO 字符串（含冒号），原样字符串比较，禁止 Number()（NaN 必败）
@@ -4543,6 +4610,24 @@ function handleDeepLink(raw) {
     /* plan_<运营商>_<省>_<页签code(tariff_attr)>_<方案编号（回退名称）>：
        页签维度 = 条目 tariff_attr（1=各省通用 / 2=本省专属），快照按省一份、文件内按该字段区分 */
     const parts = rest.split("_");
+    /* 页面级：plan_<carrier>_<prov>（数据总览）/ plan_<carrier>_<prov>_<t1>（资费列表+指定分类页签）。
+       条目级四段起，两/三段为页面级空档，旧链接不受影响 */
+    if (parts.length === 2 && isScopePair(parts[0], parts[1])) { consumeScopePage(parts[0], parts[1], "overview"); return; }
+    if (parts.length === 3 && isScopePair(parts[0], parts[1]) && /^[a-z0-9]+$/.test(parts[2])) {
+      const carrier = parts[0], prov = parts[1], t1Code = parts[2];
+      goTab("overview");
+      deepLoadingShow();
+      pollDeep(() => {
+        if (!ACTIVE_CARRIERS.length) { loadStats().catch(() => {}); return false; }
+        if (currentCarrier !== carrier) { switchCarrier(carrier); return false; }
+        if (!ATTR_MAP[t1Code]) return false;   // 目标运营商分类映射随 renderOverview→loadStats 异步填充（同条目级）
+        if (!deepSwitchProv(prov)) return false;
+        if (!navTabs || !$("view-t1_" + t1Code)) return false;   // 动态页签/视图未构建前不激活
+        if (navTabs.active !== "t1_" + t1Code) { goTab("t1_" + t1Code); return false; }
+        return true;
+      }, () => deepLoadingHide());
+      return;
+    }
     if (parts.length < 4) { goTab("overview"); return; }
     const carrier = parts[0], prov = parts[1], t1Code = parts[2];
     const planNo = decodeURIComponent(parts.slice(3).join("_")).toLowerCase();
@@ -5242,6 +5327,7 @@ Shell.registerPage({
   </div>
   <div class="topbar-actions">
     <div id="appsMenuSlot"></div>
+    <button class="icon-btn magnetic" id="pageShareBtn" title="分享当前页面（复制链接或唤起系统分享）"><i data-icon="share"></i></button>
     <button class="icon-btn magnetic" id="themeBtn" title="切换主题"></button>
     <div id="tariffAuthSlot"></div>
     <button class="btn primary magnetic" id="refreshBtn" title="检测资费变化"><i data-icon="refresh"></i><span class="btn-txt">检测</span></button>
@@ -5459,6 +5545,9 @@ Shell.registerPage({
     initFX(document.getElementById("tariffRoot"));
     mountAuth(document.getElementById("tariffAuthSlot"));
     mountAppsMenu($("appsMenuSlot"), "tariff");
+    /* 顶栏页面级分享按钮：按当前页签+运营商+省份拼深链（见 shareCurrentView） */
+    const psb = $("pageShareBtn");
+    if (psb) psb.addEventListener("click", shareCurrentView);
 
     /* 幂等注册：onEnter 在特定路由时序下可能连续执行，
        先摘除旧监听再挂新监听，确保 document 上始终只有一个 */
@@ -5484,6 +5573,7 @@ Shell.registerPage({
     if (tip) tip.remove();
     if (navTabs) { navTabs.destroy(); navTabs = null; }
     root.innerHTML = "";
+    _noticesViewRendered = false;   // 公告推广一次性渲染守卫随页面销毁复位：否则跨页面再进（含 notices_ 深链）不渲染
     STATS = null;
     Object.keys(TAB_SHOWN).forEach(function(k) { delete TAB_SHOWN[k]; });
     Object.keys(listState).forEach(function(k) { delete listState[k]; });
