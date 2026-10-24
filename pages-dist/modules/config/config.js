@@ -230,6 +230,7 @@ let catMode = 'dynamic';
 let pagMode = 'auto';
 let selectedProvs = new Set();
 let notifyProvs = new Set();
+let smtpAccounts = []; // SMTP 发信邮箱池（独立页签；随 notification.smtp_accounts 写入 TARIFF_CONFIG）
 let DoDataTab = 'stats';
 let DoDataCache = { stats: null, snapshot: null, changelogs: null, provinceList: null };
 
@@ -634,6 +635,63 @@ function toggleCarrierEnabled() {
   onFieldChange();
 }
 
+/* ─────────────── SMTP 发信邮箱池（独立页签） ─────────────── */
+/* 行内输入不实时回写状态：增删前先 syncSmtpFromDom() 从 DOM 收敛，避免误删已输入内容 */
+function syncSmtpFromDom() {
+  const rows = document.querySelectorAll('#smtpList .smtp-row');
+  const arr = [];
+  rows.forEach(row => {
+    const get = k => (row.querySelector('[data-sf="' + k + '"]')?.value || '').trim();
+    const port = parseInt(get('port'), 10);
+    arr.push({
+      host: get('host'),
+      port: Number.isFinite(port) ? port : 465,
+      user: get('user'),
+      pass: row.querySelector('[data-sf="pass"]')?.value ?? '',
+      from_name: get('from_name'),
+    });
+  });
+  smtpAccounts = arr;
+}
+
+function renderSmtpList() {
+  const box = document.getElementById('smtpList');
+  if (!box) return;
+  if (!smtpAccounts.length) {
+    box.innerHTML = '<p class="hint" style="margin:0 0 10px">尚未配置发信邮箱。留空时 notify_dispatch.py 回退旧环境变量 SMTP_ACCOUNTS。</p>';
+    return;
+  }
+  box.innerHTML = smtpAccounts.map((a, i) => `
+    <div class="smtp-row" style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px">
+      <div class="f-row">
+        <div class="fg"><label>SMTP 服务器</label><input type="text" data-sf="host" value="${esc(a.host || "")}" placeholder="smtp.qq.com"></div>
+        <div class="fg"><label>端口 <span class="hint">(465=SSL / 587=STARTTLS)</span></label><input type="number" data-sf="port" value="${esc(String(a.port ?? 465))}"></div>
+      </div>
+      <div class="f-row">
+        <div class="fg"><label>账号</label><input type="text" data-sf="user" value="${esc(a.user || "")}" placeholder="user@example.com"></div>
+        <div class="fg"><label>授权码/密码 <span class="btn ghost sm" data-act="toggle-visibility" data-target="smtpPass${i}" style="cursor:pointer">显示</span></label><input type="password" data-sf="pass" id="smtpPass${i}" value="${esc(a.pass || "")}"></div>
+      </div>
+      <div class="f-row">
+        <div class="fg"><label>发件人显示名 <span class="hint">(可选，默认「ChinaMNOs 访览台」)</span></label><input type="text" data-sf="from_name" value="${esc(a.from_name || "")}" placeholder="ChinaMNOs 访览台"></div>
+        <div class="fg" style="display:flex;align-items:flex-end">
+          <button class="btn ghost sm" type="button" data-act="smtp-del" data-idx="${i}"><i data-icon="x"></i>删除</button>
+        </div>
+      </div>
+    </div>`).join('');
+  mountIcons(box);
+}
+
+function collectSmtpAccounts() {
+  syncSmtpFromDom();
+  return smtpAccounts
+    .filter(a => a.host || a.user || a.pass) // 全空行忽略
+    .map(a => {
+      const o = { host: a.host, port: a.port || 465, user: a.user, pass: a.pass };
+      if (a.from_name) o.from_name = a.from_name;
+      return o;
+    });
+}
+
 /* ─────────────── 生成 / 校验（与原版一致） ─────────────── */
 function buildConfig() {
   if (currentTopTab !== 'global') saveCurrentCarrierState();
@@ -802,6 +860,12 @@ function buildConfig() {
       retention_days: parseInt(document.getElementById('retentionDays').value) || 30,
     },
     notification: {
+      channels: {
+        ql_panel: document.getElementById('notifyChQl').checked,
+        ext_msg: document.getElementById('notifyChExt').checked,
+      },
+      digest_dir: document.getElementById('notifyDigestDir').value.trim(),
+      smtp_accounts: collectSmtpAccounts(),
       types: {
         change: document.getElementById('notifyChange').checked,
         error: document.getElementById('notifyError').checked,
@@ -925,6 +989,19 @@ function validateConfig(config) {
 
     const notify = c.notification || {};
     if (notify.provinces && !Array.isArray(notify.provinces)) errors.push(label + ' notification.provinces 需为数组');
+  }
+
+  const smtpAccs = (config.notification || {}).smtp_accounts || [];
+  smtpAccs.forEach((a, i) => {
+    const tag = 'notification.smtp_accounts[' + i + ']';
+    if (!a.host) errors.push(tag + ' 缺少 SMTP 服务器地址');
+    if (!a.user) errors.push(tag + ' 缺少账号');
+    if (!a.pass) errors.push(tag + ' 缺少授权码/密码');
+    if (!Number.isInteger(a.port) || a.port < 1 || a.port > 65535) errors.push(tag + ' 端口需为 1-65535 的整数');
+  });
+  const _ch = (config.notification || {}).channels || {};
+  if (_ch.ext_msg && smtpAccs.length === 0) {
+    warnings.push('已开启外接消息通知（采集播报），但未配置 SMTP 发信邮箱：若青龙未另设 SMTP_ACCOUNTS 环境变量，邮件类通知将无法发送（钉钉/企微不受影响）');
   }
 
   const st = config.storage || {};
@@ -1084,6 +1161,14 @@ function applyConfig(config) {
   document.getElementById('notifyDegrade').checked = types.degrade !== false;
   document.getElementById('notifyAllFail').checked = types.all_fail !== false;
   document.getElementById('notifyNoChange').checked = types.no_change !== false;
+  const channels = notify.channels || {};
+  document.getElementById('notifyChQl').checked = channels.ql_panel !== false;
+  document.getElementById('notifyChExt').checked = channels.ext_msg === true;
+  document.getElementById('notifyDigestDir').value = notify.digest_dir || '';
+  smtpAccounts = Array.isArray(notify.smtp_accounts)
+    ? notify.smtp_accounts.map(a => Object.assign({}, a))
+    : [];
+  renderSmtpList();
 
   document.getElementById('schemaVersion').value = config.schema_version || '4';
 
@@ -1226,6 +1311,11 @@ function resetToDefault() {
   document.getElementById('notifyDegrade').checked = true;
   document.getElementById('notifyAllFail').checked = true;
   document.getElementById('notifyNoChange').checked = true;
+  document.getElementById('notifyChQl').checked = true;
+  document.getElementById('notifyChExt').checked = false;
+  document.getElementById('notifyDigestDir').value = '';
+  smtpAccounts = [];
+  renderSmtpList();
   document.getElementById('schemaVersion').value = '4';
   document.getElementById('cacheTtlMinutes').value = 30;
   document.getElementById('defaultCarrier').value = 'cmcc';
@@ -1536,6 +1626,8 @@ function onRootClick(e) {
     if (act === "notify-none") { clearAllNotifyProvs(); return; }
     if (act === "toggle-visibility") { toggleVisibility(actEl.dataset.target); return; }
     if (act === "add-catmap") { addCatMapRow(actEl.dataset.sub); return; }
+    if (act === "smtp-add") { syncSmtpFromDom(); smtpAccounts.push({ host: "", port: 465, user: "", pass: "", from_name: "" }); renderSmtpList(); return; }
+    if (act === "smtp-del") { syncSmtpFromDom(); smtpAccounts.splice(parseInt(actEl.dataset.idx, 10), 1); renderSmtpList(); return; }
     if (act === "import-config") { importConfig(); return; }
     if (act === "import-clipboard") { importFromClipboard(); return; }
     if (act === "reset-default") { resetToDefault(); return; }
@@ -1647,6 +1739,7 @@ Shell.registerPage({
     notifyProvs = new Set();
     DoDataTab = "stats";
     DoDataCache = { stats: null, snapshot: null, changelogs: null, provinceList: null };
+    smtpAccounts = [];
 
     root.innerHTML = `
 <div id="configRoot">
@@ -1681,6 +1774,8 @@ Shell.registerPage({
       <button type="button" class="nav-item" data-view="c-cucc"><div class="nav-icon">联</div><span>联通 CUCC</span></button>
       <button type="button" class="nav-item" data-view="c-ctcc"><div class="nav-icon">电</div><span>电信 CTCC</span></button>
       <button type="button" class="nav-item" data-view="c-cbn"><div class="nav-icon">广</div><span>广电 CBN</span></button>
+      <div class="sidebar-divider"></div>
+      <button type="button" class="nav-item" data-view="smtp"><div class="nav-icon"><i data-icon="send"></i></div><span>SMTP 邮箱</span></button>
       <div class="sidebar-divider"></div>
       <button type="button" class="nav-item" data-view="dodata"><div class="nav-icon"><i data-icon="database"></i></div><span>数据浏览</span></button>
       <button type="button" class="nav-item" data-view="output"><div class="nav-icon"><i data-icon="code"></i></div><span>生成结果</span></button>
@@ -1822,13 +1917,22 @@ Shell.registerPage({
 
     <div class="panel rise" style="--i:4">
       <h2 class="panel-title"><span class="p-icon bell"><i data-icon="bell"></i></span>通知类型开关 <span class="panel-sub">(全局，所有运营商共用)</span></h2>
-      <label><span class="panel-sub">控制各类通知的发送开关。关闭后该类通知不再推送，但采集和对比逻辑不受影响。致命错误通知不受此控制，始终发送。</span></label>
+      <label><span class="panel-sub">控制各类通知的发送开关。关闭后该类通知不再推送，但采集和对比逻辑不受影响。致命错误通知不受此控制，始终发送。<b>仅作用于「青龙面板通知」通道；用户侧「外接消息通知」（采集播报）只推送其关注省份的变更摘要，不受这些开关影响。</b></span></label>
       <div class="ck-grid">
         <label class="ck-row"><input type="checkbox" class="switch" id="notifyChange" checked><span>变更通知</span></label>
         <label class="ck-row"><input type="checkbox" class="switch" id="notifyError" checked><span>异常提醒</span></label>
         <label class="ck-row"><input type="checkbox" class="switch" id="notifyDegrade" checked><span>降级提醒</span></label>
         <label class="ck-row"><input type="checkbox" class="switch" id="notifyAllFail" checked><span>全部失败</span></label>
         <label class="ck-row"><input type="checkbox" class="switch" id="notifyNoChange" checked><span>无变化</span></label>
+      </div>
+      <div class="cfg-hr"></div>
+      <label><span class="panel-sub">通知渠道（可多选）：采集结果通知走哪些通道。</span></label>
+      <div class="ck-grid">
+        <label class="ck-row"><input type="checkbox" class="switch" id="notifyChQl" checked><span>青龙面板通知<span class="hint">现有模式：经青龙内置通知渠道（qlapi notify / sendNotify）推送，渠道在青龙「通知设置」中配置</span></span></label>
+        <label class="ck-row"><input type="checkbox" class="switch" id="notifyChExt"><span>外接消息通知<span class="hint">采集播报：每轮采集后向订阅用户推送其关注省份的变更摘要（钉钉/企微/邮件），经 scripts/chinamnos/notify_dispatch.py 分发</span></span></label>
+      </div>
+      <div class="f-row" style="margin-top:8px">
+        <div class="fg"><label>分发脚本目录 <span class="help" data-tip="统一工作目录：chinamnos.py、notify_dispatch.py、采集播报 digest 文件都放在这里。留空 = 脚本自身所在目录（青龙 scripts/chinamnos）。配置错误不影响采集主流程，仅告警回退。">?</span><span class="hint">(digest_dir)</span></label><input type="text" id="notifyDigestDir" value="" placeholder="留空 = 脚本所在目录，如 /ql/data/scripts/chinamnos"></div>
       </div>
     </div>
 
@@ -2022,6 +2126,16 @@ Shell.registerPage({
       <button class="btn ghost sm" type="button" data-act="add-catmap" data-sub="t2"><i data-icon="plus"></i>添加资费类型(t2)</button>
     </div>
 
+  </section>
+
+  <!-- ═══════════ SMTP 发信邮箱（与四运营商平级独立页签） ═══════════ -->
+  <section id="view-smtp" class="view">
+    <div class="panel rise" style="--i:0">
+      <h2 class="panel-title"><span class="p-icon ua"><i data-icon="send"></i></span>SMTP 发信邮箱池 <span class="panel-sub">(外接消息通知/批量通知的邮件发送；写入 notification.smtp_accounts)</span></h2>
+      <p class="panel-sub" style="margin-bottom:12px">随 TARIFF_CONFIG 注入青龙后由 notify_dispatch.py 读取：多箱随机选箱、失败冷却 10 分钟自动换箱。留空则回退旧环境变量 SMTP_ACCOUNTS（兼容既有部署）。授权码为敏感凭证，与存储线路 API Token 同级，请勿外泄配置 JSON。</p>
+      <div id="smtpList"></div>
+      <button class="btn ghost sm" type="button" data-act="smtp-add"><i data-icon="plus"></i>添加发信邮箱</button>
+    </div>
   </section>
 
   <!-- ═══════════ 数据浏览 ═══════════ -->
