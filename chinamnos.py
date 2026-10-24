@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261022a"
+SCRIPT_VERSION = "20261023a"
 
 import os
 import sys
@@ -1364,6 +1364,16 @@ DEFAULT_CONFIG = {
             'all_fail': True,
             'no_change': True,
         },
+        'channels': {
+            'ql_panel': True,
+            'ext_msg': False,
+        },
+        # 采集播报统一工作目录（digest 文件 / coll_today / notify_dispatch.py 同目录）
+        # 空 = 回退脚本自身所在目录；配置页「通知渠道」组「分发脚本目录」生成
+        'digest_dir': '',
+        # SMTP 发信邮箱池（配置页「SMTP 邮箱」页签生成）：本脚本不消费，
+        # 随 TARIFF_CONFIG 注入青龙后由 notify_dispatch.py 读取（回退旧 SMTP_ACCOUNTS 环境变量）
+        'smtp_accounts': [],
     },
     'carriers': {
         'cmcc': {
@@ -1544,6 +1554,33 @@ def parse_and_validate_config():
     cache_ttl = config.get('storage', {}).get('cache', {}).get('ttl_minutes', 30)
     if not isinstance(cache_ttl, (int, float)) or cache_ttl < 0:
         errors.append('storage.cache.ttl_minutes 需为非负数')
+
+    # 通知渠道 / 采集播报工作目录（轻校验：类型错误才拦截；路径不可用属运行时告警不阻断）
+    _notif = config.get('notification', {})
+    _ch = _notif.get('channels', {})
+    if not isinstance(_ch, dict):
+        errors.append('notification.channels 需为对象')
+    else:
+        for _ck in ('ql_panel', 'ext_msg'):
+            if _ck in _ch and not isinstance(_ch[_ck], bool):
+                errors.append(f'notification.channels.{_ck} 需为布尔值')
+    _dd = _notif.get('digest_dir', '')
+    if not isinstance(_dd, str):
+        errors.append('notification.digest_dir 需为字符串（分发脚本所在目录，留空 = 脚本所在目录）')
+    _sa = _notif.get('smtp_accounts', [])
+    if not isinstance(_sa, list):
+        errors.append('notification.smtp_accounts 需为数组')
+    else:
+        for _i, _a in enumerate(_sa):
+            if not isinstance(_a, dict):
+                errors.append(f'notification.smtp_accounts[{_i}] 需为对象')
+                continue
+            for _k in ('host', 'user', 'pass'):
+                if not _a.get(_k):
+                    errors.append(f'notification.smtp_accounts[{_i}].{_k} 缺失')
+            _p = _a.get('port', 465)
+            if not isinstance(_p, int) or not (1 <= _p <= 65535):
+                errors.append(f'notification.smtp_accounts[{_i}].port 需为 1-65535 的整数')
 
     crawl = config['crawl']
 
@@ -5229,8 +5266,19 @@ def should_notify(ntype, config):
     return True
 
 
-def send_notification(title, content):
+def send_notification(title, content, config=None):
     try:
+        # 通知渠道开关（配置页「通知渠道」组）：ql_panel=false = 不走青龙推送，仅记日志（内容不丢）
+        # 未传 config 时保持原有行为（如 __main__ 致命错误兜底：config 可能尚未加载，致命通知始终尝试推送）
+        if config is not None and not config.get('notification', {}).get('channels', {}).get('ql_panel', True):
+            logger.info('通知渠道「青龙面板通知」已关闭（notification.channels.ql_panel=false），跳过推送')
+            logger.info('=' * 60)
+            logger.info('执行结果通知（未推送，仅记录）:')
+            logger.info('-' * 60)
+            for line in content.split('\n'):
+                logger.info(line)
+            logger.info('=' * 60)
+            return
         try:
             from qlapi import notify
             notify(title, content)
@@ -5320,6 +5368,125 @@ def build_change_summary(carrier_key, crawl_results, carrier_cfg):
 
     header = f'共 {len(changed_provinces)} 省有变更: 新增{total_added} / 下架{total_removed} / 修改{total_changed}'
     return f'{header}\n\n' + '\n'.join(lines)
+
+
+# ───────────────────────── 采集播报（ext_msg 通道，方案批次一） ─────────────────────────
+# 全量整理本轮变更 → digest 文件落盘 → 子进程叫醒 notify_dispatch.py。
+# 与 ql_panel 通知并行独立：ql_panel 摘要按站长关注省整理时过滤，本通道全量落盘、
+# 省份过滤在分发端按订阅用户执行。ext_msg 关闭时整段跳过（无文件、无调用）。
+
+
+def resolve_digest_dir(config):
+    """采集播报统一工作目录：notification.digest_dir 优先（自动创建），
+    空/不可用回退脚本自身所在目录——永不依赖 cwd（updater 下载执行，运行目录不保证是 scripts 目录）"""
+    base = os.path.dirname(os.path.abspath(__file__))
+    raw = config.get('notification', {}).get('digest_dir', '')
+    if isinstance(raw, str) and raw.strip():
+        d = os.path.abspath(os.path.expanduser(raw.strip()))
+        try:
+            os.makedirs(d, exist_ok=True)
+            return d
+        except Exception as e:
+            logger.warning(f'[digest] 配置目录不可用({d}): {e}，回退脚本所在目录')
+    return base
+
+
+def _digest_counts(crawl_results):
+    """crawl_results → {省code: {name, added, changed, removed}}（仅含有变化的省，全量不过滤）"""
+    name_to_code = {p['name']: p['code'] for p in PROVINCES}
+    out = {}
+    for prov_name, result in (crawl_results or {}).items():
+        if not result or not result.get('changes'):
+            continue
+        changes = result['changes']
+        added = len(changes.get('added', []))
+        removed = len(changes.get('removed', []))
+        changed = len(changes.get('modified', []))
+        if added == 0 and removed == 0 and changed == 0:
+            continue
+        code = name_to_code.get(prov_name, '')
+        out[code or prov_name] = {'name': prov_name, 'added': added, 'changed': changed, 'removed': removed}
+    return out
+
+
+def _merge_digest_counts(base, add):
+    """把本轮计数并入累计结构（base 被就地修改并返回）"""
+    for code, c in (add or {}).items():
+        cur = base.get(code)
+        if not isinstance(cur, dict):
+            base[code] = dict(c)
+        else:
+            cur['added'] += c['added']
+            cur['changed'] += c['changed']
+            cur['removed'] += c['removed']
+    return base
+
+
+def _write_digest_json(path, obj):
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(obj, f, ensure_ascii=False, separators=(',', ':'))
+    os.replace(tmp, path)
+
+
+def write_collector_digest(config, all_crawl_results):
+    """每轮采集结束后调用：写本轮 digest（含当日累计）→ 叫醒分发脚本。
+    无变更轮次不写文件不叫醒（免打扰，已确认口径）；任何异常仅告警，不影响采集主流程。"""
+    try:
+        if not config.get('notification', {}).get('channels', {}).get('ext_msg', False):
+            return
+        d = resolve_digest_dir(config)
+        now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+        date_str = now.strftime('%Y%m%d')
+
+        round_counts = {}
+        for carrier_key, crawl_results in (all_crawl_results or {}).items():
+            counts = _digest_counts(crawl_results)
+            if counts:
+                round_counts[carrier_key] = counts
+        if not round_counts:
+            logger.info('[digest] 本轮无变更，不生成采集播报文件')
+            return
+
+        # 当日累计：读旧状态合并（日期翻篇自动重置；旧文件损坏按无累计处理）
+        today_counts = {}
+        try:
+            with open(os.path.join(d, 'coll_today.json'), encoding='utf-8') as f:
+                prev = json.load(f)
+            if prev.get('date') == date_str and isinstance(prev.get('carriers'), dict):
+                today_counts = prev['carriers']
+        except Exception:
+            pass
+        for carrier_key, counts in round_counts.items():
+            _merge_digest_counts(today_counts.setdefault(carrier_key, {}), counts)
+        _write_digest_json(os.path.join(d, 'coll_today.json'),
+                           {'date': date_str, 'carriers': today_counts})
+
+        digest = {
+            'date': date_str,
+            'round_at': int(now.timestamp() * 1000),
+            'round': round_counts,
+            'today': today_counts,
+        }
+        digest_path = os.path.join(d, 'coll_digest_%s_%s.json' % (date_str, now.strftime('%H%M%S')))
+        _write_digest_json(digest_path, digest)
+        logger.info(f'[digest] 采集播报已落盘: {os.path.basename(digest_path)}'
+                    f'（{len(round_counts)} 运营商有变更，目录: {d}）')
+
+        # 叫醒分发脚本（文件即队列；flock 防重入，撞锁/失败退出码均忽略，文件留给下轮补扫）
+        dispatch = os.path.join(d, 'notify_dispatch.py')
+        if os.path.isfile(dispatch):
+            try:
+                r = subprocess.run([sys.executable, dispatch], cwd=d, timeout=1800,
+                                   capture_output=True, text=True)
+                tail = (r.stdout or '').strip().splitlines()
+                logger.info(f'[digest] 分发脚本已执行（exit={r.returncode}）: {tail[-1] if tail else "(无输出)"}')
+            except Exception as e:
+                logger.warning(f'[digest] 叫醒分发失败(文件留存下轮补扫): {e}')
+        else:
+            logger.info(f'[digest] 分发脚本不存在({dispatch})，跳过叫醒')
+    except Exception as e:
+        logger.warning(f'[digest] 采集播报整理失败(已忽略，不影响采集): {e}')
 
 
 def build_nochange_message():
@@ -6600,15 +6767,15 @@ def run():
         err_msg = f'资费监控疑似抓取不全，已跳过对比：{", ".join(all_skipped_flat)}'
         if all_vol_flat:
             err_msg += f'\n波动预警: {", ".join(all_vol_flat)}'
-        send_notification('资费监控-异常提醒', build_error_message(err_msg))
+        send_notification('资费监控-异常提醒', build_error_message(err_msg), config)
 
     if not all_skipped_flat and all_vol_flat and should_notify('error', config):
         vol_msg = f'资费监控波动预警（数据已正常更新）：{", ".join(all_vol_flat)}'
-        send_notification('资费监控-波动预警', build_error_message(vol_msg))
+        send_notification('资费监控-波动预警', build_error_message(vol_msg), config)
 
     if all_partial_flat and should_notify('error', config):
         partial_msg = f'资费监控部分分类采集失败（数据已正常更新）：{", ".join(all_partial_flat)}'
-        send_notification('资费监控-部分采集提醒', build_error_message(partial_msg))
+        send_notification('资费监控-部分采集提醒', build_error_message(partial_msg), config)
 
     if total_success == 0 and total_fail > 0 and should_notify('all_fail', config):
         all_fail_flat = []
@@ -6616,11 +6783,11 @@ def run():
             if v > 0:
                 all_fail_flat.append(f'{carrier_display(k)}:{v}省')
         fail_msg = f'全部省份采集失败：{", ".join(all_fail_flat)}'
-        send_notification('资费监控-全部失败', build_error_message(fail_msg))
+        send_notification('资费监控-全部失败', build_error_message(fail_msg), config)
 
     if all_degraded_flat and should_notify('degrade', config):
         deg_msg = f'资费监控降级模式(仅对比不覆盖)：{", ".join(all_degraded_flat)}'
-        send_notification('资费监控-降级提醒', build_error_message(deg_msg))
+        send_notification('资费监控-降级提醒', build_error_message(deg_msg), config)
 
     has_any_change = False
     for carrier_key, crawl_results in all_crawl_results.items():
@@ -6630,9 +6797,12 @@ def run():
         if summary:
             has_any_change = True
             if should_notify('change', config):
-                send_notification(f'{carrier_label}资费监控-变更通知', summary)
+                send_notification(f'{carrier_label}资费监控-变更通知', summary, config)
     if not has_any_change and not all_skipped_flat and not all_degraded_flat and not all_vol_flat and not all_partial_flat and should_notify('no_change', config):
-        send_notification('资费监控-无变化', build_nochange_message())
+        send_notification('资费监控-无变化', build_nochange_message(), config)
+
+    # 采集播报（ext_msg 通道）：全量整理 digest → 叫醒分发（ext_msg 关闭/无变化时内部自动跳过）
+    write_collector_digest(config, all_crawl_results)
 
 
 # ======================================================================

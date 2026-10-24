@@ -20,6 +20,22 @@ FILE="chinamnos.py"
 MARKER="__main__"   # 完整性标记：下载后须含入口标记，且语法编译通过
 PY=python3
 
+# ── 统一工作目录（采集播报方案批次一）──
+# 优先读取 TARIFF_CONFIG 的 notification.digest_dir（配置页「通知渠道」组「分发脚本目录」）：
+# 有值且目录可用 → 下载 chinamnos.py 到该目录并在此执行（与 notify_dispatch.py、digest 文件同目录）；
+# 无值 / 解析失败 / 建目录失败 → 打印提示并回退本脚本所在目录（与旧行为完全一致）
+WORKDIR=""
+if [ -n "${TARIFF_CONFIG:-}" ]; then
+  WORKDIR=$($PY -c 'import json,os; d=json.loads(os.environ.get("TARIFF_CONFIG","{}")).get("notification",{}).get("digest_dir",""); print(d.strip() if isinstance(d,str) else "")' 2>/dev/null || true)
+fi
+if [ -n "$WORKDIR" ]; then
+  if mkdir -p "$WORKDIR" 2>/dev/null && cd "$WORKDIR" 2>/dev/null; then
+    echo "[目录] 统一工作目录: $WORKDIR（notification.digest_dir，chinamnos.py 将下载到此处）"
+  else
+    echo "[目录] ⚠ 配置目录不可用($WORKDIR)，回退脚本所在目录: $(pwd)"
+  fi
+fi
+
 # 多源依次尝试：直连 → 两个常见加速镜像
 URLS=(
   "https://raw.githubusercontent.com/$REPO/$BRANCH/$FILE"
