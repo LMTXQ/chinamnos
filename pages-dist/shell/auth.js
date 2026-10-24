@@ -1159,9 +1159,6 @@ function nchDigestSummaryText(p) {
   return "全部省份";
 }
 
-   数据格式（批次四升级）：provinces = {cmcc:[...], cucc:[...], ...}；
-   旧格式平铺数组（全运营商同一份）载入时展开到各运营商；
-   某运营商未勾选任何省 = 不收该运营商；四家均未勾选 = 本渠道不推送（相当于暂停）。 */
 const NCH_DIGEST_CARRIERS = [["cmcc", "移动"], ["cucc", "联通"], ["ctcc", "电信"], ["cbn", "广电"]];
 let nchGlobalPref = null; // 账号全局播报范围（null = 未设置 = 全收）
 let nchProvEditor = null; // 省份编辑器状态 { scope: 'channel'|'global', type?, carriers: {cmcc:Set,...}, active }
