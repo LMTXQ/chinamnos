@@ -247,7 +247,8 @@ def send_email(cred, title, body, row=None):
                 s.starttls()
             s.login(box["user"], box["pass"])
             sender_name = box.get("from_name") or "ChinaMNOs 讯览台"
-            msg = MIMEText(body, "plain", "utf-8")
+            # 邮件正文补标题行：与钉钉/企微（markdown ## 标题）行为对齐，正文自证来源与轮次
+            msg = MIMEText("%s\n\n%s" % (title, body), "plain", "utf-8")
             msg["Subject"] = Header(title, "utf-8")
             msg["From"] = formataddr((str(Header(sender_name, "utf-8")), box["user"]))
             msg["To"] = to_addr
@@ -380,56 +381,71 @@ def _tot(prov_map):
             sum(int(p.get("removed") or 0) for p in prov_map.values()))
 
 
+def _totals_line(a, c, r, provs):
+    """汇总行：修改/下架为 0 时省略对应段。"""
+    parts = ["新增 %d 条" % a]
+    if c:
+        parts.append("修改 %d 条" % c)
+    if r:
+        parts.append("下架 %d 条" % r)
+    return "共 %d 省：%s" % (provs, " / ".join(parts))
+
+
 def build_digest_message(sub, digest):
-    """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化）返回 None。"""
+    """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化）返回 None。
+
+    版式（站长定稿）：
+      ═══ 本轮采集 ═══ / ═══ 今日累计 ═══ 两段，每段 = 各运营商省份明细 + 汇总行
+    """
     pref = sub.get("provinces")
     round_part = digest.get("round") if isinstance(digest.get("round"), dict) else {}
     today_part = digest.get("today") if isinstance(digest.get("today"), dict) else {}
     round_at = int(digest.get("round_at") or 0)
     stamp = time.strftime("%m-%d %H:%M", time.localtime(round_at / 1000)) if round_at else "本轮"
 
-    body = []
-    has_round = False
-    for key in ("cmcc", "cucc", "ctcc", "cbn"):
-        picks = _pick_provinces(round_part.get(key) or {}, _prov_set_for(pref, key))
-        if not picks:
-            continue
-        has_round = True
-        body.append("══ %s ══" % CARRIER_NAMES.get(key, key))
-        for name, p in picks.items():
-            seg = []
-            if p.get("added"):
-                seg.append("新增 %d 条" % p["added"])
-            if p.get("removed"):
-                seg.append("下架 %d 条" % p["removed"])
-            if p.get("changed"):
-                seg.append("修改 %d 条" % p["changed"])
-            if seg:
-                body.append("  %s：%s" % (name, " / ".join(seg)))
+    def section(part_dict):
+        """一个统计区块：各运营商省份行 + 汇总行；返回 (行列表, 是否有内容)"""
+        lines = []
+        ta = tc = tr = 0
+        provs = 0
+        for key in ("cmcc", "cucc", "ctcc", "cbn"):
+            picks = _pick_provinces(part_dict.get(key) or {}, _prov_set_for(pref, key))
+            if not picks:
+                continue
+            provs += len(picks)
+            lines.append("══ %s ══" % CARRIER_NAMES.get(key, key))
+            for name, p in picks.items():
+                seg = []
+                if p.get("added"):
+                    seg.append("新增 %d 条" % p["added"])
+                if p.get("removed"):
+                    seg.append("下架 %d 条" % p["removed"])
+                if p.get("changed"):
+                    seg.append("修改 %d 条" % p["changed"])
+                if seg:
+                    lines.append("  %s：%s" % (name, " / ".join(seg)))
+            a, c, r = _tot(picks)
+            ta += a
+            tc += c
+            tr += r
+        if provs:
+            lines.append("")
+            lines.append(_totals_line(ta, tc, tr, provs))
+        return lines, provs > 0
 
-    ta = tc = tr = 0
-    tprovs = 0
-    for key in ("cmcc", "cucc", "ctcc", "cbn"):
-        picks = _pick_provinces(today_part.get(key) or {}, _prov_set_for(pref, key))
-        a, c, r = _tot(picks)
-        ta += a
-        tc += c
-        tr += r
-        tprovs += len(picks)
-    if not has_round and tprovs == 0:
+    round_lines, has_round = section(round_part)
+    today_lines, has_today = section(today_part)
+    if not has_round and not has_today:
         return None  # 该订户关注的范围本轮与今日均无变化 → 不发
 
-    lines = ["══ 本轮 ══"]
-    lines.extend(body if has_round else ["  （你关注的省份本轮无变化）"])
+    lines = ["═══ 本轮采集 ═══"]
+    lines.extend(round_lines if has_round else ["  （你关注的范围本轮无变化）"])
     lines.append("")
-    lines.append("══ 今日累计 ══")
-    if tprovs:
-        lines.append("共 %d 省：新增 %d 条 / 修改 %d 条 / 下架 %d 条" % (tprovs, ta, tc, tr))
-    else:
-        lines.append("  你关注的省份今日暂无变化")
+    lines.append("═══ 今日累计 ═══")
+    lines.extend(today_lines if has_today else ["  你关注的范围今日暂无变化"])
     lines.append("")
-    lines.append("（你关注省份的变更摘要 · 到站点「通知设置」可调整关注范围或关闭）")
-    title = "【采集播报】%s 轮" % stamp
+    lines.append("（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）")
+    title = "【ChinaMNOs 讯览台】资费监控通知（%s 轮）" % stamp
     return title, "\n".join(lines)
 
 
