@@ -57,6 +57,11 @@ function renderTurnstile(containerId) {
 /* 变量对齐 shell/theme.css 设计系统：--acc/--acc-deep/--surface/--surface-2/--line/--txt/--sub/--red */
 const AUTH_CSS = `
 #nchBody{max-height:min(72vh,640px);overflow-y:auto}
+#nchBody .nch-chip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)}
+#nchBody .nch-chip{display:flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;cursor:pointer;user-select:none;font-size:12.5px;color:var(--txt);transition:border-color .15s,color .15s,background .15s}
+#nchBody .nch-chip:hover{border-color:var(--acc)}
+#nchBody .nch-chip:has(input:checked){border-color:var(--acc);color:var(--acc);background:color-mix(in oklab,var(--acc) 8%,transparent)}
+#nchBody .nch-chip input{accent-color:var(--acc);margin:0;flex:none}
 .auth-chip{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 5px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);cursor:pointer;transition:border-color .15s,box-shadow .15s;user-select:none}
 .auth-chip:hover{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in oklab,var(--acc) 14%,transparent)}
 .auth-chip svg{width:14px;height:14px;color:var(--sub);flex-shrink:0}
@@ -835,6 +840,8 @@ function onModalClick(e) {
   if (act === "nchDigest") { renderNchDigest(el.dataset.ctype || ""); return; }
   if (act === "nchDigestGlobal") { renderNchDigestGlobal(); return; }
   if (act === "nchDigestGlobalSave") { authGuarded(el, nchDigestGlobalSave); return; }
+  if (act === "nchKindsGlobal") { renderNchKindsGlobal(); return; }
+  if (act === "nchKindsGlobalSave") { authGuarded(el, nchKindsGlobalSave); return; }
   if (act === "nchKindsScope") {
     if (nchKindsEditor) nchKindsEditor.mode = el.dataset.scope === "custom" ? "custom" : "follow";
     getModal().querySelectorAll('#nchBody .seg-btn[data-scope]').forEach((b) => {
@@ -1086,7 +1093,11 @@ async function renderNchList() {
     <p class="hint" style="margin-top:0">绑定后，站内通知会同步推送到你的渠道；每个渠道还可订阅「采集播报」（关注范围的资费变更摘要），范围可选跟随账号全局或独立配置。</p>
     <div class="nch-list">
       <div class="nch-card pick" data-act="nchDigestGlobal">
-        <div class="nch-meta"><div class="t">账号全局播报偏好</div><div class="h">一次配置，跟随它的渠道自动生效 · 范围：${esc(nchDigestSummaryText(nchGlobalPref?.provinces))} · 类型：${esc(nchGlobalPref?.kinds == null ? "全部" : `${nchGlobalPref.kinds.length} 类`)}</div></div>
+        <div class="nch-meta"><div class="t">账号全局播报范围</div><div class="h">一次配置，跟随它的渠道自动生效 · 当前：${esc(nchDigestSummaryText(nchGlobalPref?.provinces))}</div></div>
+        <span class="nch-tag ok">配置</span>
+      </div>
+      <div class="nch-card pick" data-act="nchKindsGlobal">
+        <div class="nch-meta"><div class="t">账号全局接收类型</div><div class="h">站点事件类型偏好 · 当前：${esc(nchGlobalPref?.kinds == null ? "全部类型" : `${nchGlobalPref.kinds.length} 类`)}</div></div>
         <span class="nch-tag ok">配置</span>
       </div>
       ${items.length ? items.map(nchCard).join("") : '<div class="nch-empty">还没有绑定任何通知渠道</div>'}
@@ -1170,11 +1181,9 @@ function renderNchKindsScopeBody() {
   // null = 未配置，展示为全选（即"跟随站点白名单默认全收"）
   const cur = Array.isArray(it?.kinds) ? it.kinds : NOTIFY_KINDS;
   body.innerHTML = `
-    <div id="nchKindsBox" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
+    <div id="nchKindsBox" class="nch-chip-grid">
       ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
-      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
-        <input type="checkbox" data-kind="${esc(k)}" ${cur.includes(k) ? "checked" : ""}>${esc(label)}
-      </label>`).join("")}
+      <label class="nch-chip"><input type="checkbox" data-kind="${esc(k)}" ${cur.includes(k) ? "checked" : ""}>${esc(label)}</label>`).join("")}
     </div>`;
 }
 
@@ -1318,16 +1327,9 @@ function renderNchDigestGlobal() {
     </div>
     <div id="nchDigestGrid"></div>
     <p class="hint" style="margin:8px 2px 0">某运营商内不勾选任何省份 = 不接收该运营商的播报；全部不勾 = 未设置（各渠道跟随模式下收全部省份）。</p>
-    <p class="hint" style="margin:10px 2px 6px">接收类型（事件偏好）：勾选跟随渠道要接收的站点事件类型。全部勾选/不设置 = 全部类型。</p>
-    <div id="nchGlobalKindsBox" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)">
-      ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
-      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--txt);cursor:pointer;user-select:none">
-        <input type="checkbox" data-kind="${esc(k)}" ${(nchGlobalPref?.kinds ?? NOTIFY_KINDS).includes(k) ? "checked" : ""}>${esc(label)}
-      </label>`).join("")}
-    </div>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
-      <button class="btn primary" data-act="nchDigestGlobalSave">保存全局偏好</button>
+      <button class="btn primary" data-act="nchDigestGlobalSave">保存全局范围</button>
     </div>`;
   mountIcons(body);
   renderNchDigestGrid();
@@ -1340,12 +1342,38 @@ async function nchDigestGlobalSave() {
     const codes = [...(nchProvEditor.carriers[c] || new Set())];
     if (codes.length) provinces[c] = codes;
   }
-  const kinds = [...getModal().querySelectorAll('#nchGlobalKindsBox input[type="checkbox"]:checked')].map((x) => x.dataset.kind);
-  const r = await api.digestGlobalSave(provinces, kinds);
+  const r = await api.digestGlobalSave(provinces, null);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   nchGlobalPref = r.data ?? null; // { provinces, kinds }
-  toast("账号全局播报偏好已保存");
+  toast("账号全局播报范围已保存");
   renderNchDigestGlobal();
+}
+
+/* 账号全局接收类型编辑弹窗（与播报范围独立） */
+function renderNchKindsGlobal() {
+  const body = getModal().querySelector("#nchBody");
+  if (!body) return;
+  const cur = new Set(nchGlobalPref?.kinds ?? NOTIFY_KINDS);
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">账号全局接收类型：勾选「跟随账号全局」的渠道要接收的站点事件类型（共 ${NOTIFY_KINDS.length} 类）。全部勾选/不设置 = 全部类型。保存即时生效。</p>
+    <div id="nchGlobalKindsBox" class="nch-chip-grid">
+      ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
+      <label class="nch-chip"><input type="checkbox" data-kind="${esc(k)}" ${cur.has(k) ? "checked" : ""}>${esc(label)}</label>`).join("")}
+    </div>
+    <div class="actions">
+      <button class="btn ghost" data-act="nchBack">返回</button>
+      <button class="btn primary" data-act="nchKindsGlobalSave">保存全局类型</button>
+    </div>`;
+  mountIcons(body);
+}
+
+async function nchKindsGlobalSave() {
+  const kinds = [...getModal().querySelectorAll('#nchGlobalKindsBox input[type="checkbox"]:checked')].map((x) => x.dataset.kind);
+  const r = await api.digestGlobalSave(null, kinds);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
+  nchGlobalPref = r.data ?? null;
+  toast("账号全局接收类型已保存");
+  renderNchKindsGlobal();
 }
 
 async function nchDigestSave(type) {

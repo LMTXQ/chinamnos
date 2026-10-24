@@ -247,8 +247,12 @@ def send_email(cred, title, body, row=None):
                 s.starttls()
             s.login(box["user"], box["pass"])
             sender_name = box.get("from_name") or "ChinaMNOs 讯览台"
-            # 邮件正文补标题行：与钉钉/企微（markdown ## 标题）行为对齐，正文自证来源与轮次
-            msg = MIMEText("%s\n\n%s" % (title, body), "plain", "utf-8")
+            # HTML 邮件（仅采集播报行携带 html_body）：真表格版式；其他邮件维持纯文本不变
+            if row.get("html_body"):
+                msg = MIMEText(row["html_body"], "html", "utf-8")
+            else:
+                # 邮件正文补标题行：与钉钉/企微（markdown ## 标题）行为对齐，正文自证来源与轮次
+                msg = MIMEText("%s\n\n%s" % (title, body), "plain", "utf-8")
             msg["Subject"] = Header(title, "utf-8")
             msg["From"] = formataddr((str(Header(sender_name, "utf-8")), box["user"]))
             msg["To"] = to_addr
@@ -321,12 +325,12 @@ def dispatch_row(row, processed):
 
 def fetch_digest_subscribers():
     """调 Worker 内部端点现拉订户名单；重试 3 次（面板到 CF 链路间歇抖动），
-    最终失败返回 None（调用方保留货单下轮补扫）。"""
+    返回 (订户列表, 站点链接)；最终失败返回 (None, "")（调用方保留货单下轮补扫）。"""
     base = _env("DIGEST_API_BASE").rstrip("/")
     token = _env("DIGEST_PULL_TOKEN")
     if not base or not token:
         print("  ⚠ DIGEST_API_BASE / DIGEST_PULL_TOKEN 未配置，无法拉取订户名单")
-        return None
+        return None, ""
     url = base + "/api/internal/digest-subscribers"
     last_err = ""
     for attempt in range(3):
@@ -337,19 +341,21 @@ def fetch_digest_subscribers():
                 data = json.load(r)
             if data.get("code") != 0 or not isinstance(data.get("data"), dict):
                 print("  ⚠ 订户名单接口响应异常: %s" % json.dumps(data, ensure_ascii=False)[:150])
-                return None
-            subs = data["data"].get("subscribers")
+                return None, ""
+            payload = data["data"]
+            subs = payload.get("subscribers")
             if not isinstance(subs, list):
                 print("  ⚠ 订户名单结构异常（subscribers 非数组）")
-                return None
-            return subs
+                return None, ""
+            site = payload.get("site") if isinstance(payload.get("site"), str) else ""
+            return subs, site.rstrip("/")
         except Exception as e:
             last_err = str(e)[:150]
             print("  ⚠ 第 %d 次拉取失败: %s" % (attempt + 1, last_err))
             if attempt < 2:
                 time.sleep(3)
     print("  ⚠ 拉取订户名单失败（3 次）: %s" % last_err)
-    return None
+    return None, ""
 
 
 def _prov_set_for(pref, carrier):
@@ -391,21 +397,32 @@ def _totals_line(a, c, r, provs):
     return "共 %d 省：%s" % (provs, " / ".join(parts))
 
 
-def build_digest_message(sub, digest):
+def build_digest_message(sub, digest, site=""):
     """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化）返回 None。
 
-    版式（站长定稿）：
-      ═══ 本轮采集 ═══ / ═══ 今日累计 ═══ 两段，每段 = 各运营商省份明细 + 汇总行
+    返回 (title, 纯文本正文, HTML正文)；HTML 版仅供邮件渠道使用（真表格），
+    钉钉/企微使用纯文本版（其 markdown 不支持表格）。
     """
     pref = sub.get("provinces")
     round_part = digest.get("round") if isinstance(digest.get("round"), dict) else {}
     today_part = digest.get("today") if isinstance(digest.get("today"), dict) else {}
     round_at = int(digest.get("round_at") or 0)
     stamp = time.strftime("%m-%d %H:%M", time.localtime(round_at / 1000)) if round_at else "本轮"
+    title = "【ChinaMNOs 讯览台】资费监控通知（%s 轮）" % stamp
+
+    # HTML 邮件内联样式（邮箱客户端对 <style> 支持不一，全部内联最稳）
+    _td = 'border:1px solid #d0d3da;padding:5px 8px;font-size:13px'
+    _th = 'border:1px solid #d0d3da;padding:5px 8px;font-size:12px;background:#f2f3f5;text-align:left'
+    _tbl = 'border-collapse:collapse;width:100%;margin:4px 0 12px'
+    _h = 'margin:14px 0 4px;font-size:13.5px;font-weight:700'
+    _total = 'margin:4px 0 14px;font-size:12.5px;color:#444'
+    _trailer = 'margin:14px 0 2px;font-size:12px;color:#777'
+    _site = 'margin:0;font-size:12px'
 
     def section(part_dict):
-        """一个统计区块：各运营商省份行 + 汇总行；返回 (行列表, 是否有内容)"""
+        """一个统计区块：返回 (纯文本行列表, 是否有内容, HTML 片段列表)"""
         lines = []
+        html = []
         ta = tc = tr = 0
         provs = 0
         for key in ("cmcc", "cucc", "ctcc", "cbn"):
@@ -413,7 +430,9 @@ def build_digest_message(sub, digest):
             if not picks:
                 continue
             provs += len(picks)
-            lines.append("══ %s ══" % CARRIER_NAMES.get(key, key))
+            cname = CARRIER_NAMES.get(key, key)
+            lines.append("══ %s ══" % cname)
+            rows = []
             for name, p in picks.items():
                 seg = []
                 if p.get("added"):
@@ -424,17 +443,33 @@ def build_digest_message(sub, digest):
                     seg.append("修改 %d 条" % p["changed"])
                 if seg:
                     lines.append("  %s：%s" % (name, " / ".join(seg)))
+                rows.append('<tr><td style="%s">%s</td>'
+                            '<td style="%s;text-align:center">%d</td>'
+                            '<td style="%s;text-align:center">%d</td>'
+                            '<td style="%s;text-align:center">%d</td></tr>'
+                            % (_td, name, _td, int(p.get("added") or 0),
+                               _td, int(p.get("changed") or 0), _td, int(p.get("removed") or 0)))
             a, c, r = _tot(picks)
             ta += a
             tc += c
             tr += r
+            rows.append('<tr><td style="%s;font-weight:700">合计（%d 省）</td>'
+                        '<td style="%s;text-align:center;font-weight:700">%d</td>'
+                        '<td style="%s;text-align:center;font-weight:700">%d</td>'
+                        '<td style="%s;text-align:center;font-weight:700">%d</td></tr>'
+                        % (_td, len(picks), _td, a, _td, c, _td, r))
+            html.append('<p style="%s">%s</p>' % (_h, cname))
+            html.append('<table style="%s"><tr><th style="%s">省份</th>'
+                        '<th style="%s">新增</th><th style="%s">修改</th><th style="%s">下架</th></tr>%s</table>'
+                        % (_tbl, _th, _th, _th, _th, "".join(rows)))
         if provs:
             lines.append("")
             lines.append(_totals_line(ta, tc, tr, provs))
-        return lines, provs > 0
+            html.append('<p style="%s">%s</p>' % (_total, _totals_line(ta, tc, tr, provs)))
+        return lines, provs > 0, html
 
-    round_lines, has_round = section(round_part)
-    today_lines, has_today = section(today_part)
+    round_lines, has_round, round_html = section(round_part)
+    today_lines, has_today, today_html = section(today_part)
     if not has_round and not has_today:
         return None  # 该订户关注的范围本轮与今日均无变化 → 不发
 
@@ -445,8 +480,21 @@ def build_digest_message(sub, digest):
     lines.extend(today_lines if has_today else ["  你关注的范围今日暂无变化"])
     lines.append("")
     lines.append("（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）")
-    title = "【ChinaMNOs 讯览台】资费监控通知（%s 轮）" % stamp
-    return title, "\n".join(lines)
+    if site:
+        lines.append("站点：%s" % site)
+
+    html = ['<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',\'PingFang SC\',\'Microsoft YaHei\',sans-serif;color:#222;line-height:1.6">']
+    html.append('<h3 style="margin:0 0 10px;font-size:16px">%s</h3>' % title)
+    html.append('<p style="%s">本轮采集</p>' % _h)
+    html.extend(round_html if has_round else ['<p style="margin:0 0 12px">（你关注的范围本轮无变化）</p>'])
+    html.append('<p style="%s">今日累计</p>' % _h)
+    html.extend(today_html if has_today else ['<p style="margin:0 0 12px">（你关注的范围今日暂无变化）</p>'])
+    html.append('<p style="%s">（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）</p>' % _trailer)
+    if site:
+        html.append('<p style="%s">站点：<a href="%s">%s</a></p>' % (_site, site, site))
+    html.append('</div>')
+
+    return title, "\n".join(lines), "".join(html)
 
 
 def process_digest_files(processed, failed):
@@ -457,7 +505,7 @@ def process_digest_files(processed, failed):
 
     ok_cnt = skip_cnt = fail_cnt = new_failures = 0
     print("📬 发现采集播报货单 %d 张，拉取订户名单..." % len(files))
-    subs = fetch_digest_subscribers()
+    subs, site = fetch_digest_subscribers()
     if subs is None:
         print("  ⚠ 拉取失败：货单全部保留，下轮补扫")
         return 0, 0, 0, 1
@@ -487,10 +535,10 @@ def process_digest_files(processed, failed):
             channel = str(sub.get("channel_type") or "")
             if not uid or ADAPTERS.get(channel) is None:
                 continue
-            msg = build_digest_message(sub, digest)
+            msg = build_digest_message(sub, digest, site)
             if not msg:
                 continue
-            title, body = msg
+            title, body, html_body = msg
             row = {
                 "nid": "collector_digest:%s:%s:%s" % (uid, round_at, channel),
                 "uid": uid, "kind": "collector_digest",
@@ -501,6 +549,8 @@ def process_digest_files(processed, failed):
                 row["cred"] = cred
             if channel == "email" and sub.get("email_target"):
                 row["email_target"] = sub.get("email_target")
+                if html_body:
+                    row["html_body"] = html_body  # 仅邮件行携带 HTML 表格版
             rows.append(row)
 
         if not rows:
