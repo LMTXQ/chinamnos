@@ -18,7 +18,8 @@ import { handleResetPassword } from './auth/reset-password';
 import { handleLogout } from './auth/logout';
 import { handleMe } from './auth/me';
 import { handleNickname } from './auth/nickname';
-import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete } from './auth/notify-channels';
+import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete, handleNotifyChannelDigestPrefs } from './auth/notify-channels';
+import { handleDigestSubscribers } from './notify/digest-pull';
 import { handleSetProfile, handlePublicProfile, handleAvatar, handleSetMyAvatar } from './auth/profile';
 import { handleSetAvatar } from './admin/users';
 import { moduleGuard } from './cardhub/module-guard';
@@ -172,6 +173,10 @@ export default {
         resp = await handleNotifyChannelPrefs(request, env); // 渠道级事件偏好
       } else if (p === '/api/me/notify-channels/delete' && m === 'POST') {
         resp = await handleNotifyChannelDelete(request, env); // 解绑
+      } else if (p === '/api/me/notify-channels/digest-prefs' && m === 'POST') {
+        resp = await handleNotifyChannelDigestPrefs(request, env); // 渠道级采集播报订阅（开关+省份）
+      } else if (p === '/api/internal/digest-subscribers' && m === 'GET') {
+        resp = await handleDigestSubscribers(request, env); // 青龙拉订户名单（密钥鉴权）
       } else if (p === '/api/me/change-email/request' && m === 'POST') {
         resp = await handleChangeEmailRequest(request, env); // 修改邮箱：验密码+发验证码
       } else if (p === '/api/me/change-email/confirm' && m === 'POST') {

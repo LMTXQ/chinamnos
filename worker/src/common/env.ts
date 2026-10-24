@@ -13,4 +13,5 @@ export interface Env {
   QL_BASE_URL?: string;       // 青龙面板地址（站外通知方案 C-2；wrangler secret 写入）
   QL_CLIENT_ID?: string;      // 青龙 OpenAPI 应用凭据
   QL_CLIENT_SECRET?: string;
+  DIGEST_PULL_TOKEN?: string; // 采集播报订户名单端点密钥（/api/internal/digest-subscribers，青龙 notify_dispatch 拉取）
 }
