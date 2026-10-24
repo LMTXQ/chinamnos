@@ -12,9 +12,12 @@ import { openCred } from './channels';
    provinces 为省份代码数组（空数组 = 不限省份全收）；email 行附带 email_target。 */
 
 function tokenMatches(expected: string | undefined, got: string | null): boolean {
-  if (!expected || !got) return false;
-  const a = new TextEncoder().encode(expected);
-  const b = new TextEncoder().encode(got);
+  // 两侧 trim：token 值本身不含空白字符；防御 secret 上传管道可能夹带的行尾符
+  const e = (expected || '').trim();
+  const g = (got || '').trim();
+  if (!e || !g) return false;
+  const a = new TextEncoder().encode(e);
+  const b = new TextEncoder().encode(g);
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
