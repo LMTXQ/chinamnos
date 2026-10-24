@@ -142,9 +142,20 @@ export function toast(msg, type) {
   if (!toastEl || !document.body.contains(toastEl)) {
     toastEl = document.createElement("div");
     toastEl.id = "uiToast";
-    toastEl.style.cssText = "position:fixed;left:50%;top:24px;transform:translateX(-50%) translateY(-20px);background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 18px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:99999;display:flex;align-items:center;gap:8px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;max-width:80vw;word-break:break-all";
+    /* popover="manual"：toast 经 showPopover() 提升到浏览器 top layer。showModal() 打开的
+       <dialog> 同样渲染在 top layer，不属于任何层叠上下文——普通 fixed 元素 z-index 再高
+       （含本元素的 99999）都会被其整体盖住，这是此前弹窗内「已复制」提示被遮挡的根因。
+       入 top layer 后与 dialog 同层，后弹者居上，即可正常覆盖。
+       inset:auto;margin:0：中和 popover 的 UA 样式（inset:0;width:fit-content;margin:auto
+       会让 left:50% 定位失准），left/top/transform 等内联样式不变 */
+    toastEl.popover = "manual";
+    toastEl.style.cssText = "inset:auto;margin:0;position:fixed;left:50%;top:24px;transform:translateX(-50%) translateY(-20px);background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 18px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:99999;display:flex;align-items:center;gap:8px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;max-width:80vw;word-break:break-all";
     document.body.appendChild(toastEl);
   }
+  /* top layer 同层内后来者居上：若 toast 已在 top layer 而之后又有 dialog 入栈，dialog 会盖住
+     toast——先 hide 再 show 重入一次，保证 toast 恒在栈顶。全程 try/catch：不支持 Popover API
+     的老浏览器回落为普通 fixed 元素（仅弹窗内提示可能被遮挡，不影响其余行为） */
+  if (toastEl.hidePopover && toastEl.matches(":popover-open")) { try { toastEl.hidePopover(); } catch (e) {} }
   toastEl.innerHTML = icon(conf.ic) + "<span>" + String(msg == null ? "" : msg).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) + "</span>";
   toastEl.style.borderLeft = "3px solid " + conf.color;
   mountIcons(toastEl);
@@ -152,6 +163,7 @@ export function toast(msg, type) {
   if (tsvg) { tsvg.style.width = "16px"; tsvg.style.height = "16px"; tsvg.style.flexShrink = "0"; tsvg.style.color = conf.color; }
   toastEl.style.opacity = "1";
   toastEl.style.transform = "translateX(-50%) translateY(0)";
+  if (toastEl.showPopover) { try { toastEl.showPopover(); } catch (e) {} }
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { toastEl.style.opacity = "0"; toastEl.style.transform = "translateX(-50%) translateY(-20px)"; }, 2400);
 }
