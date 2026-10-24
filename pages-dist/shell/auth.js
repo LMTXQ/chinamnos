@@ -835,25 +835,26 @@ function onModalClick(e) {
   if (act === "nchDigestGlobal") { renderNchDigestGlobal(); return; }
   if (act === "nchDigestGlobalSave") { authGuarded(el, nchDigestGlobalSave); return; }
   if (act === "nchDigestScope") {
-    if (nchProvEditor) nchProvEditor.scope = el.dataset.scope === "custom" ? "custom" : "follow";
+    if (nchProvEditor) nchProvEditor.mode = el.dataset.scope === "custom" ? "custom" : "follow";
     getModal().querySelectorAll('#nchBody .seg-btn[data-scope]').forEach((b) => {
-      b.classList.toggle("active", b.dataset.scope === nchProvEditor?.scope);
+      b.classList.toggle("active", b.dataset.scope === nchProvEditor?.mode);
     });
     renderNchDigestScopeBody();
     return;
   }
   if (act === "nchDigestTab") {
-    if (nchDigestState) nchDigestState.active = el.dataset.carrier || "cmcc";
+    if (!nchProvEditor) return;
+    nchProvEditor.active = el.dataset.carrier || "cmcc";
     getModal().querySelectorAll('#nchDigestCarriers .seg-btn').forEach((b) => {
-      b.classList.toggle("active", b.dataset.carrier === nchDigestState?.active);
+      b.classList.toggle("active", b.dataset.carrier === nchProvEditor.active);
     });
     renderNchDigestGrid();
     return;
   }
   if (act === "nchDigestAll" || act === "nchDigestNone") {
-    if (!nchDigestState) return;
+    if (!nchProvEditor) return;
     const codes = PROVINCES.map((p) => p.code);
-    nchDigestState.carriers[nchDigestState.active] = new Set(act === "nchDigestAll" ? codes : []);
+    nchProvEditor.carriers[nchProvEditor.active] = new Set(act === "nchDigestAll" ? codes : []);
     renderNchDigestGrid();
     return;
   }
@@ -1208,7 +1209,8 @@ function renderNchDigest(type) {
   if (!body || !it) return;
   const enabled = it.collect_report === true;
   const mode = it.digest_mode === "custom" ? "custom" : "follow";
-  nchProvEditor = { scope: "channel", type, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : null), active: "cmcc" };
+  // 载入范围：独立配置用渠道自有省份；跟随全局时预载全局范围（切换到独立的起始值）
+  nchProvEditor = { scope: "channel", mode, type, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : nchGlobalPref), active: "cmcc" };
   body.innerHTML = `
     ${NCH_PROV_EDITOR_STYLE}
     <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后推送关注范围的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注范围内有变化时才会推送。保存即时生效。</p>
@@ -1234,7 +1236,7 @@ function renderNchDigest(type) {
 function renderNchDigestScopeBody() {
   const body = getModal().querySelector("#nchDigestScopeBody");
   if (!body || !nchProvEditor) return;
-  if (nchProvEditor.scope === "follow") {
+  if (nchProvEditor.mode === "follow") {
     body.innerHTML = `
       <div style="padding:10px 12px;border:1px dashed var(--line);border-radius:10px">
         <div style="font-size:13px">当前全局范围：<b>${esc(nchDigestSummaryText(nchGlobalPref))}</b></div>
@@ -1297,7 +1299,7 @@ async function nchDigestGlobalSave() {
 async function nchDigestSave(type) {
   if (!type || !nchProvEditor) return;
   const enabled = getModal().querySelector("#nchDigestEnabled")?.checked === true;
-  const mode = nchProvEditor.scope;
+  const mode = nchProvEditor.mode;
   const provinces = {};
   if (mode === "custom") {
     for (const [c] of NCH_DIGEST_CARRIERS) {
