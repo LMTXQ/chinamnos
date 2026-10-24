@@ -2114,6 +2114,9 @@ class CmccApi(_BaseCarrierApi):
 
 class CuccApi(_BaseCarrierApi):
     DEFAULT_AES_KEY = b'6b8b4567327b23c6643c527d5b8c8a17'
+    # 实测（2026-10-25）：该 msg 是上游对"目录确实无资费"的标准声明文案，视为真为空；
+    # 0001 但 msg 不符 / 其他码 / 空响应 = 异常，走业务重试
+    CUCC_EMPTY_MSG = '当前目录下暂无资费信息'
 
     def __init__(self, config):
         super().__init__(config)
@@ -2214,25 +2217,44 @@ class CuccApi(_BaseCarrierApi):
         if not cucc_prov:
             return {'data': {'beans': []}}
 
-        # 注意：非 '0000'（0001）是上游"该组合无数据"的正常语义（实测 44 组合中 14 个常态返回 0001），
-        # 不能按异常重试；数据组合的瞬时 0001 由省份层"疑似假清空核验"兜底（见 crawl_one_carrier）
-        try:
-            three_result = self._post('/queryTariffNew/threeLevelName', {
+        # 请求级判别（2026-10-25 实测上游语义）：
+        #   code='0000' → 成功（dataList 空也是合法空）
+        #   code='0001' 且 msg=标准空文案 → 上游明示该目录无资费（真为空，静默返回）
+        #   其他一切（其他码 / 0001 但 msg 不符 / 空响应）→ 失败：自身重试3次 → 上抛 → 分类级重试接管
+        def _three_req():
+            return self._post('/queryTariffNew/threeLevelName', {
                 'provinceId': cucc_prov,
                 'cityId': cucc_city,
                 'tariffAttributes': int(tariff_attr) if str(tariff_attr) in ('1', '2') else 1,
                 'firstLevel': _cucc_first or '1',
                 'secondLevel': _cucc_second or '1001',
             })
-        except Exception as e:
-            logger.warning(f'  联通 threeLevelName 失败: {e}')
-            return {'data': {'beans': []}}
+
+        def _three_expect(r):
+            if r and r.get('code') == '0000':
+                return True, ''
+            if r and r.get('code') == '0001' and r.get('msg') == self.CUCC_EMPTY_MSG:
+                return True, ''
+            reason = '空响应' if not r else f"code={r.get('code')} msg={r.get('msg', '')!s} raw={json.dumps(r, ensure_ascii=False)[:200]}"
+            return False, reason
+
+        three_result = self._call_with_business_retry(
+            _three_req,
+            desc=f'联通 threeLevelName(prov={cucc_prov}, first={_cucc_first}, second={_cucc_second})',
+            expect_fn=_three_expect,
+            retry_base_ms=retry_base_ms, retry_max_ms=retry_max_ms, retry_jitter=retry_jitter,
+        )
 
         if not three_result or three_result.get('code') != '0000':
+            # 【调查日志】上游明示的真为空：记录组合与原始 msg，供事后核对
+            _msg = three_result.get('msg', '') if three_result else '<None>'
+            logger.info(f'  联通 threeLevelName 空目录: prov={cucc_prov} first={_cucc_first} second={_cucc_second} code={three_result.get("code") if three_result else "None"} msg={_msg}')
             return {'data': {'beans': []}}
 
         items = three_result.get('data', {}).get('dataList', [])
         if not items:
+            # 【调查日志】0000 但菜单空：indexData 收录了该组合却无菜单，罕见形态，留痕排查
+            logger.warning(f'  联通 threeLevelName 菜单为空: prov={cucc_prov} first={_cucc_first} second={_cucc_second} (code=0000 但 dataList 空, 罕见形态, 关注后续是否复现)')
             return {'data': {'beans': []}}
 
         menu_ids = [it.get('id') for it in items[:limit] if it.get('id')]
