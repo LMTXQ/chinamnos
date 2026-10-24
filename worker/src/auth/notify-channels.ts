@@ -228,37 +228,6 @@ export async function handleNotifyChannelDigestPrefs(request: Request, env: Env)
   });
 }
 
-// GET /api/me/digest-prefs —— 账号全局播报范围（0041；null = 未设置 = 全收）
-export async function handleDigestGlobalGet(request: Request, env: Env): Promise<Response> {
-  const g = await guard(request, env, 'user');
-  if (g instanceof Response) return g;
-  const row = await env.DB.prepare(
-    'SELECT pref_json FROM user_digest_prefs WHERE user_id = ?1',
-  ).bind(g.viewer.id).first<{ pref_json: string | null }>();
-  let provinces: unknown = null;
-  if (row?.pref_json) {
-    try { provinces = JSON.parse(row.pref_json) as unknown; } catch { provinces = null; }
-  }
-  return ok({ provinces });
-}
-
-// PUT /api/me/digest-prefs  body: { provinces } —— 保存账号全局播报范围（upsert）
-export async function handleDigestGlobalSet(request: Request, env: Env): Promise<Response> {
-  const g = await guard(request, env, 'user');
-  if (g instanceof Response) return g;
-  let body: Record<string, unknown> = {};
-  try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
-  const prefJson = body.provinces == null ? null : normalizeProvincesPref(body.provinces);
-  if (body.provinces != null && prefJson === null) {
-    return fail(ERR.VALIDATION_ERROR, 'provinces 格式无效（需为省份代码数组或按运营商分组对象）', 400, { field: 'provinces' });
-  }
-  await env.DB.prepare(
-    `INSERT INTO user_digest_prefs (user_id, pref_json, updated_at) VALUES (?1, ?2, ?3)
-     ON CONFLICT(user_id) DO UPDATE SET pref_json = excluded.pref_json, updated_at = excluded.updated_at`,
-  ).bind(g.viewer.id, prefJson, Date.now()).run();
-  return ok({ provinces: prefJson === null ? null : JSON.parse(prefJson) });
-}
-
 // POST /api/me/notify-channels  body: { channel_type, cred }
 //   发起绑定：校验凭证 → 发验证码（真实外发）→ 存 pending
 export async function handleNotifyChannelCreate(request: Request, env: Env): Promise<Response> {
