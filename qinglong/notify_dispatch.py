@@ -65,7 +65,7 @@ DIGEST_GLOB = "coll_digest_*.json"   # 采集播报货单（采集端 chinamnos.
 KEEP_DAYS_MS = 30 * 86400 * 1000   # 去重记录保留 30 天
 ROW_RETRIES = 2                    # 行失败后行内重试次数（共 3 次尝试）
 MAX_FAILED_KEEP = 200              # 失败清单最多保留条数
-DIGEST_PULL_TIMEOUT = 20           # 拉订户名单超时（秒）
+DIGEST_PULL_TIMEOUT = 30           # 拉订户名单单次超时（秒）
 
 CARRIER_NAMES = {"cmcc": "中国移动", "cucc": "中国联通", "ctcc": "中国电信", "cbn": "中国广电"}
 
@@ -316,29 +316,36 @@ def dispatch_row(row, processed):
 
 
 def fetch_digest_subscribers():
-    """调 Worker 内部端点现拉订户名单；失败返回 None（调用方保留货单下轮补扫）。"""
+    """调 Worker 内部端点现拉订户名单；重试 3 次（面板到 CF 链路间歇抖动），
+    最终失败返回 None（调用方保留货单下轮补扫）。"""
     base = _env("DIGEST_API_BASE").rstrip("/")
     token = _env("DIGEST_PULL_TOKEN")
     if not base or not token:
         print("  ⚠ DIGEST_API_BASE / DIGEST_PULL_TOKEN 未配置，无法拉取订户名单")
         return None
-    try:
-        req = urllib.request.Request(
-            base + "/api/internal/digest-subscribers",
-            headers={"X-Digest-Token": token})
-        with urllib.request.urlopen(req, timeout=DIGEST_PULL_TIMEOUT) as r:
-            data = json.load(r)
-        if data.get("code") != 0 or not isinstance(data.get("data"), dict):
-            print("  ⚠ 订户名单接口响应异常: %s" % json.dumps(data, ensure_ascii=False)[:150])
-            return None
-        subs = data["data"].get("subscribers")
-        if not isinstance(subs, list):
-            print("  ⚠ 订户名单结构异常（subscribers 非数组）")
-            return None
-        return subs
-    except Exception as e:
-        print("  ⚠ 拉取订户名单失败: %s" % str(e)[:150])
-        return None
+    url = base + "/api/internal/digest-subscribers"
+    last_err = ""
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                url, headers={"X-Digest-Token": token, "User-Agent": "chinamnos-dispatch/1.0"})
+            with urllib.request.urlopen(req, timeout=DIGEST_PULL_TIMEOUT) as r:
+                data = json.load(r)
+            if data.get("code") != 0 or not isinstance(data.get("data"), dict):
+                print("  ⚠ 订户名单接口响应异常: %s" % json.dumps(data, ensure_ascii=False)[:150])
+                return None
+            subs = data["data"].get("subscribers")
+            if not isinstance(subs, list):
+                print("  ⚠ 订户名单结构异常（subscribers 非数组）")
+                return None
+            return subs
+        except Exception as e:
+            last_err = str(e)[:150]
+            print("  ⚠ 第 %d 次拉取失败: %s" % (attempt + 1, last_err))
+            if attempt < 2:
+                time.sleep(3)
+    print("  ⚠ 拉取订户名单失败（3 次）: %s" % last_err)
+    return None
 
 
 def _pick_provinces(carrier_counts, provinces):
