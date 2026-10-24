@@ -858,6 +858,14 @@ function onModalClick(e) {
     renderNchDigestScopeBody();
     return;
   }
+  if (act === "nchAnnScope") {
+    if (nchProvEditor) nchProvEditor.announce = el.dataset.v === "1" ? 1 : el.dataset.v === "0" ? 0 : null;
+    getModal().querySelectorAll('#nchBody .seg-btn[data-act="nchAnnScope"]').forEach((b) => {
+      const v = b.dataset.v === "1" ? 1 : b.dataset.v === "0" ? 0 : null;
+      b.classList.toggle("active", nchProvEditor?.announce === v);
+    });
+    return;
+  }
   if (act === "nchDigestTab") {
     if (!nchProvEditor) return;
     nchProvEditor.active = el.dataset.carrier || "cmcc";
@@ -1117,9 +1125,10 @@ function nchCard(it) {
   const kindSummary = it.status === "active"
     ? `<div class="h">接收：${Array.isArray(it.kinds) ? `${it.kinds.length} / ${NOTIFY_KINDS.length} 类事件` : "全部类型"}</div>`
     : "";
-  // 采集播报摘要：collect_report 布尔 + 范围来源（跟随全局 / 独立配置）
+  // 采集播报摘要：collect_report 布尔 + 范围来源（跟随全局 / 独立配置）+ 公告开关状态
+  const annTxt = it.announce_push === 1 ? " · 公告开" : it.announce_push === 0 ? " · 公告关" : "";
   const digestSummary = it.status === "active"
-    ? `<div class="h">采集播报：${it.collect_report ? (it.digest_mode === "custom" ? `独立 · ${nchDigestSummaryText(it.provinces)}` : "跟随账号全局") : "未开启"}</div>`
+    ? `<div class="h">采集播报：${it.collect_report ? (it.digest_mode === "custom" ? `独立 · ${nchDigestSummaryText(it.provinces)}` : "跟随账号全局") : "未开启"}${it.collect_report ? annTxt : ""}</div>`
     : "";
   // 接收类型摘要：kinds_mode（跟随全局 / 独立配置）
   const kindsSummary = it.status === "active"
@@ -1263,7 +1272,7 @@ function renderNchDigest(type) {
   const enabled = it.collect_report === true;
   const mode = it.digest_mode === "custom" ? "custom" : "follow";
   // 载入范围：独立配置用渠道自有省份；跟随全局时预载全局范围（切换到独立的起始值）
-  nchProvEditor = { scope: "channel", mode, type, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : nchGlobalPref?.provinces), active: "cmcc" };
+  nchProvEditor = { scope: "channel", mode, type, announce: it.announce_push === 1 ? 1 : it.announce_push === 0 ? 0 : null, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : nchGlobalPref?.provinces), active: "cmcc" };
   body.innerHTML = `
     ${NCH_PROV_EDITOR_STYLE}
     <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后推送关注范围的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注范围内有变化时才会推送。保存即时生效。</p>
@@ -1271,6 +1280,12 @@ function renderNchDigest(type) {
       <input type="checkbox" id="nchDigestEnabled" ${enabled ? "checked" : ""}>
       <span>采集完成后推送播报</span>
     </label>
+    <p class="hint" style="margin:0 0 6px">公告新增：</p>
+    <div class="seg" style="margin-bottom:10px">
+      <button type="button" class="seg-btn${nchProvEditor.announce === null ? " active" : ""}" data-act="nchAnnScope" data-v="follow">跟随账号全局</button>
+      <button type="button" class="seg-btn${nchProvEditor.announce === 1 ? " active" : ""}" data-act="nchAnnScope" data-v="1">开启</button>
+      <button type="button" class="seg-btn${nchProvEditor.announce === 0 ? " active" : ""}" data-act="nchAnnScope" data-v="0">关闭</button>
+    </div>
     <p class="hint" style="margin:0 0 6px">接收范围：</p>
     <div class="seg" style="margin-bottom:10px">
       <button type="button" class="seg-btn${mode === "follow" ? " active" : ""}" data-act="nchDigestScope" data-scope="follow">跟随账号全局</button>
@@ -1327,6 +1342,10 @@ function renderNchDigestGlobal() {
     </div>
     <div id="nchDigestGrid"></div>
     <p class="hint" style="margin:8px 2px 0">某运营商内不勾选任何省份 = 不接收该运营商的播报；全部不勾 = 未设置（各渠道跟随模式下收全部省份）。</p>
+    <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin:10px 0 0;cursor:pointer">
+      <input type="checkbox" id="nchGlobalAnnounce" ${nchGlobalPref?.announce_push === 1 ? "checked" : ""}>
+      <span>公告新增推送<span class="hint">各运营商官网公告有新增时推送（不含正文，附站点链接与分享深链）</span></span>
+    </label>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
       <button class="btn primary" data-act="nchDigestGlobalSave">保存全局范围</button>
@@ -1342,7 +1361,8 @@ async function nchDigestGlobalSave() {
     const codes = [...(nchProvEditor.carriers[c] || new Set())];
     if (codes.length) provinces[c] = codes;
   }
-  const r = await api.digestGlobalSave(provinces, null);
+  const announce = getModal().querySelector("#nchGlobalAnnounce")?.checked === true ? 1 : 0;
+  const r = await api.digestGlobalSave(provinces, null, announce);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   nchGlobalPref = r.data ?? null; // { provinces, kinds }
   toast("账号全局播报范围已保存");
@@ -1387,7 +1407,7 @@ async function nchDigestSave(type) {
       if (codes.length) provinces[c] = codes;
     }
   }
-  const r = await api.notifyDigestPrefs(type, { enabled, mode, provinces });
+  const r = await api.notifyDigestPrefs(type, { enabled, mode, provinces, announce_push: nchProvEditor.announce });
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   toast("采集播报偏好已保存");
   await renderNchList();

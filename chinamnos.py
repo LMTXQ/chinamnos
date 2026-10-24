@@ -5429,12 +5429,15 @@ def _write_digest_json(path, obj):
     os.replace(tmp, path)
 
 
-def write_collector_digest(config, all_crawl_results):
-    """每轮采集结束后调用：写本轮 digest（含当日累计）→ 叫醒分发脚本。
-    无变更轮次不写文件不叫醒（免打扰，已确认口径）；任何异常仅告警，不影响采集主流程。"""
+def write_collector_digest(config, all_crawl_results, announce_new=None):
+    """每轮采集结束后调用：写本轮 digest（含当日累计与公告新增）→ 叫醒分发脚本。
+    资费无变更且公告无新增 → 不写文件不叫醒（免打扰，已确认口径）；
+    任何异常仅告警，不影响采集主流程。"""
     try:
         if not config.get('notification', {}).get('channels', {}).get('ext_msg', False):
             return
+        if not isinstance(announce_new, dict):
+            announce_new = {}
         d = resolve_digest_dir(config)
         now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
         date_str = now.strftime('%Y%m%d')
@@ -5444,8 +5447,8 @@ def write_collector_digest(config, all_crawl_results):
             counts = _digest_counts(crawl_results)
             if counts:
                 round_counts[carrier_key] = counts
-        if not round_counts:
-            logger.info('[digest] 本轮无变更，不生成采集播报文件')
+        if not round_counts and not announce_new:
+            logger.info('[digest] 本轮无变更（资费/公告均无），不生成采集播报文件')
             return
 
         # 当日累计：读旧状态合并（日期翻篇自动重置；旧文件损坏按无累计处理）
@@ -5467,11 +5470,12 @@ def write_collector_digest(config, all_crawl_results):
             'round_at': int(now.timestamp() * 1000),
             'round': round_counts,
             'today': today_counts,
+            'announce': announce_new,
         }
         digest_path = os.path.join(d, 'coll_digest_%s_%s.json' % (date_str, now.strftime('%H%M%S')))
         _write_digest_json(digest_path, digest)
         logger.info(f'[digest] 采集播报已落盘: {os.path.basename(digest_path)}'
-                    f'（{len(round_counts)} 运营商有变更，目录: {d}）')
+                    f'（资费变更 {len(round_counts)} 运营商 / 公告新增 {len(announce_new)} 运营商，目录: {d}）')
 
         # 叫醒分发脚本（文件即队列；flock 防重入，撞锁/失败退出码均忽略，文件留给下轮补扫）
         dispatch = os.path.join(d, 'notify_dispatch.py')
@@ -6721,8 +6725,9 @@ def run():
 
     _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_duration_ms, all_success_count, all_fail_count, old_stats)
     # ── 公告监测（与资费采集隔离：失败仅记日志，不影响资费上传）──
+    _announce_new = None
     try:
-        fetch_announcements(config, storage)
+        _announce_new = fetch_announcements(config, storage)
     except Exception as _ann_e:
         logger.warning('[announce] 公告采集异常(已忽略，不影响资费): %s' % str(_ann_e)[:120])
 
@@ -6802,7 +6807,7 @@ def run():
         send_notification('资费监控-无变化', build_nochange_message(), config)
 
     # 采集播报（ext_msg 通道）：全量整理 digest → 叫醒分发（ext_msg 关闭/无变化时内部自动跳过）
-    write_collector_digest(config, all_crawl_results)
+    write_collector_digest(config, all_crawl_results, _announce_new)
 
 
 # ======================================================================
@@ -7738,11 +7743,14 @@ def _ann_cmcc_gd(ann_cfg):
 # ---------------- 调度器 ----------------
 def fetch_announcements(config, storage):
     """主流程尾部调用：四源独立 try，产出 4 × data/{carrier}/announce.json。
-    抓空且全源失败 → 跳过该 carrier 写盘（防源站抖动清空线上公告）。"""
+    抓空且全源失败 → 跳过该 carrier 写盘（防源站抖动清空线上公告）。
+    返回公告新增清单 {carrier: [ {carrier,id,title,date,province} ]}（采集播报用，
+    首轮建基线/无新增/未启用 → 空对象）。"""
+    announce_new = {}
     ann_cfg = _ann_load_config(config)
     if not ann_cfg["enabled"]:
         logger.info("[announce] 公告采集未启用（TARIFF_CONFIG.announce.enabled=false），跳过")
-        return
+        return announce_new
     lim = ann_cfg["limits"]
     jobs = [
         ("cmcc", _ann_cmcc, True),
@@ -7820,6 +7828,23 @@ def fetch_announcements(config, storage):
                 inherited += 1
         if inherited:
             logger.info("[announce] %s 继承上轮正文 %d 条（本轮详情接口部分失败）" % (carrier, inherited))
+        # 采集播报：对比旧公告找新增（按 运营商+公告id 判新增；只看新增，公告无下架概念）。
+        # 首轮/旧文件缺失（old_by_id 空）→ 只建基线不产出，防存量爆量；
+        # 单运营商单轮截断 10 条（分发端超出部分显示"等 N 条"）。
+        new_items = [it for it in kept if str(it.get("id") or "") not in old_by_id]
+        if old_by_id and new_items:
+            trimmed = new_items[:10]
+            announce_new[carrier] = [
+                {"carrier": carrier, "id": str(it.get("id") or ""),
+                 "title": (it.get("title") or "")[:120], "date": it.get("date") or "",
+                 "province": it.get("province") or ""}
+                for it in trimmed
+            ]
+            extra = len(new_items) - len(trimmed)
+            logger.info("[announce] %s 新增公告 %d 条（播报收录 %d 条%s）"
+                        % (carrier, len(new_items), len(trimmed), ("，截断 %d 条" % extra) if extra > 0 else ""))
+        elif not old_by_id:
+            logger.info("[announce] %s 首轮建立公告基线（%d 条），本轮不推送新增" % (carrier, len(kept)))
         payload = {
             "v": 1,
             "carrier": carrier,
@@ -7842,6 +7867,7 @@ def fetch_announcements(config, storage):
             logger.warning("[announce] %s 写盘失败: %s" % (carrier, str(e)[:80]))
     logger.info("[announce] 公告采集完成，共 %d 条，总耗时 %.0fs" % (total, time.time() - t0))
     _carrier_ctx.carrier = '系统'   # 清理上下文，避免后续部署日志误挂运营商名
+    return announce_new
 
 
 if __name__ == '__main__':
