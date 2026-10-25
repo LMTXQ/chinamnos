@@ -5,7 +5,7 @@ window.__FRONTEND_CONFIG__ = {
     { "id": "config", "src": "modules/config/config.js?v=20261023c", "route": "/config" },
     { "id": "cardhub", "src": "modules/cardhub/cardhub.js?v=20261025a", "route": "/cardhub" },
     { "id": "ticket", "src": "modules/ticket/ticket.js?v=20261025a", "route": "/ticket" },
-    { "id": "tools", "src": "modules/tools/tools.js?v=20261025a", "route": "/tools" },
+    { "id": "tools", "src": "modules/tools/tools.js?v=20261025b", "route": "/tools" },
     { "id": "admin", "src": "modules/admin/admin.js?v=20261023a", "route": "/admin" }
   ]
 };

@@ -5086,9 +5086,28 @@ def _fav_local_file(fav_dir, site_url):
     return None
 
 
+def _fetch_icon_file(icon_url):
+    """下载指定图标 URL，返回 (bytes, 扩展名) 或 None。校验口径同 _fetch_favicon（体积上限/拒 HTML）。
+    requests 默认不带 Referer 头——gitee 图床等防盗链对无 Referer 放行（浏览器 <img> 带 Referer 会 403）"""
+    try:
+        parsed = urlparse(icon_url)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+            return None
+        r = requests.get(icon_url, timeout=(5, 8), headers=_FAV_HEADERS)
+        ctype = (r.headers.get('Content-Type') or '').lower()
+        if not (r.ok and r.content and len(r.content) <= 200 * 1024) or 'html' in ctype:
+            return None
+        return r.content, _fav_ext_from(r.headers.get('Content-Type'), icon_url)
+    except Exception:
+        return None
+
+
 def _enrich_nav_icons(storage, data):
-    """为觅珍集库（nav_links toolbox）无图标的站点补本地 favicon：
-    本地已有 → 直接覆写 icon_url；没有 → 抓取下载后覆写。
+    """为觅珍集库（nav_links toolbox）处理站点图标：
+    ▸ 无图标站点：补抓本地 favicon（本地已有 → 直接覆写 icon_url；没有 → 抓取下载后覆写）
+    ▸ 站长已指定外站图标：下载转存到 local_cache/favicons/ 并覆写为同源路径 /data/favicons/<name>，
+      免受第三方图床防盗链影响（同源加载不再依赖对方 Referer 策略）；文件名 = md5(icon_url)[:12]，
+      换图自动新名重抓，同图天然去重；下载失败保留原 URL（前端 no-referrer 兜底）
     仅改写烘焙产物内存对象，管理端 nav_links 源数据不动；失败不影响烘焙主流程。"""
     try:
         st = getattr(storage, 'primary', storage)
@@ -5104,8 +5123,25 @@ def _enrich_nav_icons(storage, data):
             url = (it.get('url') or '').strip()
             if not url or url.startswith('/') or url.startswith('#'):
                 continue   # 站内链接无外站图标
-            if (it.get('icon_url') or '').strip():
-                continue   # 站长已指定图标，尊重不覆盖
+            icon_url = (it.get('icon_url') or '').strip()
+            if icon_url:
+                # 站长已指定图标：外站 http(s) 图下载转存本地；本地已有副本直接复用不重下
+                existing = _fav_local_file(fav_dir, icon_url)
+                if existing is None:
+                    if fetched >= 20:
+                        continue   # 单轮抓取上限（与补抓 favicon 共用预算），防拖死采集
+                    got = _fetch_icon_file(icon_url)
+                    if got:
+                        content, ext = got
+                        with open(os.path.join(fav_dir, _fav_name_for(icon_url) + ext), 'wb') as f:
+                            f.write(content)
+                        existing = _fav_name_for(icon_url) + ext
+                        fetched += 1
+                        time.sleep(0.3)   # 温和节流
+                if existing:
+                    it['icon_url'] = f'/data/favicons/{existing}'   # 同源路径：SPA 部署于站点根
+                # 下载失败：保留原 icon_url（远程 URL），前端 referrerpolicy=no-referrer 兜底
+                continue
             existing = _fav_local_file(fav_dir, url)
             if existing is None:
                 if fetched >= 20:

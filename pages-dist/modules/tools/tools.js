@@ -99,7 +99,7 @@ function cardHTML(it, style) {
   const chain = iconChain(it.url, it.icon_url);
   const internal = /^\/(?!\/)/.test(it.url);
   const iconEl = chain
-    ? `<img class="tl-card-ico" src="${esc(chain[0])}" alt="" loading="lazy" data-chain="${esc(chain.slice(1).join("|"))}" data-fb="${esc((it.title || "?").charAt(0))}">`
+    ? `<img class="tl-card-ico" src="${esc(chain[0])}" alt="" loading="lazy" referrerpolicy="no-referrer" data-chain="${esc(chain.slice(1).join("|"))}" data-fb="${esc((it.title || "?").charAt(0))}">`
     : `<span class="tl-card-ico tl-ico-txt">${esc((it.title || "?").charAt(0).toUpperCase())}</span>`;
   const href = internal ? `#${it.url}` : it.url;
   const external = internal ? "" : ` target="_blank" rel="noopener noreferrer"`;
@@ -326,7 +326,7 @@ function openLinkConfirm(tid) {
   try { host = new URL(it.url, location.origin).host || it.url; } catch { /* 保持原值 */ }
   const chain = iconChain(it.url, it.icon_url);
   const ico = chain
-    ? `<img class="tl-cf-ico" src="${esc(chain[0])}" alt="" data-chain="${esc(chain.slice(1).join("|"))}" data-fb="${esc((it.title || "?").charAt(0))}">`
+    ? `<img class="tl-cf-ico" src="${esc(chain[0])}" alt="" referrerpolicy="no-referrer" data-chain="${esc(chain.slice(1).join("|"))}" data-fb="${esc((it.title || "?").charAt(0))}">`
     : `<span class="tl-cf-ico tl-ico-txt">${esc((it.title || "?").charAt(0).toUpperCase())}</span>`;
   const mask = document.createElement("div");
   mask.className = "tl-confirm-mask";
