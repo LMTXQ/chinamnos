@@ -20,10 +20,32 @@ const TURNSTILE_SITEKEY = "0x4AAAAAAFFH8cKk2ttfupI-";
 /* 本地开发环境跳过 Turnstile（localhost 不在 sitekey 域名白名单，widget 必然失败） */
 const IS_LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 
+/* Turnstile 渲染开关：读后端 turnstile_enforced（/api/meta，5 分钟边缘缓存），关闭时不加载/不渲染组件。
+   meta 到手前按开启处理（安全侧，行为同旧版）；拉取失败也按开启处理。
+   ▸ 后端校验与此开关同源实时生效：关掉 enforced 后空 token 即可登录，前端只是不再显示框
+   ▸ noteCaptchaErr：后端拒 CAPTCHA_FAILED = enforced 实际开启（前端 flag 可能被边缘缓存滞后误导），
+     立即恢复渲染，防"框被隐藏 + 空 token 被拒"死循环 */
+let turnstileOn = true;
+if (!IS_LOCAL) {
+  api.request("/api/meta")
+    .then((r) => (r.ok && r.data && typeof r.data.turnstile === "boolean") ? r.data.turnstile : true)
+    .catch(() => true)
+    .then((v) => {
+      turnstileOn = v;
+      if (!v) document.querySelectorAll(".auth-turnstile").forEach((el) => { el.style.display = "none"; el.innerHTML = ""; });
+    });
+}
+function noteCaptchaErr(code) {
+  if (code === "CAPTCHA_FAILED") {
+    turnstileOn = true;
+    document.querySelectorAll(".auth-turnstile").forEach((el) => { el.style.display = ""; });
+  }
+}
+
 /* ─────────────── Turnstile ─────────────── */
 let turnstileLoaded = false;
 function ensureTurnstile() {
-  if (IS_LOCAL) return Promise.resolve();
+  if (IS_LOCAL || !turnstileOn) return Promise.resolve();
   return new Promise((resolve) => {
     if (window.turnstile) { resolve(); return; }
     if (turnstileLoaded) {
@@ -43,12 +65,15 @@ function ensureTurnstile() {
   });
 }
 function getTurnstileToken() {
+  if (!turnstileOn) return "";
   try { return window.turnstile?.getResponse() || ""; } catch { return ""; }
 }
 function renderTurnstile(containerId) {
   const el = document.getElementById(containerId);
-  if (IS_LOCAL) { if (el) el.style.display = "none"; return; }
-  if (!el || !window.turnstile) return;
+  if (IS_LOCAL || !turnstileOn) { if (el) el.style.display = "none"; return; }
+  if (!el) return;
+  if (!window.turnstile) { ensureTurnstile().then(() => renderTurnstile(containerId)); return; }   // 脚本未就绪（flag 后到/竞态）时懒加载重入
+  el.style.display = "";
   el.innerHTML = "";
   try { window.turnstile.render(el, { sitekey: TURNSTILE_SITEKEY }); } catch {}
 }
@@ -548,7 +573,7 @@ async function authSubmit() {
   loginState.pwd = pwd;
 
   const lp = await api.loginParams(email, captcha);
-  if (!lp.ok) { toast(authErr(lp.error) || "参数获取失败"); renderTurnstile("authTurnstile"); return; }
+  if (!lp.ok) { noteCaptchaErr(lp.error); toast(authErr(lp.error) || "参数获取失败"); renderTurnstile("authTurnstile"); return; }
   loginState.salt = lp.data.salt;
   loginState.iter = lp.data.iter;
   loginState.k = await pbkdf2Base64(pwd, lp.data.salt, lp.data.iter);
@@ -574,6 +599,7 @@ async function authSubmit() {
     renderTurnstile("authTurnstile");
     return;
   }
+  noteCaptchaErr(lr.error);
   toast(authErr(lr.error) || "登录失败");
   renderTurnstile("authTurnstile");
 }
@@ -584,7 +610,7 @@ async function authConfirmSend() {
   loginState.salt = randomSalt();
   loginState.k = await pbkdf2Base64(loginState.pwd, loginState.salt, DEFAULT_ITER);
   const sc = await api.sendCode(loginState.email, captcha);
-  if (!sc.ok) { toast(authErr(sc.error) || "验证码发送失败"); renderTurnstile("authTurnstile"); return; }
+  if (!sc.ok) { noteCaptchaErr(sc.error); toast(authErr(sc.error) || "验证码发送失败"); renderTurnstile("authTurnstile"); return; }
   renderLoginBody("code");
   toast("验证码已发送至邮箱，验证通过即完成注册");
 }
@@ -594,7 +620,7 @@ async function authRegister() {
   const captcha = getTurnstileToken();
   if (code.length !== 6) { toast("请输入 6 位验证码"); return; }
   const r = await api.register(loginState.email, loginState.k, loginState.salt, DEFAULT_ITER, code, captcha);
-  if (!r.ok) { toast(authErr(r.error) || "注册失败"); renderTurnstile("authTurnstile"); return; }
+  if (!r.ok) { noteCaptchaErr(r.error); toast(authErr(r.error) || "注册失败"); renderTurnstile("authTurnstile"); return; }
   closeModal();
   toast("注册成功，已自动登录");
   emit("login"); emit("change");
@@ -605,7 +631,7 @@ async function authResend() {
   const captcha = getTurnstileToken();
   const sc = await api.sendCode(loginState.email, captcha);
   toast(sc.ok ? "验证码已重新发送" : (authErr(sc.error) || "发送失败"));
-  if (!sc.ok) renderTurnstile("authTurnstile");
+  if (!sc.ok) { noteCaptchaErr(sc.error); renderTurnstile("authTurnstile"); }
 }
 
 /* ─────────────── 改密流程 ─────────────── */
@@ -644,7 +670,7 @@ async function authSendReset() {
   if (!emailDomainOk(email)) { toast(EMAIL_DOMAIN_HINT); return; }
   resetState.email = email;
   const r = await api.sendResetCode(email, captcha);
-  if (!r.ok) { toast(r.error || "发送失败"); renderTurnstile("authTurnstile"); return; }
+  if (!r.ok) { noteCaptchaErr(r.error); toast(r.error || "发送失败"); renderTurnstile("authTurnstile"); return; }
   resetState.step = "reset";
   renderResetBody();
   toast("验证码已发送");
@@ -661,11 +687,11 @@ async function authDoReset() {
 
   // 用 login-params 取该用户当前的盐和迭代次数
   const lp = await api.loginParams(resetState.email, captcha);
-  if (!lp.ok) { toast(lp.error || "参数获取失败"); renderTurnstile("authTurnstile"); return; }
+  if (!lp.ok) { noteCaptchaErr(lp.error); toast(lp.error || "参数获取失败"); renderTurnstile("authTurnstile"); return; }
   const k = await pbkdf2Base64(pwd, lp.data.salt, lp.data.iter);
 
   const r = await api.resetPassword(resetState.email, k, lp.data.salt, lp.data.iter, code, captcha);
-  if (!r.ok) { toast(r.error || "修改失败"); renderTurnstile("authTurnstile"); return; }
+  if (!r.ok) { noteCaptchaErr(r.error); toast(r.error || "修改失败"); renderTurnstile("authTurnstile"); return; }
   closeModal();
   toast("密码已修改，请重新登录");
   await Auth.logout();

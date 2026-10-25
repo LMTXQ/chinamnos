@@ -7,7 +7,9 @@ import { getFlags } from './settings';
 export async function handleMeta(env: Env): Promise<Response> {
   const flags = await getFlags(env);
   return ok(
-    { modules: { cardhub: flags.cardhub } },
+    // turnstile：前端登录/注册表单据此决定是否渲染人机验证组件（后端 verifyTurnstile 同源开关实时生效；
+    // 此处经 5 分钟边缘缓存，前端隐藏组件最多延迟 5 分钟，校验放行不受影响）
+    { modules: { cardhub: flags.cardhub }, turnstile: flags.turnstile },
     { 'Cache-Control': 'public, max-age=300' },
   );
 }
