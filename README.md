@@ -5,7 +5,7 @@
 **运营商公开资费聚合 · 变更监控 · 号卡市集**
 
 自动采集中国移动 / 中国联通 / 中国电信 / 中国广电官网公开资费与公告，
-提供变更对比、跳蚤市集、活动攻略与社区板块。
+提供变更对比与社区服务。
 
 [![在线访问](https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E8%AE%BF%E9%97%AE-chinamnos.ftac.dpdns.org-2E7CF6?logo=googlechrome&logoColor=white)](https://chinamnos.ftac.dpdns.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
