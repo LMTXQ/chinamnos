@@ -276,7 +276,7 @@ export async function handleTicketDelete(request: Request, env: Env, id: string)
   const viewer = g as Viewer;
 
   const t = await env.DB.prepare(`SELECT * FROM tickets WHERE id = ?1`).bind(id).first<TicketRow>();
-  if (!t) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
+  if (!t) return fail(ERR.GONE, 'ALREADY_DELETED', 410);
   if (t.user_id !== viewer.id) return fail(ERR.FORBIDDEN, 'FORBIDDEN', 403);
   if (t.status !== 'closed') return fail(ERR.VALIDATION_ERROR, 'MUST_BE_CLOSED', 400);
 

@@ -377,7 +377,10 @@ async function deleteTicket(id) {
   const tid = id || S.detailId;
   if (!confirm("确定永久删除该工单？此操作不可恢复。")) return;
   const r = await api.request(`/api/tickets/${encodeURIComponent(tid)}`, { method: "DELETE" });
-  if (!r.ok) { toast(r.error || "删除失败"); return; }
+  if (!r.ok) {
+    if (r.code === 41000) { toast("工单已被删除"); backList(); return; }
+    toast(r.error || "删除失败"); return;
+  }
   toast("工单已删除");
   backList();
 }
