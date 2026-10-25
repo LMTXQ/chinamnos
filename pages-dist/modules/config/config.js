@@ -855,6 +855,7 @@ function buildConfig() {
         ext_msg: document.getElementById('notifyChExt').checked,
       },
       digest_dir: document.getElementById('notifyDigestDir').value.trim(),
+      dispatch_workers: Math.max(1, Math.min(32, parseInt(document.getElementById('notifyDispatchWorkers').value) || 8)),
       smtp_accounts: collectSmtpAccounts(),
       types: {
         change: document.getElementById('notifyChange').checked,
@@ -1155,6 +1156,7 @@ function applyConfig(config) {
   document.getElementById('notifyChQl').checked = channels.ql_panel !== false;
   document.getElementById('notifyChExt').checked = channels.ext_msg === true;
   document.getElementById('notifyDigestDir').value = notify.digest_dir || '';
+  document.getElementById('notifyDispatchWorkers').value = notify.dispatch_workers || 8;
   smtpAccounts = Array.isArray(notify.smtp_accounts)
     ? notify.smtp_accounts.map(a => Object.assign({}, a))
     : [];
@@ -1923,6 +1925,7 @@ Shell.registerPage({
       </div>
       <div class="f-row" style="margin-top:8px">
         <div class="fg"><label>分发脚本目录 <span class="help" data-tip="统一工作目录：chinamnos.py、notify_dispatch.py、采集播报 digest 文件都放在这里。留空 = 脚本自身所在目录（青龙 scripts/chinamnos）。配置错误不影响采集主流程，仅告警回退。">?</span><span class="hint">(digest_dir)</span></label><input type="text" id="notifyDigestDir" value="" placeholder="留空 = 脚本所在目录，如 /ql/data/scripts/chinamnos"></div>
+        <div class="fg"><label>分发并发线程数 <span class="help" data-tip="notify_dispatch.py 并发发送通知的线程数（notification.dispatch_workers）。每个线程同时向不同用户 webhook 发送，值越大分发越快；企微/钉钉 webhook 按用户各自限流，互不影响。1 = 串行（旧行为）。留空/0 = 默认 8。上限 32。">?</span><span class="hint">(dispatch_workers)</span></label><input type="number" id="notifyDispatchWorkers" value="8" min="1" max="32"></div>
       </div>
     </div>
 

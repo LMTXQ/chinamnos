@@ -281,13 +281,21 @@ ADAPTERS = {
 
 
 # ───────────────────────── 分发主流程 ─────────────────────────
-def dispatch_row(row, processed):
-    """分发单行：去重 → 适配器 → 行内重试。返回 (状态, 错误)，状态 ∈ ok|skip|fail。"""
-    nid = str(row.get("nid") or "")
-    if not nid:
-        return "fail", "payload 行缺少 nid"
-    if nid in processed:
-        return "skip", "已处理过（去重拦截）"
+def _dispatch_workers():
+    """分发并发线程数：读 TARIFF_CONFIG.notification.dispatch_workers（配置页「通知类型开关」面板可配），
+    1~32 夹紧，缺省/解析失败回退 8。"""
+    raw = _env("TARIFF_CONFIG")
+    if raw:
+        try:
+            n = int(((json.loads(raw).get("notification") or {}).get("dispatch_workers")) or 8)
+            return max(1, min(32, n))
+        except Exception:
+            pass
+    return 8
+
+
+def _send_with_retry(row):
+    """线程内执行：适配器调用 + 行内重试。不做去重、不碰任何共享状态，返回 (状态, 错误)。"""
     channel = str(row.get("channel_type") or "")
     adapter = ADAPTERS.get(channel)
     if adapter is None:
@@ -301,13 +309,49 @@ def dispatch_row(row, processed):
         try:
             ok, err = adapter(cred, title, body, row)
             if ok:
-                processed[nid] = int(time.time() * 1000) + KEEP_DAYS_MS
                 return "ok", err
         except Exception as e:
             err = str(e)
         if attempt < ROW_RETRIES:
             time.sleep(1)
     return "fail", err
+
+
+def dispatch_rows(rows, processed, workers=8):
+    """并发分发一批行：去重前置（主线程）→ 线程池发送 → 主线程统一记账。
+    返回 [(nid, channel, status, note)]，status ∈ ok|skip|fail。
+    线程只发送不记账；processed 写入全部在主线程（as_completed 回收处），无竞态。
+    崩溃安全语义不变：调用方在全部结果记账并落盘 processed 之后才删货单文件。"""
+    out = []
+    todo = []
+    for row in rows:
+        nid = str(row.get("nid") or "")
+        if not nid:
+            out.append(("", str(row.get("channel_type") or ""), "fail", "payload 行缺少 nid"))
+            continue
+        if nid in processed:
+            out.append((nid, str(row.get("channel_type") or ""), "skip", "已处理过（去重拦截）"))
+            continue
+        todo.append(row)
+    if not todo:
+        return out
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    workers = max(1, min(int(workers or 8), len(todo), 32))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_send_with_retry, row): row for row in todo}
+        for fut in as_completed(futs):
+            row = futs[fut]
+            nid = str(row.get("nid") or "")
+            channel = str(row.get("channel_type") or "")
+            try:
+                status, note = fut.result()
+            except Exception as e:  # 兜底：_send_with_retry 内部已捕获，不应到达
+                status, note = "fail", str(e)
+            if status == "ok":
+                processed[nid] = int(time.time() * 1000) + KEEP_DAYS_MS
+            out.append((nid, channel, status, note))
+    return out
 
 
 # ───────────────────────── 采集播报（方案批次三：digest 分支） ─────────────────────────
@@ -556,7 +600,7 @@ def build_digest_message(sub, digest, site=""):
     return title, "\n".join(lines), "".join(html)
 
 
-def process_digest_files(processed, failed):
+def process_digest_files(processed, failed, workers=8):
     """处理采集播报货单（coll_digest_*.json）。返回 (ok, skip, fail, new_failures)。"""
     files = sorted(glob.glob(os.path.join(DATA_DIR, DIGEST_GLOB)))
     if not files:
@@ -618,22 +662,21 @@ def process_digest_files(processed, failed):
             continue
 
         f_ok = f_skip = f_fail = 0
-        for row in rows:
-            status, note = dispatch_row(row, processed)
+        for nid, channel, status, note in dispatch_rows(rows, processed, workers):
             if status == "ok":
                 ok_cnt += 1
                 f_ok += 1
-                print("  ✅ %s → %s" % (row["nid"], row["channel_type"]))
+                print("  ✅ %s → %s" % (nid, channel))
             elif status == "skip":
                 skip_cnt += 1
                 f_skip += 1
-                print("  ⏭  %s 已处理过，去重跳过" % row["nid"])
+                print("  ⏭  %s 已处理过，去重跳过" % nid)
             else:
                 fail_cnt += 1
                 f_fail += 1
                 new_failures += 1
-                append_failed(failed, row["nid"], row["channel_type"], note)
-                print("  ❌ %s (%s)：%s" % (row["nid"], row["channel_type"], note))
+                append_failed(failed, nid, channel, note)
+                print("  ❌ %s (%s)：%s" % (nid, channel, note))
 
         # 先落盘去重状态再删货单（与 batch 同语义：崩溃最多重发单张货单内的消息）
         _write_json(PROCESSED_FILE, processed)
@@ -656,6 +699,8 @@ def main():
         lock_fp = None
 
     try:
+        workers = _dispatch_workers()
+        print("🧵 分发并发线程数：%d（TARIFF_CONFIG.notification.dispatch_workers，1~32）" % workers)
         processed = load_processed()
         failed = load_failed()
         files = sorted(glob.glob(os.path.join(DATA_DIR, PAYLOAD_GLOB)))
@@ -679,19 +724,18 @@ def main():
                 new_failures += 1
                 continue
 
-            for row in rows:
-                status, note = dispatch_row(row, processed)
+            for nid, channel, status, note in dispatch_rows(rows, processed, workers):
                 if status == "ok":
                     ok_cnt += 1
-                    print("  ✅ %s → %s" % (row.get("nid"), row.get("channel_type")))
+                    print("  ✅ %s → %s" % (nid, channel))
                 elif status == "skip":
                     skip_cnt += 1
-                    print("  ⏭  %s 已处理过，去重跳过" % row.get("nid"))
+                    print("  ⏭  %s 已处理过，去重跳过" % nid)
                 else:
                     fail_cnt += 1
                     new_failures += 1
-                    append_failed(failed, row.get("nid"), row.get("channel_type"), note)
-                    print("  ❌ %s (%s)：%s" % (row.get("nid"), row.get("channel_type"), note))
+                    append_failed(failed, nid, channel, note)
+                    print("  ❌ %s (%s)：%s" % (nid, channel, note))
 
             # 文件内全部行消化（成功/去重/失败均已记账）→ 先落盘去重状态再删文件：
             # 若中途崩溃，最多重发最后一个文件内的消息，不会全量重发
@@ -700,7 +744,7 @@ def main():
             print("  🗑  %s 已消化删除" % name)
 
         # ── 采集播报货单（方案批次三，与 batch 并行独立）──
-        d_ok, d_skip, d_fail, d_new = process_digest_files(processed, failed)
+        d_ok, d_skip, d_fail, d_new = process_digest_files(processed, failed, workers)
         ok_cnt += d_ok
         skip_cnt += d_skip
         fail_cnt += d_fail
