@@ -224,7 +224,8 @@ function renderDetailView() {
       <span class="tk-meta">${t.scope === "all" ? "管理组全员可见" : "仅指定成员与站长可见"}</span>
     </div>
     <h1 class="tk-detail-title">${esc(t.title)}</h1>
-    ${closed ? `<div class="tk-closed">${icon("check")} 工单已关闭 · ${esc(CLOSE_LABEL[t.close_reason] || "已关闭")}</div>` : ""}
+    ${closed ? `<div class="tk-closed">${icon("check")} 工单已关闭 · ${esc(CLOSE_LABEL[t.close_reason] || "已关闭")}</div>
+    <div style="margin:12px 0"><button class="btn ghost" data-act="deleteTicket"><i data-icon="trash"></i>删除工单</button></div>` : ""}
     <div class="tk-msgs">${d.messages.map(bubbleHTML).join("")}</div>
     ${closed ? "" : `
     <div class="tk-reply">
@@ -371,6 +372,14 @@ async function closeTicket() {
   await openTicket(S.detailId);
 }
 
+async function deleteTicket() {
+  if (!confirm("确定永久删除该工单？此操作不可恢复。")) return;
+  const r = await api.request(`/api/tickets/${encodeURIComponent(S.detailId)}`, { method: "DELETE" });
+  if (!r.ok) { toast(r.error || "删除失败"); return; }
+  toast("工单已删除");
+  backList();
+}
+
 /* ═══════════════ 事件（body 级委托，onEnter 绑定 / onExit 解绑） ═══════════════ */
 function onRootClick(e) {
   const actEl = e.target.closest("[data-act]");
@@ -384,6 +393,7 @@ function onRootClick(e) {
   if (a === "submitTicket") { withPending(actEl, () => submitTicket()); return; }
   if (a === "replyTicket") { withPending(actEl, () => replyTicket()); return; }
   if (a === "closeTicket") { closeTicket(); return; }
+  if (a === "deleteTicket") { deleteTicket(); return; }
 }
 
 function onRootInput(e) {
