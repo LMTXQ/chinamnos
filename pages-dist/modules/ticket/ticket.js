@@ -91,6 +91,7 @@ function ticketItemHTML(t, i) {
       <span class="tk-meta dim">${t.status === "closed"
         ? esc(CLOSE_LABEL[t.close_reason] || "已关闭")
         : waiting ? "等待管理组处理" : "等待对方回应"}</span>
+      ${t.status === "closed" ? `<button class="tk-del-btn" data-act="deleteTicket" data-id="${esc(t.id)}" title="删除工单" onclick="event.stopPropagation()"><i data-icon="trash"></i></button>` : ""}
     </div>
   </article>`;
 }
@@ -372,9 +373,10 @@ async function closeTicket() {
   await openTicket(S.detailId);
 }
 
-async function deleteTicket() {
+async function deleteTicket(id) {
+  const tid = id || S.detailId;
   if (!confirm("确定永久删除该工单？此操作不可恢复。")) return;
-  const r = await api.request(`/api/tickets/${encodeURIComponent(S.detailId)}`, { method: "DELETE" });
+  const r = await api.request(`/api/tickets/${encodeURIComponent(tid)}`, { method: "DELETE" });
   if (!r.ok) { toast(r.error || "删除失败"); return; }
   toast("工单已删除");
   backList();
@@ -393,7 +395,7 @@ function onRootClick(e) {
   if (a === "submitTicket") { withPending(actEl, () => submitTicket()); return; }
   if (a === "replyTicket") { withPending(actEl, () => replyTicket()); return; }
   if (a === "closeTicket") { closeTicket(); return; }
-  if (a === "deleteTicket") { deleteTicket(); return; }
+  if (a === "deleteTicket") { deleteTicket(actEl.dataset.id); return; }
 }
 
 function onRootInput(e) {

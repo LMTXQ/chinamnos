@@ -179,6 +179,19 @@
 }
 .tk-meta svg { width: 11px; height: 11px; }
 .tk-meta.dim { opacity: 0.85; }
+.tk-del-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--sub);
+  transition: color 0.15s, border-color 0.15s;
+}
+.tk-del-btn:hover { color: var(--err, #e74c3c); border-color: var(--err, #e74c3c); }
+.tk-del-btn svg { width: 12px; height: 12px; }
 
 .tk-empty {
   text-align: center;
