@@ -515,16 +515,22 @@ def build_digest_message(sub, digest, site=""):
             ann_html.append('<table style="%s"><tr><th style="%s">公告标题（点击查看）</th>'
                             '<th style="%s">日期</th></tr>%s</table>' % (_tbl, _td, _td, "".join(rows)))
 
-    if not has_round and not has_today and not ann_lines:
-        return None  # 该订户关注的范围本轮与今日均无变化 → 不发
+    # 方案A：今日累计不作为独立触发源——仅「本轮有变化 或 公告新增」才推送，
+    # 今日累计降级为附加信息（仅在本轮有变化时顺带展示），
+    # 杜绝"本轮无变化仍每轮重复推送当日累计"的打扰（防重发 nid 含 round_at，每轮不同，旧逻辑必然重复）。
+    if not has_round and not ann_lines:
+        return None  # 该订户关注的范围本轮无变化且无公告新增 → 不发
 
-    lines = ["═══ 本轮采集 ═══"]
-    lines.extend(round_lines if has_round else ["  （你关注的范围本轮无变化）"])
-    lines.append("")
-    lines.append("═══ 今日累计 ═══")
-    lines.extend(today_lines if has_today else ["  你关注的范围今日暂无变化"])
-    if ann_lines:
+    lines = []
+    if has_round:
+        lines.append("═══ 本轮采集 ═══")
+        lines.extend(round_lines)
         lines.append("")
+        lines.append("═══ 今日累计 ═══")
+        lines.extend(today_lines if has_today else ["  你关注的范围今日暂无变化"])
+    if ann_lines:
+        if lines:
+            lines.append("")
         lines.append("═══ 公告新增 ═══")
         lines.extend(ann_lines)
     lines.append("")
@@ -534,10 +540,11 @@ def build_digest_message(sub, digest, site=""):
 
     html = ['<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',\'PingFang SC\',\'Microsoft YaHei\',sans-serif;color:#222;line-height:1.6">']
     html.append('<h3 style="margin:0 0 10px;font-size:16px">%s</h3>' % title)
-    html.append('<p style="%s">本轮采集</p>' % _h)
-    html.extend(round_html if has_round else ['<p style="margin:0 0 12px">（你关注的范围本轮无变化）</p>'])
-    html.append('<p style="%s">今日累计</p>' % _h)
-    html.extend(today_html if has_today else ['<p style="margin:0 0 12px">（你关注的范围今日暂无变化）</p>'])
+    if has_round:
+        html.append('<p style="%s">本轮采集</p>' % _h)
+        html.extend(round_html)
+        html.append('<p style="%s">今日累计</p>' % _h)
+        html.extend(today_html if has_today else ['<p style="margin:0 0 12px">（你关注的范围今日暂无变化）</p>'])
     if ann_html:
         html.append('<p style="%s">公告新增</p>' % _h)
         html.extend(ann_html)
