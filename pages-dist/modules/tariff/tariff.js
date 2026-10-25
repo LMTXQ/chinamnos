@@ -498,14 +498,24 @@ function fmtTime(iso) {
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleString("zh-CN");
 }
-function fmtDur(ms) { if (!ms) return "-"; if (ms < 1000) return ms + "ms"; return (ms / 1000).toFixed(1) + "s"; }
+function fmtDur(ms) {
+  if (!ms) return "-";
+  if (ms < 1000) return ms + "ms";
+  if (ms < 60000) return (ms / 1000).toFixed(1) + "s";
+  const m = Math.floor(ms / 60000);
+  const s = Math.round((ms % 60000) / 1000);
+  return s ? `${m}分${s}秒` : `${m}分`;
+}
 function fmtCountdown(iso) {
   if (!iso) return "";
   const diff = new Date(iso) - Date.now();
   if (diff <= 0) return "即将采集";
   const h = Math.floor(diff / 3600000);
   const m = Math.floor((diff % 3600000) / 60000);
-  return h > 0 ? `${h}h${m}m后` : `${m}m后`;
+  const s = Math.round((diff % 60000) / 1000);
+  if (h > 0) return `${h}h${m}m后`;
+  if (m > 0) return `${m}分${s > 0 ? s + "秒" : ""}后`;
+  return `${s}秒后`;
 }
 
 function provName(code) { return PROV_BY_CODE[code] || code; }
