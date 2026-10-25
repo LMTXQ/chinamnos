@@ -796,8 +796,8 @@ function openImports() {
 }
 
 /* ═══════════════ 我的收藏视图 ═══════════════ */
-export async function favsOnShow() {
-  const el = document.getElementById("view-favs");
+export async function favsOnShow(targetEl) {
+  const el = targetEl || document.getElementById("view-favs");
   if (!el) return;
   try { await CB.ensureBoot(); } catch { /* 同上 */ }
   renderFavs(el);
@@ -828,19 +828,30 @@ function renderFavs(el) {
   const favSel = (fk, label, opts, val) =>
     `<select class="sel" data-fk="${fk}" title="按${label}筛选"><option value="">全部${label}</option>${opts.map(([v, t]) => `<option value="${esc(v)}" ${v === val ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`;
   const hasFilter = favFilter.c || favFilter.prov || favFilter.own || favFilter.type || favQ;
-  el.innerHTML = `
+
+  /* 分区模式（tariff.js 三分区框架）：已有 #favTariffBody 子容器，只替换内容区，不抹分区 tab */
+  const isPartition = !!el.querySelector("#favTariffBody");
+  const bodyId = isPartition ? "favTariffBody" : "favBody";
+  const content = total
+    ? (isPartition
+      ? `<div class="fav-toolbar" style="margin-bottom:10px">${favSel("c", "运营商", CARRIER_ORDER.filter(carrierHas).map(c => [c, carrierName(c)]), favFilter.c)}${favSel("prov", "省份", [...provSet].filter(p => p !== "*").sort().map(p => [p, provLabel(p)]), favFilter.prov)}${favSel("own", "归属", [...ownSet].sort().map(v => [v, v]), favFilter.own)}${favSel("type", "资费类型", [...typeSet].sort().map(v => [v, v]), favFilter.type)}${hasFilter ? `<button type="button" class="btn ghost sm" data-act="favFilterClear">清除筛选</button>` : ""}</div><div id="${bodyId}">${favBodyHTML(raw)}</div><div id="favModalHost"></div>`
+      : `<div class="fav-toolbar"><input type="search" class="inp act-search" data-favq placeholder="搜索名称 / 字段…" value="${esc(favQ)}">${favSel("c", "运营商", CARRIER_ORDER.filter(carrierHas).map(c => [c, carrierName(c)]), favFilter.c)}${favSel("prov", "省份", [...provSet].filter(p => p !== "*").sort().map(p => [p, provLabel(p)]), favFilter.prov)}${favSel("own", "归属", [...ownSet].sort().map(v => [v, v]), favFilter.own)}${favSel("type", "资费类型", [...typeSet].sort().map(v => [v, v]), favFilter.type)}${hasFilter ? `<button type="button" class="btn ghost sm" data-act="favFilterClear">清除筛选</button>` : ""}</div><div id="${bodyId}">${favBodyHTML(raw)}</div><div id="favModalHost"></div>`)
+    : `<div class="empty" style="padding:40px 0">暂无收藏<br><span style="font-size:12px;opacity:.75">在资费列表条目上点「收藏」即可加入</span></div>`;
+
+  if (isPartition) {
+    /* 分区模式：只替换内容区，h1/tabs/搜索框/筛选器已在外层 */
+    el.querySelector("#favTariffBody") ? el.querySelector("#favTariffBody").closest(".fav-part-section") : el;
+    /* 找内容区容器（可能是直接子节点，也可能在 section 内） */
+    const section = el.querySelector(".fav-part-section");
+    if (section) section.innerHTML = content;
+    else el.innerHTML = content;
+  } else {
+    /* 全页模式：完整重绘（含 h1/说明） */
+    el.innerHTML = `
   <h1 class="page-title">我的收藏</h1>
   <p class="page-sub">全部运营商 × 全部省份的收藏 · 仅存本机浏览器（换设备/清缓存不随行） · 共 ${total} 条 · 点击卡片查看资费详情</p>
-  ${total ? `
-  <div class="fav-toolbar">
-      <input type="search" class="inp act-search" data-favq placeholder="搜索名称 / 字段…" value="${esc(favQ)}">
-      ${favSel("c", "运营商", CARRIER_ORDER.filter(carrierHas).map(c => [c, carrierName(c)]), favFilter.c)}
-      ${favSel("prov", "省份", [...provSet].filter(p => p !== "*").sort().map(p => [p, provLabel(p)]), favFilter.prov)}
-      ${favSel("own", "归属", [...ownSet].sort().map(v => [v, v]), favFilter.own)}
-    ${favSel("type", "资费类型", [...typeSet].sort().map(v => [v, v]), favFilter.type)}
-    ${hasFilter ? `<button type="button" class="btn ghost sm" data-act="favFilterClear">清除筛选</button>` : ""}
-  </div>
-  <div id="favBody">${favBodyHTML(raw)}</div><div id="favModalHost"></div>` : `<div class="empty" style="padding:40px 0">暂无收藏<br><span style="font-size:12px;opacity:.75">在资费列表条目上点「收藏」即可加入</span></div>`}`;
+  ${content}`;
+  }
   /* 事件统一委托到视图容器（el 是静态节点不随 innerHTML 重建） */
   if (!el.dataset.favBound) {
     el.dataset.favBound = "1";
@@ -861,7 +872,7 @@ function renderFavs(el) {
       clearTimeout(timer);
       timer = setTimeout(() => {
         favQ = searchEl.value.trim();
-        const body = el.querySelector("#favBody");
+        const body = el.querySelector("#favBody") || el.querySelector("#favTariffBody");
         if (body) body.innerHTML = favBodyHTML(favAll());
         const hasF = favFilter.c || favFilter.prov || favFilter.own || favFilter.type || favQ;
         const clr = el.querySelector("[data-act='favFilterClear']");

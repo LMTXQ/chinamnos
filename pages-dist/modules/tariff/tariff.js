@@ -558,12 +558,85 @@ function onTabChange(v) {
   else if (v === "changelog") renderChangelog();
   else if (v === "monitor") renderMonitor();
   else if (v === "compare") compareOnShow();
-  else if (v === "favs") favsOnShow();
+  else if (v === "favs") favsViewOnShow();
   else if (v === "cardhub") { chTabRefresh().then(() => { if (chState.available) chRenderBody(); }); }
   else if (v === "acts") { actTabRefresh(true).then(actRenderBody); }
   else if (v === "announce") { annTabRefresh().then(annRenderBody); }
   else if (v === "chat") { chatTabRefresh().then(chatRenderBody); }
   else if (v === "notices") { renderNoticesView(); }
+}
+
+/* ─────────────── 我的收藏页签三分区（资费 | 情报酒馆 | 唠嗑聚落） ───────────────
+   资费收藏 = localStorage 本机数据（compare.js favsOnShow 渲染进分区宿主）；
+   情报/社群收藏 = D1 act_favorites（与酒馆/聚落同表，mode 区分），每次进入重拉保证新鲜。
+   卡片渲染复用列表的 actCardHTML/chatCardHTML（自包含函数，按钮经 document 级点击委托全局可用） */
+let favsPartition = "tariff";
+try { favsPartition = localStorage.getItem("chinamnos_favs_partition") || "tariff"; } catch { /* */ }
+let favsActLoaded = false;
+let favsActItems = [];
+
+function favsViewActive() {
+  const el = $("view-favs");
+  return !!(el && el.classList.contains("active"));
+}
+
+function favsViewOnShow() {
+  const el = $("view-favs");
+  if (!el) return;
+  favsActLoaded = false;   // 每次进入重拉：收藏可能在酒馆/聚落内变动
+  const tabs = [["tariff", "资费"], ["act", "情报酒馆"], ["chat", "唠嗑聚落"]];
+  el.innerHTML = `
+    <h1 class="page-title">我的收藏</h1>
+    <p class="page-sub">资费收藏仅存本机浏览器（换设备/清缓存不随行） · 情报与社群收藏跟随账号</p>
+    <div class="fav-part-tabs">
+      ${tabs.map(([v, label]) => `<button type="button" class="fav-part-tab${favsPartition === v ? " active" : ""}" data-favpart="${v}">${label}</button>`).join("")}
+    </div>
+    <div class="fav-part-section" id="favPartHost"></div>`;
+  if (!el.dataset.partBound) {
+    el.dataset.partBound = "1";
+    el.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-favpart]");
+      if (!b) return;
+      favsPartition = b.dataset.favpart || "tariff";
+      try { localStorage.setItem("chinamnos_favs_partition", favsPartition); } catch { /* */ }
+      renderFavsPartition();
+    });
+  }
+  renderFavsPartition();
+}
+
+function renderFavsPartition() {
+  const host = $("favPartHost");
+  if (!host) return;
+  document.querySelectorAll("#view-favs .fav-part-tab").forEach((b) => b.classList.toggle("active", b.dataset.favpart === favsPartition));
+  if (favsPartition === "tariff") {
+    /* 资费收藏渲染进分区 section：compare.js renderFavs 识别 #favTariffBody 后以分区模式运行 */
+    host.innerHTML = `<div id="favTariffBody"><div class="loading" style="padding:32px 0">加载中…</div></div>`;
+    favsOnShow(host);   // compare.js：传入 host（含 #favTariffBody），只替换内容不抹 tab
+    return;
+  }
+  if (!Auth.isLoggedIn()) {
+    host.innerHTML = `<div class="empty" style="padding:40px 0">登录后可收藏情报与社群<br><span style="font-size:12px;opacity:.75">在情报/社群卡片上点「收藏」即可加入</span></div>`;
+    return;
+  }
+  if (!favsActLoaded) {
+    host.innerHTML = `<div class="loading" style="padding:32px 0">加载中…</div>`;
+    api.activityMyFavorites().then((r) => {
+      favsActItems = (r.ok && r.data && r.data.items) ? r.data.items : [];
+      favsActLoaded = true;
+      // 同步收藏态到列表（情报/社群列表卡片的收藏星需用）
+      const favIds = new Set(favsActItems.map((x) => x.id));
+      actState.items.forEach((x) => { x.favorited = favIds.has(x.id); });
+      chatState.items.forEach((x) => { x.favorited = favIds.has(x.id); });
+      renderFavsPartition();
+    }).catch(() => { favsActLoaded = true; renderFavsPartition(); });
+    return;
+  }
+  const wantMode = favsPartition === "act" ? ["official", "guide"] : ["chat"];
+  const items = favsActItems.filter((x) => wantMode.indexOf(x.mode) >= 0);
+  host.innerHTML = items.length
+    ? `<div class="act-list">${items.map(favsPartition === "act" ? actCardHTML : chatCardHTML).join("")}</div>`
+    : `<div class="empty" style="padding:40px 0">${favsPartition === "act" ? "暂无收藏的情报，在情报卡片上点「收藏」即可加入" : "暂无收藏的社群，在社群卡片上点「收藏」即可加入"}</div>`;
 }
 
 /* ── 公告推广页签：只读展示当前生效的公告与推广全文（弹窗内容回看） ──
@@ -1482,8 +1555,9 @@ function actOnBodyClick(e) {
     if (!Auth.isLoggedIn()) { toast("请先登录后再收藏"); Auth.openLogin(); return; }
     api.activityFavoriteToggle(actEl.dataset.id).then((r) => {
       if (!r.ok) { toast(typeof r.error === "string" ? r.error : (r.error?.message || "操作失败")); return; }
-      toast(r.data?.favorited ? "已收藏，可在「我的收藏」查看" : "已取消收藏");
-      actTabRefreshAndRender(); // 同步列表收藏标记与收藏视图
+      toast(r.data?.favorited ? "已收藏，可在「我的收藏」页签查看" : "已取消收藏");
+      if (favsViewActive()) { favsActLoaded = false; renderFavsPartition(); }   // 收藏页签内：刷新情报分区
+      else actTabRefreshAndRender(); // 同步列表收藏标记与收藏视图
     });
   } else if (a === "actPinToggle") {
     const pinned = actEl.dataset.pinned === "1";
@@ -1492,7 +1566,8 @@ function actOnBodyClick(e) {
     req.then((r) => {
       if (!r.ok) { toast(typeof r.error === "string" ? r.error : (r.error?.message || "操作失败")); return; }
       toast(pinned ? "已取消置顶" : "已置顶");
-      actTabRefreshAndRender();
+      if (favsViewActive()) { favsActLoaded = false; renderFavsPartition(); }
+      else actTabRefreshAndRender();
     });
   }
 }
@@ -1648,6 +1723,7 @@ function chatCardHTML(a) {
       ${a.has_qr ? `<button type="button" class="btn ghost sm" data-act="chatQr" data-id="${esc(a.id)}" data-title="${esc(a.title)}" title="查看群二维码"><i data-icon="qr"></i>二维码</button>` : ""}
       <button type="button" class="btn ghost sm btn-ico-sm" data-act="chatFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该社群反馈或举报（工单中心）"><i data-icon="message"></i><span class="btn-txt">反馈</span></button>
       <button type="button" class="btn ghost sm btn-ico-sm" data-act="chatShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本收录（复制链接或唤起系统分享）"><i data-icon="share"></i><span class="btn-txt">分享</span></button>
+      <button type="button" class="btn ghost sm btn-ico-sm act-fav-btn${a.favorited ? " act-faved" : ""}" data-act="chatFav" data-id="${esc(a.id)}" title="${a.favorited ? "取消收藏" : "收藏到我的收藏"}"><i data-icon="${a.favorited ? "starFill" : "star"}"></i><span class="btn-txt">${a.favorited ? "已收藏" : "收藏"}</span></button>
     </div>
   </div>`;
 }
@@ -1911,6 +1987,14 @@ function chatOnBodyClick(e) {
   } else if (a === "chatShare") {
     /* 分享本收录：深链带运营商+省（社群卡片按省过滤，跨范围打开看不到条目） */
     shareLink({ title: actEl.dataset.title || "唠嗑聚落", text: "来自唠嗑聚落的一条社群收录", hash: "chat_" + currentCarrier + "_" + getProvCode() + "_" + encodeURIComponent(actEl.dataset.id || "") });
+  } else if (a === "chatFav") {
+    if (!Auth.isLoggedIn()) { toast("请先登录后再收藏"); Auth.openLogin(); return; }
+    api.activityFavoriteToggle(actEl.dataset.id).then((r) => {
+      if (!r.ok) { toast(typeof r.error === "string" ? r.error : (r.error?.message || "操作失败")); return; }
+      toast(r.data?.favorited ? "已收藏，可在「我的收藏」页签查看" : "已取消收藏");
+      if (favsViewActive()) { favsActLoaded = false; renderFavsPartition(); }
+      else chatTabRefreshAndRender();
+    });
   }
 }
 

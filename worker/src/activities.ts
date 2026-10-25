@@ -181,6 +181,8 @@ export async function handleActivityList(request: Request, env: Env): Promise<Re
       excerpt: r.mode === 'guide' ? mdExcerpt(r.content_md || '') : r.descr,
       ends_at: r.ends_at, created_at: r.created_at,
       has_qr: !!r.qr_key,
+      chat_type: r.chat_type || null,
+      chat_id: r.chat_id || null,
       anon,
       // 非匿名下发 uid（个人资料卡入口需要）；匿名公众侧不下发
       submitted_by: anon ? null : r.submitted_by,
@@ -244,7 +246,7 @@ export async function handleMyActivityFavorites(request: Request, env: Env): Pro
 
   const rows = await env.DB.prepare(
     `SELECT a.id, a.mode, a.carrier, a.province, a.title, a.url, a.descr, a.links, a.content_md,
-            a.ends_at, a.anon, a.submitted_by, a.created_at, a.qr_key
+            a.ends_at, a.anon, a.submitted_by, a.created_at, a.qr_key, a.chat_type, a.chat_id
      FROM act_favorites f JOIN activities a ON a.id = f.activity_id
      WHERE f.user_id = ?1 AND a.status = 'open' AND (a.ends_at IS NULL OR a.ends_at > ?2)
      ORDER BY f.created_at DESC LIMIT 100`,
@@ -262,6 +264,8 @@ export async function handleMyActivityFavorites(request: Request, env: Env): Pro
       excerpt: r.mode === 'guide' ? mdExcerpt(r.content_md || '') : r.descr,
       ends_at: r.ends_at, created_at: r.created_at,
       has_qr: !!r.qr_key,
+      chat_type: r.chat_type || null,
+      chat_id: r.chat_id || null,
       anon,
       submitted_by: anon ? null : r.submitted_by,
       submitter_nickname: anon ? null : (authorMap.get(r.submitted_by)?.nickname ?? null),
