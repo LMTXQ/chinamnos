@@ -273,7 +273,7 @@ export async function handleTicketClose(request: Request, env: Env, id: string):
 export async function handleTicketDelete(request: Request, env: Env, id: string): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
-  const viewer = g as Viewer;
+  const viewer = g.viewer;
 
   const t = await env.DB.prepare(`SELECT * FROM tickets WHERE id = ?1`).bind(id).first<TicketRow>();
   if (!t) return fail(ERR.GONE, 'ALREADY_DELETED', 410);
