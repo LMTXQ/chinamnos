@@ -1723,7 +1723,17 @@ dialog.modal.ofv .modal-head {
    排序占一行，竖分隔线变为横分隔线占满整行，把筛选组推到下一行 */
 @media (max-width: 860px) {
   .cmp-grid { grid-template-columns: 1fr !important; }
-  .cmp-toolbar .cmp-tb-div { flex: 1 1 100%; width: auto; height: 1px; align-self: auto; margin: 2px 0; }
+  /* 筛选/排序按钮组窄屏改单行横向滑动（参考总览分类分布 bd-list 的滑动手感），不再换行 */
+  .cmp-toolbar .filter-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cmp-toolbar .filter-bar::-webkit-scrollbar { display: none; }
+  .cmp-toolbar .filter-bar > * { flex: 0 0 auto; }   /* 按钮保持自然宽度不被压缩 */
+  /* 竖分隔线恢复竖状随行滚动（上方 100% 占行的规则会让横滑出现"分页"断点） */
+  .cmp-toolbar .cmp-tb-div { flex: 0 0 auto; width: 1px; height: 20px; align-self: center; margin: 0 4px; }
 }
 .fav-group { margin-bottom: 20px; }
 .fav-group-title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; font-size: 14.5px; font-weight: 750; color: var(--txt); }

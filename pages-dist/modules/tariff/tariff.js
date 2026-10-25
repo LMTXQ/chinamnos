@@ -979,11 +979,11 @@ function actCardHTML(a) {
     <div class="act-actions">
       ${mainAct}
       ${a.has_qr ? `<button type="button" class="btn ghost sm" data-act="actQr" data-id="${esc(a.id)}" data-title="${esc(a.title)}" title="查看二维码"><i data-icon="qr"></i>二维码</button>` : ""}
-      ${!guide && a.url ? `<button type="button" class="btn ghost sm" data-act="actCopyLink" data-url="${esc(a.url)}" title="复制活动链接"><i data-icon="copy"></i>复制</button>` : ""}
-      <button type="button" class="btn ghost sm" data-act="actFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该情报反馈或举报（工单中心）"><i data-icon="message"></i>反馈</button>
-      <button type="button" class="btn ghost sm" data-act="actShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本帖（复制链接或唤起系统分享）"><i data-icon="share"></i>分享</button>
-      <button type="button" class="btn ghost sm act-fav-btn${a.favorited ? " act-faved" : ""}" data-act="actFav" data-id="${esc(a.id)}" title="${a.favorited ? "取消收藏" : "收藏到我的收藏"}"><i data-icon="${a.favorited ? "starFill" : "star"}"></i>${a.favorited ? "已收藏" : "收藏"}</button>
-      ${isAdmin ? `<button type="button" class="btn ghost sm" data-act="actPinToggle" data-id="${esc(a.id)}" data-pinned="${a.pinned ? 1 : 0}" title="${a.pinned ? "取消置顶" : "置顶展示在列表最前（仅管理组可见此按钮）"}"><i data-icon="${a.pinned ? "chevronsDown" : "chevronsUp"}"></i>${a.pinned ? "取消置顶" : "置顶"}</button>` : ""}
+      ${!guide && a.url ? `<button type="button" class="btn ghost sm btn-ico-sm" data-act="actCopyLink" data-url="${esc(a.url)}" title="复制活动链接"><i data-icon="copy"></i><span class="btn-txt">复制</span></button>` : ""}
+      <button type="button" class="btn ghost sm btn-ico-sm" data-act="actFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该情报反馈或举报（工单中心）"><i data-icon="message"></i><span class="btn-txt">反馈</span></button>
+      <button type="button" class="btn ghost sm btn-ico-sm" data-act="actShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本帖（复制链接或唤起系统分享）"><i data-icon="share"></i><span class="btn-txt">分享</span></button>
+      <button type="button" class="btn ghost sm btn-ico-sm act-fav-btn${a.favorited ? " act-faved" : ""}" data-act="actFav" data-id="${esc(a.id)}" title="${a.favorited ? "取消收藏" : "收藏到我的收藏"}"><i data-icon="${a.favorited ? "starFill" : "star"}"></i><span class="btn-txt">${a.favorited ? "已收藏" : "收藏"}</span></button>
+      ${isAdmin ? `<button type="button" class="btn ghost sm btn-ico-sm" data-act="actPinToggle" data-id="${esc(a.id)}" data-pinned="${a.pinned ? 1 : 0}" title="${a.pinned ? "取消置顶" : "置顶展示在列表最前（仅管理组可见此按钮）"}"><i data-icon="${a.pinned ? "chevronsDown" : "chevronsUp"}"></i><span class="btn-txt">${a.pinned ? "取消置顶" : "置顶"}</span></button>` : ""}
     </div>
   </div>`;
 }
@@ -1075,7 +1075,15 @@ function actModeSeg() {
 function actFilterChips() {
   const chip = (v, label) => `<button type="button" class="act-filter-chip${actState.filter === v ? " active" : ""}" data-act="actFilter" data-mode="${v}">${label}</button>`;
   const favChip = Auth.isLoggedIn() ? chip("fav", "我的收藏") : "";
-  return `<div class="act-filter">${chip("", "全部")}${chip("official", "官方活动")}${chip("guide", "个人攻略")}${favChip}</div>`;
+  /* 手机窄屏：chips 换行占高 → 收进下拉（.act-filter-sel），与 chips 同源同状态，CSS 控制两套显隐（宽屏不变） */
+  const favOpt = Auth.isLoggedIn() ? `<option value="fav">我的收藏</option>` : "";
+  const sel = `<select class="sel act-scope-sel act-filter-sel" id="actFilterSel" title="按板块筛选">
+      <option value=""${actState.filter === "" ? " selected" : ""}>全部</option>
+      <option value="official"${actState.filter === "official" ? " selected" : ""}>官方活动</option>
+      <option value="guide"${actState.filter === "guide" ? " selected" : ""}>个人攻略</option>
+      ${favOpt}
+    </select>`;
+  return `<div class="act-filter act-filter-tb">${chip("", "全部")}${chip("official", "官方活动")}${chip("guide", "个人攻略")}${favChip}</div>${sel}`;
 }
 
 /* 图片引导弹窗：站内不提供图床直传，引导到公益图床上传后粘贴外链（与在线沟通同一引导文案结构） */
@@ -1295,8 +1303,10 @@ function actRenderBody() {
           <option value="prov" ${actState.scope === "prov" ? "selected" : ""}>本省${provName ? `（${esc(provName)}）` : ""}</option>
         </select>
         ${actFilterChips()}
+        <!-- 投稿按钮置于左组末尾：宽屏 margin-left:auto 顶到最右（原 space-between 视觉）；
+             窄屏 margin-left 归零 + 搜索框独占一行 → 按钮与范围/板块两个下拉同行 -->
+        <button type="button" class="btn primary" data-act="actTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${actState.panelOpen ? "收起投稿面板" : "投稿情报"}</span></button>
       </div>
-      <button type="button" class="btn primary" data-act="actTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${actState.panelOpen ? "收起投稿面板" : "投稿情报"}</span></button>
     </div>
     ${panel}
     <div id="actListRegion">${listHTML}</div>`;
@@ -1312,6 +1322,9 @@ function actRenderBody() {
   }
   const scopeSel = $("actScopeSel");
   if (scopeSel) scopeSel.addEventListener("change", () => { actState.scope = scopeSel.value; actRenderList(); });
+  /* 板块筛选下拉（手机端替代 chips，见 actFilterChips） */
+  const filterSel = $("actFilterSel");
+  if (filterSel) filterSel.addEventListener("change", () => { actState.filter = filterSel.value; actRenderList(); });
   /* 行内面板输入同步草稿（innerHTML 重建后重绑） */
   const bind = (id, key) => { const n = $(id); if (n) n.addEventListener("input", () => { actState.form[key] = n.value; actDraftSave(); }); };
   bind("actFTitle", "title"); bind("actFUrl", "url"); bind("actFDescr", "descr"); bind("actFEnds", "ends");
@@ -1633,8 +1646,8 @@ function chatCardHTML(a) {
       ${mainAct}
       ${a.chat_id && a.url ? `<button type="button" class="btn ghost sm" data-act="chatCopyId" data-id="${esc(a.chat_id)}" title="复制群号/账号"><i data-icon="copy"></i>复制群号</button>` : ""}
       ${a.has_qr ? `<button type="button" class="btn ghost sm" data-act="chatQr" data-id="${esc(a.id)}" data-title="${esc(a.title)}" title="查看群二维码"><i data-icon="qr"></i>二维码</button>` : ""}
-      <button type="button" class="btn ghost sm" data-act="chatFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该社群反馈或举报（工单中心）"><i data-icon="message"></i>反馈</button>
-      <button type="button" class="btn ghost sm" data-act="chatShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本收录（复制链接或唤起系统分享）"><i data-icon="share"></i>分享</button>
+      <button type="button" class="btn ghost sm btn-ico-sm" data-act="chatFeedback" data-title="${esc(a.title)}" data-url="${esc(a.url || "")}" title="对该社群反馈或举报（工单中心）"><i data-icon="message"></i><span class="btn-txt">反馈</span></button>
+      <button type="button" class="btn ghost sm btn-ico-sm" data-act="chatShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本收录（复制链接或唤起系统分享）"><i data-icon="share"></i><span class="btn-txt">分享</span></button>
     </div>
   </div>`;
 }
@@ -1756,11 +1769,16 @@ function chatRenderBody() {
           <option value="nat" ${chatState.scope === "nat" ? "selected" : ""}>全国·通用</option>
           <option value="prov" ${chatState.scope === "prov" ? "selected" : ""}>本省${provName ? `（${esc(provName)}）` : ""}</option>
         </select>
-        <div class="act-filter">${typeChips}</div>
+        <div class="act-filter act-filter-tb">${typeChips}</div>
+        <select class="sel act-scope-sel act-filter-sel" id="chatTypeSel" title="按种类筛选">
+          <option value=""${chatState.typeFilter === "" ? " selected" : ""}>全部种类</option>
+          ${types.map((t) => `<option value="${esc(t)}"${chatState.typeFilter === t ? " selected" : ""}>${esc(t)}</option>`).join("")}
+        </select>
+        <!-- 收录按钮置于左组末尾：宽屏 margin-left:auto 顶到最右；窄屏与范围/种类下拉同行（同情报酒馆） -->
+        <button type="button" class="btn primary" data-act="chatTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${chatState.panelOpen ? "收起收录面板" : "收录社群"}</span></button>
       </div>
-      <button type="button" class="btn primary" data-act="chatTogglePanel"><i data-icon="plus"></i><span class="act-tb-txt">${chatState.panelOpen ? "收起收录面板" : "收录社群"}</span></button>
     </div>
-    <div class="act-filter"><span class="hint">收录你运营或知晓的交流社群；入群请遵守群规并自行甄别信息，站点仅提供信息展示渠道</span></div>
+    <div class="chat-tb-note">${icon("info")}<span>欢迎收录你运营或知晓的交流社群，让更多同好找到组织；入群请遵守群规并自行甄别信息，站点仅提供信息展示渠道</span></div>
     ${panel}
     <div id="chatListRegion">${listHTML}</div>`;
   mountIcons(el);
@@ -1775,6 +1793,9 @@ function chatRenderBody() {
   }
   const scopeSel = $("chatScopeSel");
   if (scopeSel) scopeSel.addEventListener("change", () => { chatState.scope = scopeSel.value; chatRenderList(); });
+  /* 种类筛选下拉（手机端替代 chips，走 chatRenderBody 保持 chips/下拉选中态同步） */
+  const typeSel = $("chatTypeSel");
+  if (typeSel) typeSel.addEventListener("change", () => { chatState.typeFilter = typeSel.value; chatRenderBody(); });
   /* 表单输入同步内存草稿（innerHTML 重建后重绑；草稿不落 localStorage，切 tab 保留） */
   const bindV = (id, key) => { const n = $(id); if (n) { n.value = chatState.form[key] || ""; n.addEventListener("input", () => { chatState.form[key] = n.value; }); } };
   bindV("chatFTitle", "title"); bindV("chatFUrl", "url"); bindV("chatFId", "chatId"); bindV("chatFDescr", "descr");
@@ -2328,8 +2349,8 @@ function buildDynamicTabs(stats) {
         <div class="search-wrap"><button type="button" class="search-mode-btn" id="${t1Id(code, "qmode")}" title="切换搜索范围：全部内容（名称+字段） / 仅名称">全部</button><input type="search" id="${t1Id(code, "search")}" class="search-box" placeholder="搜索名称/资费标准/说明…"><kbd class="search-kbd" title="按 / 快速聚焦">/</kbd></div>
         <select id="${t1Id(code, "attr")}" class="sel" style="width:auto"><option value="">全部归属</option></select>
         <select id="${t1Id(code, "type2")}" class="sel" style="width:auto"><option value="">全部类型</option></select>
-        <button class="btn ghost" id="${t1Id(code, "exportCsv")}" title="导出当前筛选结果为 CSV">${icon("download")} 导出</button>
-        <button class="btn ghost" id="${t1Id(code, "reload")}">重新加载</button>
+        <button class="btn ghost btn-ico-sm" id="${t1Id(code, "exportCsv")}" title="导出当前筛选结果为 CSV">${icon("download")}<span class="btn-txt">导出</span></button>
+        <button class="btn ghost btn-ico-sm" id="${t1Id(code, "reload")}" title="重新加载当前列表（按当前筛选重新拉取快照）">${icon("refresh")}<span class="btn-txt">重新加载</span></button>
         <span class="count-hint" id="${t1Id(code, "count")}"></span>
       </div>
       <div class="list" id="${t1Id(code, "list")}"><div class="loading">选择省份后加载${esc(name)}数据…</div></div>
@@ -3243,9 +3264,9 @@ function openClModal(log) {
   openModal(log.name || "变更详情",
     '<div class="res-row sub">变更时间：' + esc(fmtTime(log.ts)) + "</div>" +
     clDetailHTML(log, clView ? clView.itemMap : {}),
-    `<button type="button" class="btn ghost sm" data-act="clShare" title="复制本条变更链接或唤起系统分享">${icon("share")}分享</button>` +
-    `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="name" title="复制资费名称">${icon("copy")}名称</button>` +
-    `<button type="button" class="btn ghost sm" data-act="clModalCopy" data-mode="summary" title="复制资费概要">${icon("list")}概要</button>` +
+    `<button type="button" class="btn ghost sm btn-ico-sm" data-act="clShare" title="复制本条变更链接或唤起系统分享">${icon("share")}<span class="btn-txt">分享</span></button>` +
+    `<button type="button" class="btn ghost sm btn-ico-sm" data-act="clModalCopy" data-mode="name" title="复制资费名称">${icon("copy")}<span class="btn-txt">名称</span></button>` +
+    `<button type="button" class="btn ghost sm btn-ico-sm" data-act="clModalCopy" data-mode="summary" title="复制资费概要">${icon("list")}<span class="btn-txt">概要</span></button>` +
     (diffN ? `<button type="button" class="btn ghost sm" data-act="clModalDiff" title="在「全部字段」与「仅看变化」两种显示模式间切换">${clDiffOnly ? icon("list") + "全部字段" : icon("filter") + "仅看变化"}</button>` : ""));
 }
 
@@ -5299,7 +5320,7 @@ Shell.registerPage({
   id: "tariff",
   route: "/",
   onEnter: async function(root) {
-    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261022d");
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261025a");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">

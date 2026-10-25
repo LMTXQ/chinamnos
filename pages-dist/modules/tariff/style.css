@@ -1736,6 +1736,17 @@
   }
 }
 @media (max-width: 640px) {
+  /* 窄屏只留图标按钮（含义由 title 悬浮/长按提示）：
+     ▸ 变更详情弹窗页脚 分享/名称/概要
+     ▸ 资费列表工具栏 导出/重新加载（「仅看变化/全部字段」切换等不在此类，文字常显） */
+  .btn-ico-sm .btn-txt {
+    display: none;
+  }
+  .btn-ico-sm {
+    gap: 0;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
   .topbar {
     height: auto;
     min-height: var(--topbar-h);
@@ -2699,6 +2710,9 @@
 
 /* ─────────────── 活动集锦 tab ─────────────── */
 .act-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+/* 投稿/收录按钮在 act-tb-left 内：宽屏 auto 顶到行尾（保持原 space-between 视觉），窄屏归零贴邻下拉 */
+.act-toolbar [data-act="actTogglePanel"],
+.act-toolbar [data-act="chatTogglePanel"] { margin-left: auto; }
 .act-list { display: grid; gap: 12px; }
 .act-card {
   display: flex; align-items: center; gap: 14px;
@@ -2895,6 +2909,14 @@
 /* 工具栏左侧组（搜索+范围下拉+chips）：贴排布防 space-between 拉出大空白 */
 .act-tb-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
 .act-scope-sel { width: auto; flex: 0 0 auto; padding: 6px 10px; font-size: 13px; border-radius: 999px; }
+/* 板块筛选下拉（手机端专用，替代 chips）：宽屏隐藏，≤640px 与 chips 互换显隐。
+   显隐规则必须位于 .act-filter 基础样式（2904 行）之后——同优先级靠源码顺序覆盖，
+   放前面的媒体块会被基础样式压掉（此前就是这么失效的） */
+.act-filter-sel { display: none; }
+@media (max-width: 640px) {
+  .act-filter { display: none; }
+  .act-filter-sel { display: block; flex: 0 0 auto; }
+}
 .act-filter-chip {
   padding: 5px 14px; border-radius: 999px; cursor: pointer; font-size: 12.5px; font-weight: 600;
   border: 1px solid var(--line); background: var(--surface); color: var(--sub);
@@ -2997,11 +3019,28 @@
 .act-form-note{display:flex;align-items:flex-start;gap:8px;margin-top:10px;padding:10px 12px;border-radius:10px;font-size:12px;line-height:1.7;color:var(--sub);background:color-mix(in oklab,var(--green) 8%,var(--surface));border:1px solid color-mix(in oklab,var(--green) 30%,transparent)}
 .act-form-note svg{flex:none;width:14px;height:14px;margin-top:2px;color:var(--green)}
 .act-form-note b{color:var(--txt)}
+/* 收录提示条（唠嗑聚落工具栏下）：与面板 act-form-note 同视觉语言的淡绿信息条 */
+.chat-tb-note {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-bottom: 12px; padding: 9px 12px; border-radius: 10px;
+  font-size: 12px; line-height: 1.7; color: var(--sub);
+  background: color-mix(in oklab, var(--green) 7%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--green) 28%, transparent);
+}
+.chat-tb-note svg { flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--green); }
 @media (max-width: 640px) {
   .act-mode-seg { grid-template-columns: 1fr; }
-  /* 窄屏工具栏：投稿按钮只留 + 图标，筛选 chips 同行不换行 */
+  /* 窄屏工具栏（情报酒馆/唠嗑聚落同款）：搜索框独占一行，投稿/收录按钮（含文字）
+     与范围/板块(种类)下拉同行；chips 收进下拉（act-filter-tb 专用类，不误伤面板内的 .act-filter） */
   .act-toolbar { flex-wrap: nowrap; }
   .act-tb-txt { display: none; }
+  .act-filter-tb { display: none; }
+  .act-filter-sel { display: block; flex: 0 0 auto; }
+  .act-search { flex: 1 1 100%; }
+  .act-toolbar [data-act="actTogglePanel"] .act-tb-txt,
+  .act-toolbar [data-act="chatTogglePanel"] .act-tb-txt { display: inline; }
+  .act-toolbar [data-act="actTogglePanel"],
+  .act-toolbar [data-act="chatTogglePanel"] { margin-left: 0; }
 }
 
 /* ─────────────── 公告 tab（运营商官方公告列表 + 手风琴正文） ─────────────── */
