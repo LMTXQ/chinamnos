@@ -6474,15 +6474,25 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
                 diff_result['removed'], old_items_map, vfr_cfg
             )
 
+            # 假新增核验基线 = 上一轮该省的采集日期（"上次看官网"的日期）。
+            # 优先取 stats 的 data_crawl_time（每轮照常更新，不受快照字节复用影响）；
+            # 旧快照 crawl_time 仅作 fallback——字节复用后它会停留在最后变更轮，
+            # 若直接沿用会把漏采补录的剔除窗口拉宽到"上次有变更的轮次"，误杀边界真新增。
             baseline_dt = None
-            if old_snap and old_snap.get('crawl_time'):
-                _ct = old_snap['crawl_time']
-                _m = re.match(r'(\d{4})-(\d{2})-(\d{2})', str(_ct))
-                if _m:
-                    try:
-                        baseline_dt = datetime.date(int(_m.group(1)), int(_m.group(2)), int(_m.group(3)))
-                    except Exception:
-                        pass
+            _baseline_raw = ''
+            if old_stats:
+                for _p in (((old_stats.get('carriers') or {}).get(carrier_key) or {}).get('provinces') or []):
+                    if _p.get('code') == prov_short:
+                        _baseline_raw = _p.get('data_crawl_time') or ''
+                        break
+            if not _baseline_raw and old_snap and old_snap.get('crawl_time'):
+                _baseline_raw = old_snap['crawl_time']
+            _m = re.match(r'(\d{4})-(\d{2})-(\d{2})', str(_baseline_raw))
+            if _m:
+                try:
+                    baseline_dt = datetime.date(int(_m.group(1)), int(_m.group(2)), int(_m.group(3)))
+                except Exception:
+                    pass
             new_items_map = {it['id']: it for it in items}
             verified_added, fake_added_count = _drop_stale_added(
                 diff_result['added'], new_items_map, vfr_cfg, baseline_dt
@@ -6496,7 +6506,14 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
             if structure_upgraded:
                 changes['note'] = 'structure_upgraded'
 
-            prov_storage.write_json(f'{carrier_key}/snapshots/snapshot_{prov_short}.json', new_snap)
+            has_changes = bool(changes['added'] or changes['removed'] or changes['modified'])
+            # 快照字节复用：无变更且非结构升级时不重写快照（内嵌 crawl_time 停留在最后变化轮），
+            # 本轮不进 buffer → commit 走清单/本地缓存兜底引用旧 hash，文件字节不变，CF 内容寻址缓存全命中。
+            # ▸ structure_upgraded 必须落盘新结构，不受此优化影响
+            # ▸ old_snap 为空（首次收录）时保持无条件落盘，避免 0 条目省份永远无快照文件
+            # ▸ 前端展示的采集时间全部来自 stats.json（每轮照常重建），不读快照内嵌时间戳，用户可见行为零变化
+            if has_changes or structure_upgraded or old_snap is None:
+                prov_storage.write_json(f'{carrier_key}/snapshots/snapshot_{prov_short}.json', new_snap)
 
             _crawl_status = 'degrade_auto_recovered' if degrade_auto_recovered else 'success'
             result['crawl_result'] = {
@@ -6508,7 +6525,6 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
                 'consecutive_degrade_count': new_degrade_count,
             }
 
-            has_changes = bool(changes['added'] or changes['removed'] or changes['modified'])
             status_tag = '有变更' if has_changes else '无变更'
             logger.info(f'  {prov_name}: {status_tag}, {new_count} 条, 耗时={prov_time}s')
 
