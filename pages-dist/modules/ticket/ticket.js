@@ -91,7 +91,7 @@ function ticketItemHTML(t, i) {
       <span class="tk-meta dim">${t.status === "closed"
         ? esc(CLOSE_LABEL[t.close_reason] || "已关闭")
         : waiting ? "等待管理组处理" : "等待对方回应"}</span>
-      ${t.status === "closed" ? `<button class="tk-del-btn" title="删除工单" onclick="event.stopPropagation(); document.dispatchEvent(new CustomEvent('tkDelete',{detail:'${esc(t.id)}'}))"><i data-icon="trash"></i></button>` : ""}
+      ${t.status === "closed" ? `<button class="tk-del-btn" title="删除工单" onclick="event.stopPropagation(); document.dispatchEvent(new CustomEvent('tkDelete',{detail:'${t.id}'}))"><i data-icon="trash"></i></button>` : ""}
     </div>
   </article>`;
 }
