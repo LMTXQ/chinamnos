@@ -378,10 +378,11 @@ async function deleteTicket(id) {
   if (!confirm("确定永久删除该工单？此操作不可恢复。")) return;
   const r = await api.request(`/api/tickets/${encodeURIComponent(tid)}`, { method: "DELETE" });
   if (!r.ok) {
-    if (r.code === 41000) { toast("工单已被删除"); backList(); return; }
+    if (r.code === 41000) { toast("工单已被删除"); S.items = S.items.filter((t) => t.id !== tid); backList(); return; }
     toast(r.error || "删除失败"); return;
   }
   toast("工单已删除");
+  S.items = S.items.filter((t) => t.id !== tid); // 本地即时移除，无需整页刷新
   backList();
 }
 
