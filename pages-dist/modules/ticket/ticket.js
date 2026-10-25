@@ -91,7 +91,7 @@ function ticketItemHTML(t, i) {
       <span class="tk-meta dim">${t.status === "closed"
         ? esc(CLOSE_LABEL[t.close_reason] || "已关闭")
         : waiting ? "等待管理组处理" : "等待对方回应"}</span>
-      ${t.status === "closed" ? `<button class="tk-del-btn" data-act="deleteTicket" data-id="${esc(t.id)}" title="删除工单" onclick="event.stopPropagation()"><i data-icon="trash"></i></button>` : ""}
+      ${t.status === "closed" ? `<button class="tk-del-btn" title="删除工单" onclick="event.stopPropagation(); document.dispatchEvent(new CustomEvent('tkDelete',{detail:'${esc(t.id)}'}))"><i data-icon="trash"></i></button>` : ""}
     </div>
   </article>`;
 }
@@ -493,6 +493,7 @@ function bindEvents() {
   document.body.addEventListener("click", onRootClick);
   document.body.addEventListener("input", onRootInput);
   document.body.addEventListener("change", onRootChange);
+  document.addEventListener("tkDelete", (e) => deleteTicket(e.detail));
 }
 function unbindEvents() {
   if (!bound) return;
@@ -500,6 +501,7 @@ function unbindEvents() {
   document.body.removeEventListener("click", onRootClick);
   document.body.removeEventListener("input", onRootInput);
   document.body.removeEventListener("change", onRootChange);
+  document.removeEventListener("tkDelete", (e) => deleteTicket(e.detail));
 }
 
 Auth.on("login", () => { if (location.hash.replace(/^#/, "") === "/ticket") location.reload(); });
