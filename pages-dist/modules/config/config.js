@@ -1881,9 +1881,9 @@ Shell.registerPage({
     </div>
 
     <div class="panel rise" style="--i:2">
-      <h2 class="panel-title"><span class="p-icon sched"><i data-icon="clock"></i></span>调度配置 <span class="panel-sub">(仅用于计算 next_crawl_time，实际调度由青龙 cron 控制)</span></h2>
+      <h2 class="panel-title"><span class="p-icon sched"><i data-icon="clock"></i></span>调度配置 <span class="panel-sub">(前端「下次采集」按此 cron 对齐展示；实际调度由青龙 cron 控制，两处需保持一致)</span></h2>
       <div class="f-row">
-        <div class="fg"><label>Cron 表达式 <span class="hint">(展示用)</span></label><input type="text" id="cronExpr" value="0 8 * * *"></div>
+        <div class="fg"><label>Cron 表达式 <span class="hint">(5 段式，与青龙任务一致)</span></label><input type="text" id="cronExpr" value="0 8 * * *"></div>
         <div class="fg"><label>采集间隔(小时) <span class="hint">(≥1)</span></label><input type="number" id="intervalHours" value="24" min="1"></div>
       </div>
       <div class="cfg-hr"></div>

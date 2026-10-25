@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261023a"
+SCRIPT_VERSION = "20261025a"
 
 import os
 import sys
@@ -1850,10 +1850,95 @@ def now_iso():
     return now.strftime('%Y-%m-%dT%H:%M:%S.') + f'{now.microsecond // 1000:03d}Z'
 
 
-def compute_next_crawl_time(interval_hours):
-    now = datetime.datetime.now(datetime.UTC)
-    next_time = now + datetime.timedelta(hours=interval_hours)
-    return next_time.strftime('%Y-%m-%dT%H:%M:%S.') + f'{next_time.microsecond // 1000:03d}Z'
+def _cron_next_match(expr, base):
+    """解析 5 段式 cron 表达式（分 时 日 月 周），返回 base 之后（下一个分钟边界起）
+    的第一个命中本地时刻。支持 * 、列表、区间(a-b)、步进(*/n、a-b/n)；周字段 0/7=周日。
+    无法解析、字段越界或一年内无命中返回 None。本地时区与青龙容器一致，语义对齐其调度。"""
+    fields = expr.split()
+    if len(fields) != 5:
+        return None
+
+    def _parse_field(field, lo, hi):
+        vals = set()
+        for part in field.split(','):
+            step = 1
+            if '/' in part:
+                part, _, step_s = part.partition('/')
+                if not step_s.isdigit() or int(step_s) < 1:
+                    return None
+                step = int(step_s)
+            if part == '':
+                return None
+            if part == '*':
+                rng = range(lo, hi + 1, step)
+            elif '-' in part:
+                a, _, b = part.partition('-')
+                if not (a.isdigit() and b.isdigit()):
+                    return None
+                lo2, hi2 = int(a), int(b)
+                if lo2 < lo or hi2 > hi or lo2 > hi2:
+                    return None
+                rng = range(lo2, hi2 + 1, step)
+            elif part.isdigit():
+                v = int(part)
+                if v < lo or v > hi:
+                    return None
+                rng = range(v, hi + 1, step) if step > 1 else (v,)
+            else:
+                return None
+            vals.update(rng)
+        return vals
+
+    minute = _parse_field(fields[0], 0, 59)
+    hour = _parse_field(fields[1], 0, 23)
+    dom = _parse_field(fields[2], 1, 31)
+    mon = _parse_field(fields[3], 1, 12)
+    dow = _parse_field(fields[4], 0, 7)
+    if None in (minute, hour, dom, mon, dow) or not (minute and hour and dom and mon and dow):
+        return None
+    if 7 in dow:
+        dow.add(0)
+        dow.discard(7)
+    # 标准 cron 语义：日/周均为受限字段时按 OR 匹配，否则 AND
+    both_restricted = len(dom) < 31 and len(dow) < 7
+    base_tod = base.hour * 60 + base.minute
+    day = base.date()
+    for _ in range(366):
+        if day.month in mon:
+            cron_dow = (day.weekday() + 1) % 7   # python 周一=0 → cron 周日=0
+            if both_restricted:
+                day_ok = day.day in dom or cron_dow in dow
+            else:
+                day_ok = day.day in dom and cron_dow in dow
+            if day_ok:
+                for tod in sorted(h * 60 + m for h in hour for m in minute):
+                    if day != base.date() or tod >= base_tod:
+                        return base.replace(year=day.year, month=day.month, day=day.day,
+                                            hour=tod // 60, minute=tod % 60)
+        day += datetime.timedelta(days=1)
+    return None
+
+
+def compute_next_crawl_time(config):
+    """下一次采集时间：对齐 schedule.cron 的下一个命中钟点（与青龙实际调度一致，
+    手动运行不再污染"下次"显示）；cron 缺失/无法解析时回退旧算法 now + interval_hours。"""
+    schedule = config.get('schedule') or {}
+    expr = str(schedule.get('cron') or '').strip()
+    now_local = datetime.datetime.now().astimezone()
+    next_local = None
+    if expr:
+        try:
+            next_local = _cron_next_match(expr, now_local)
+        except Exception as e:
+            logger.warning(f'cron 表达式解析异常({expr!r}): {e}')
+    if next_local is None:
+        interval_hours = schedule.get('interval_hours')
+        if not isinstance(interval_hours, (int, float)) or interval_hours < 1:
+            interval_hours = 24
+        next_local = now_local + datetime.timedelta(hours=interval_hours)
+        logger.warning(f'schedule.cron 缺失或无法解析({expr!r})，next_crawl_time 回退为 now+{interval_hours}h')
+    utc = next_local.astimezone(datetime.timezone.utc)
+    return utc.strftime('%Y-%m-%dT%H:%M:%S.') + f'{utc.microsecond // 1000:03d}Z'
 
 
 class _BaseCarrierApi:
@@ -5878,8 +5963,7 @@ def check_volatility(old_count, new_count, carrier_cfg):
 
 
 def _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_duration_ms, all_success_count, all_fail_count, old_stats=None):
-    interval_hours = config['schedule']['interval_hours']
-    next_crawl_time = compute_next_crawl_time(interval_hours)
+    next_crawl_time = compute_next_crawl_time(config)
 
     if old_stats is None:
         old_stats = storage.read_json('stats.json')
