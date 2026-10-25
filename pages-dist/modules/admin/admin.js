@@ -435,7 +435,9 @@ function renderTickets() {
       </div>
       <div class="adm-item-foot">
         <span class="adm-meta">${st(t.status)} · 最后动态 ${fmtTime(t.last_reply_at)} · ${t.last_reply_by === "user" ? "等待处理" : "等待用户回应"}</span>
-        ${t.status !== "closed" ? `<div class="adm-actions"><button class="btn ghost sm" data-act="tkClose" data-id="${esc(t.id)}">关闭工单</button></div>` : ""}
+        ${t.status !== "closed"
+          ? `<div class="adm-actions"><button class="btn ghost sm" data-act="tkClose" data-id="${esc(t.id)}">关闭工单</button></div>`
+          : `<div class="adm-actions"><button class="btn ghost sm" data-act="tkDelete" data-id="${esc(t.id)}">删除工单</button></div>`}
       </div>
       ${expanded ? `
       <div class="adm-tk-msgs">
@@ -1190,6 +1192,15 @@ async function onTkClose(id) {
   const r = await api.request(`/api/tickets/${encodeURIComponent(id)}/close`, { method: "POST", body: { reason: "resolved" } });
   if (!r.ok) { toast(r.error || "关闭失败"); return; }
   toast("工单已关闭");
+  loadTab();
+}
+
+async function onTkDelete(id) {
+  const okc = await admConfirm({ title: "删除工单", message: "确定永久删除该工单？此操作不可恢复。", okText: "删除" });
+  if (okc === null) return;
+  const r = await api.request(`/api/tickets/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!r.ok) { toast(r.error || "删除失败"); return; }
+  toast("工单已删除");
   loadTab();
 }
 
@@ -2160,6 +2171,7 @@ function bindEvents() {
     if (act === "tkExpand") { onTkExpand(el.dataset.id); return; }
     if (act === "tkReply") { onTkReply(el.dataset.id); return; }
     if (act === "tkClose") { onTkClose(el.dataset.id); return; }
+    if (act === "tkDelete") { onTkDelete(el.dataset.id); return; }
     if (act === "usersPage") { state.users.page = Number(el.dataset.page); loadTab(); return; }
     if (act === "logsPage") { state.logs.page = Number(el.dataset.page); loadTab(); return; }
   };

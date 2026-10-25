@@ -42,7 +42,7 @@ import { handleChangeEmailRequest, handleChangeEmailConfirm, handleKdfParams } f
 import { handleActivityList, handleActivityCreate, handleActivityDelete, handleActivityDetail, handleActivityQr, handleActivityFavoriteToggle, handleMyActivityFavorites, handleActivityPin, handleActivityUnpin, handleAdminActivityList, handleAdminActivityReview, handleAdminActivityRetire, handleAdminActivityDelete, handleActivityAdminUpdate, runActivitiesCron } from './activities';
 import { handleProofImage } from './cardhub/proofs';
 import { handleCommunityList, handleCommunityCreate, handleCommunityDelete, handleCommunityProof } from './communities';
-import { handleCreateTicket, handleListTickets, handleTicketDetail, handleTicketReply, handleTicketClose, handleTicketApplyTemplate } from './tickets';
+import { handleCreateTicket, handleListTickets, handleTicketDetail, handleTicketReply, handleTicketClose, handleTicketDelete, handleTicketApplyTemplate, runTicketsCron } from './tickets';
 import { handleNavLinks, handleNavSubmit, handleNavAdminList, handleNavReview, handleNavUpdate, handleNavDelete } from './nav';
 import { handleExportActs, handleExportChats, handleExportNavlinks } from './export';
 import { handlePendingPosts, handleListPosts, handleReviewPost, handleAdminClosePost, handleAdminDeletePost } from './admin/posts';
@@ -131,6 +131,8 @@ export default {
         resp = await handleTicketReply(request, env, p.split('/')[3]);
       } else if (m === 'POST' && /^\/api\/tickets\/[^/]+\/close$/.test(p)) {
         resp = await handleTicketClose(request, env, p.split('/')[3]);
+      } else if (m === 'DELETE' && /^\/api\/tickets\/[^/]+$/.test(p)) {
+        resp = await handleTicketDelete(request, env, p.split('/')[3]);
       } else if (p === '/api/meta' && m === 'GET') {
         resp = await cachedGet(request, ctx, 300, () => handleMeta(env)); // 边缘缓存 300s（与浏览器缓存同策略）
       } else if (p === '/api/about/timeline' && m === 'GET') {
@@ -221,6 +223,12 @@ export default {
             results['activities_cron'] = `ok（外推 ${acts.rows} 行 / 青龙：${acts.ql}）`;
           } catch (e) {
             results['activities_cron'] = `FAILED: ${String(e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : e).slice(0, 600)}`;
+          }
+          try {
+            const tkts = await runTicketsCron(env);
+            results['tickets_cron'] = `ok（清理 ${tkts.rows} 条）`;
+          } catch (e) {
+            results['tickets_cron'] = `FAILED: ${String(e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : e).slice(0, 600)}`;
           }
           resp = ok({ ran: true, results });
         }

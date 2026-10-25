@@ -268,3 +268,34 @@ export async function handleTicketClose(request: Request, env: Env, id: string):
 
   return ok({ status: 'closed', close_reason: closeReason });
 }
+
+// DELETE /api/tickets/:id：永久删除（仅创建者本人；仅 closed 状态可删）
+export async function handleTicketDelete(request: Request, env: Env, id: string): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+  const viewer = g as Viewer;
+
+  const t = await env.DB.prepare(`SELECT * FROM tickets WHERE id = ?1`).bind(id).first<TicketRow>();
+  if (!t) return fail(ERR.NOT_FOUND, 'NOT_FOUND', 404);
+  if (t.user_id !== viewer.id) return fail(ERR.FORBIDDEN, 'FORBIDDEN', 403);
+  if (t.status !== 'closed') return fail(ERR.VALIDATION_ERROR, 'MUST_BE_CLOSED', 400);
+
+  await env.DB.prepare(`DELETE FROM ticket_messages WHERE ticket_id = ?1`).bind(id).run();
+  await env.DB.prepare(`DELETE FROM tickets WHERE id = ?1`).bind(id).run();
+  return ok({ deleted: true });
+}
+
+// 定时清理：closed 超过 90 天永久删除（供 cron 调用）
+export async function runTicketsCron(env: Env): Promise<{ rows: number }> {
+  const cutoff = Date.now() - 90 * 86400 * 1000;
+  const tickets = await env.DB.prepare(
+    `SELECT id FROM tickets WHERE status = 'closed' AND closed_at < ?1`,
+  ).bind(cutoff).all<{ id: string }>();
+  const rows = tickets.results.length;
+  if (rows > 0) {
+    const ids = tickets.results.map(r => `'${r.id}'`).join(',');
+    await env.DB.prepare(`DELETE FROM ticket_messages WHERE ticket_id IN (${ids})`).run();
+    await env.DB.prepare(`DELETE FROM tickets WHERE id IN (${ids})`).run();
+  }
+  return { rows };
+}
