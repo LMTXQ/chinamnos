@@ -2663,9 +2663,13 @@ function bindListSection(type1Code) {
       const item = (s0.items || []).find(x => String(x.id) === String(fid)) || null;
       toggleFavById(fid, item);
       const on = isFav(fid);
-      favBtn.classList.toggle("on", on);
-      favBtn.title = on ? "取消收藏" : "收藏";
-      favBtn.innerHTML = icon(on ? "starFill" : "star");
+      /* 联动：同一条目的全部星标（原卡片 + 展开详情面板等克隆副本）一起切换 */
+      section.querySelectorAll(".fav-btn").forEach(b => {
+        if (String(b.dataset.favId) !== String(fid)) return;
+        b.classList.toggle("on", on);
+        b.title = on ? "取消收藏" : "收藏";
+        b.innerHTML = icon(on ? "starFill" : "star");
+      });
       if (s0.favOnly) drawList(type1Code, getProvCode());
       return;
     }
@@ -2839,6 +2843,13 @@ function toggleCardDetail(card) {
       e.stopPropagation();
       closeCardDetail(list);
     });
+    /* 面板与原卡片分离，补齐原卡片同款操作按钮（收藏/复制名称/复制概要/分享）：
+       克隆原卡按钮（保留 data-* 与收藏态），点击走 section 上同一套事件委托，
+       星标同步由 .fav-btn 处理器内的联动逻辑完成 */
+    const actions = document.createElement("div");
+    actions.className = "cdp-actions";
+    card.querySelectorAll(".fav-btn, .copy-btn").forEach(src => actions.appendChild(src.cloneNode(true)));
+    head.insertBefore(actions, head.querySelector(".cdp-close"));
     pad.prepend(head);
   }
 

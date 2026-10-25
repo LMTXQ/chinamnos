@@ -2347,41 +2347,86 @@
   border-color: color-mix(in oklab, var(--acc) 55%, transparent);
   transform: rotate(90deg);
 }
-/* 面板内字段表：单列卡片式行，一行一条信息 */
-.card-detail-panel .fields-table {
-  display: block;
+/* 面板头部操作按钮组：克隆自原卡片（收藏/复制×2/分享），比卡内略放大、默认更显眼 */
+.cdp-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  margin-left: auto;
 }
-.card-detail-panel .fields-table tbody {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
+.cdp-actions .fav-btn,
+.cdp-actions .copy-btn {
+  width: 30px;
+  height: 30px;
+  opacity: 0.75;
+}
+.cdp-actions .fav-btn svg,
+.cdp-actions .copy-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.cdp-actions .fav-btn {
+  margin-left: 0;
+}
+/* 面板内字段表：与列表模式同款的规整表格（固定表头列 + 行列对齐），
+   卡片化柔化：外层圆角描边、仅横向虚线分隔、表头列主题色淡底 */
+.card-detail-panel .fields-table {
+  width: 100%; /* 面板搬运 innerHTML 后外层 .detail 壳丢失，.detail table 的 width:100% 不再命中，需在此补上 */
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--glass) 60%, transparent);
+  overflow: hidden;
+  font-size: 12.5px;
 }
 .card-detail-panel .fields-table tr {
-  display: flex;
-  align-items: stretch;
-  border-radius: var(--r-md);
-  overflow: hidden;
-  border: 1px solid color-mix(in oklab, var(--line) 65%, transparent);
-  background: color-mix(in oklab, var(--acc) 3%, transparent);
+  transition: background 0.2s;
+}
+.card-detail-panel .fields-table tr:hover {
+  background: color-mix(in oklab, var(--acc) 4%, transparent);
+}
+/* 角落单元格补圆角：防单元格底色戳出外层圆角 */
+.card-detail-panel .fields-table tr:first-child > th:first-child,
+.card-detail-panel .fields-table tr:first-child > td:first-child {
+  border-top-left-radius: calc(var(--r-md) - 1px);
+}
+.card-detail-panel .fields-table tr:first-child > td:last-child {
+  border-top-right-radius: calc(var(--r-md) - 1px);
+}
+.card-detail-panel .fields-table tr:last-child > th:first-child,
+.card-detail-panel .fields-table tr:last-child > td:first-child {
+  border-bottom-left-radius: calc(var(--r-md) - 1px);
+}
+.card-detail-panel .fields-table tr:last-child > td:last-child {
+  border-bottom-right-radius: calc(var(--r-md) - 1px);
+}
+/* 仅横向分隔线，去掉列表模式的纵横满格线 */
+.card-detail-panel .fields-table tr + tr > th,
+.card-detail-panel .fields-table tr + tr > td {
+  border-top: 1px dashed color-mix(in oklab, var(--line) 65%, transparent);
 }
 .card-detail-panel .fields-table th {
-  flex: none;
-  width: auto;
-  min-width: 96px;
+  width: 124px;
   border: none;
-  border-right: 1px dashed color-mix(in oklab, var(--line) 85%, transparent);
+  border-right: 1px dashed color-mix(in oklab, var(--line) 75%, transparent);
   border-radius: 0;
   background: color-mix(in oklab, var(--acc) 6%, transparent);
-  white-space: normal;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 .card-detail-panel .fields-table td {
-  flex: 1;
   border: none;
   border-radius: 0;
+  padding: 8px 14px;
+  line-height: 1.6;
 }
 @media (max-width: 820px) {
   .cdp-name {
     min-width: 120px;
+  }
+  .card-detail-panel .fields-table th {
+    width: 108px;
   }
 }
 .tcard:hover {
