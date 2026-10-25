@@ -637,6 +637,7 @@ function renderFavsPartition() {
   host.innerHTML = items.length
     ? `<div class="act-list">${items.map(favsPartition === "act" ? actCardHTML : chatCardHTML).join("")}</div>`
     : `<div class="empty" style="padding:40px 0">${favsPartition === "act" ? "暂无收藏的情报，在情报卡片上点「收藏」即可加入" : "暂无收藏的社群，在社群卡片上点「收藏」即可加入"}</div>`;
+  mountIcons(host);
 }
 
 /* ── 公告推广页签：只读展示当前生效的公告与推广全文（弹窗内容回看） ──
