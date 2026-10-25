@@ -1274,6 +1274,15 @@ function renderNchDigestGrid() {
     <label class="nch-prov${cur.has(p.code) ? " on" : ""}">
       <input type="checkbox" data-prov="${esc(p.code)}" ${cur.has(p.code) ? "checked" : ""}>${esc(p.name)}
     </label>`).join("");
+  /* 勾选写回状态（此前缺失：勾选只停留在 DOM，保存提交的是旧数据、切运营商页签勾选即丢） */
+  grid.onchange = (e) => {
+    const cb = e.target.closest("input[data-prov]");
+    if (!cb || !nchProvEditor) return;
+    const key = nchProvEditor.active;
+    const set = nchProvEditor.carriers[key] || (nchProvEditor.carriers[key] = new Set());
+    if (cb.checked) set.add(cb.dataset.prov); else set.delete(cb.dataset.prov);
+    cb.closest(".nch-prov")?.classList.toggle("on", cb.checked);
+  };
 }
 
 const NCH_PROV_EDITOR_STYLE = `
