@@ -21,10 +21,11 @@ payload 行结构（Worker 写入，契约固定）：
   {nid, uid, kind, title, body, channel_type, cred}
   title/body 已由 Worker 按统一消息模板组装完成，本脚本不做二次加工。
   （采集播报行由本脚本自行组装，cred/email_target 来自订户名单端点；
-    额外携带 formats = {im/plain/markdown/table_html/html 五格式包}，适配器经 pick_body 按需取用——
+    额外携带 formats = {markdown/table_html/html/plain 四格式包}，适配器经 pick_body 按需取用——
     渠道只需声明自己的格式偏好（如 ("html","plain")），无需自建排版。
-    渠道格式现状：钉钉/企微 im（分隔符+缩进版式，零 md 语法）→ 邮件 html（内联样式表格）；
-    markdown(GFM 表格)/table_html(裸表格) 为备选格式，当前无渠道消费）
+    渠道格式现状：企微 markdown(GFM 表格, markdown_v2 消息类型) → 钉钉 table_html(裸表格) →
+    邮件 html(内联样式表格)；digest 各格式自带标题行，板块标题用「── 名称 + 横线」标题条区分，
+    零标题标签零加粗）
 
 环境变量：
   NOTIFY_DATA_DIR     payload 与状态目录（默认：脚本同目录 data/）
@@ -131,10 +132,10 @@ def send_dingtalk(cred, title, body, row=None):
     if secret:
         ts = str(round(time.time() * 1000))
         url = "%s&timestamp=%s&sign=%s" % (url, ts, _dingtalk_sign(secret, ts))
-    # IM 版式（分隔符+缩进，自带标题行，零 markdown 语法）——各家客户端渲染一致；
-    # batch 回退行（无 formats）保持「标题 + 正文」拼接
-    fmt, text_body = pick_body(row, "im", "plain")
-    text = _trunc_bytes(text_body if fmt == "im" else "### %s\n%s" % (title, text_body), 3800)
+    # 钉钉 markdown 支持 <table> HTML 子集（官方未收录的实践能力，GFM 管道表不渲染）；
+    # digest 行正文自带标题行，batch 回退行（无 formats）保持「标题 + 正文」拼接
+    fmt, text_body = pick_body(row, "table_html", "plain")
+    text = _trunc_bytes(text_body if fmt != "plain" else "### %s\n%s" % (title, text_body), 3800)
     try:
         res = _post(url, {"msgtype": "markdown",
                           "markdown": {"title": title[:64], "text": text}})
@@ -151,9 +152,18 @@ def send_wecom(cred, title, body, row=None):
     webhook = cred.get("webhook", "")
     if not webhook:
         return False, "缺少 webhook"
-    fmt, text_body = pick_body(row, "im", "plain")
-    text = _trunc_bytes(text_body if fmt == "im" else "### %s\n%s" % (title, text_body), 3800)  # 上限 4096 字节，留余量
+    fmt, text_body = pick_body(row, "markdown", "plain")
     try:
+        if fmt == "markdown":
+            # 企微 markdown_v2（2025-08 文档新增）：GFM 管道表格；正文已自带标题行
+            text = _trunc_bytes(text_body, 3800)  # 上限 4096 字节，留余量
+            res = _post(webhook, {"msgtype": "markdown_v2",
+                                  "markdown_v2": {"content": text}})
+            if res.get("errcode") == 0:
+                return True, "errcode=0 (markdown_v2 表格)"
+        # 服务端不支持 markdown_v2 或 batch 回退行：现状版式（标题 + 纯文本正文）
+        _, plain_body = pick_body(row, "plain")
+        text = _trunc_bytes("### %s\n%s" % (title, plain_body), 3800)  # 上限 4096 字节，留余量
         res = _post(webhook, {"msgtype": "markdown", "markdown": {"content": text}})
         ok = res.get("errcode") == 0
         return ok, "errcode=%s %s" % (res.get("errcode"), res.get("errmsg"))
@@ -579,75 +589,23 @@ def _render_plain(sec):
     return "\n".join(lines)
 
 
-def _render_im(sec):
-    """IM 渠道版式（钉钉/企微）：不放大字体、不加粗，纯分隔符 + 缩进营造层级。
-    零 markdown 语法（无 #/**/表格/ASCII 缩进，缩进用全角空格不会触发代码块），
-    经 markdown 消息类型原样渲染，各家客户端表现一致；
-    省份名按全角空格补齐对齐数字列，计数列固定展示（0 不省略，保证纵向对齐）。"""
-    sep = "────────────────"
-
-    def pad(name):
-        return str(name) + "　" * max(0, 3 - len(str(name)))
-
-    def stat_lines(secs):
-        out = []
-        ta = tc = tr = 0
-        provs = 0
-        for s in secs:
-            out.append(s["name"])
-            for name, a, c, r in s["rows"]:
-                out.append("　· %s新增 %d ｜ 修改 %d ｜ 下架 %d" % (pad(name), a, c, r))
-            a, c, r = s["totals"]
-            ta += a
-            tc += c
-            tr += r
-            provs += s["n"]
-        if provs:
-            out.append("")
-            out.append(_totals_line(ta, tc, tr, provs))
-        return out
-
-    lines = [sec["title"], ""]
-    if sec["round"]:
-        lines.append("本轮采集")
-        lines.append(sep)
-        lines.extend(stat_lines(sec["round"]))
-        lines.append("")
-        lines.append("今日累计")
-        lines.append(sep)
-        lines.extend(stat_lines(sec["today"]) if sec["today"] else ["　（你关注的范围今日暂无变化）"])
-    if sec["announce"]:
-        if len(lines) > 2:
-            lines.append("")
-        lines.append("公告新增")
-        lines.append(sep)
-        for s in sec["announce"]:
-            lines.append(s["name"])
-            for it in s["items"]:
-                lines.append("　· %s（%s）" % (it["title"], it["date"]))
-                if it["link"]:
-                    lines.append("　　%s" % it["link"])
-    lines.append("")
-    lines.append(sep)
-    lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
-    if sec["site"]:
-        lines.append("站点：%s" % sec["site"])
-    return "\n".join(lines)
-
-
 def _render_markdown(sec):
-    """GFM 管道表格版（真 markdown 表格），供支持 md 表格的渠道按需取用；
-    钉钉/企微机器人 markdown 不支持表格，其 wants 声明实际落 plain。"""
+    """企微 markdown_v2 版式：GFM 管道表格保留，但零标题标签（#）、零加粗（**）——
+    板块标题用「── 名称 + 横线」标题条与全角缩进区分，规避大字号；
+    正文自带标题行（适配器不再拼 ### 前缀）。"""
 
     def md_cell(v):
         return str(v).replace("|", "\\|").replace("\n", " ")
+
+    def bar(label):
+        return "── %s ──────────────" % label
 
     def stat_md(secs):
         out = []
         ta = tc = tr = 0
         provs = 0
         for s in secs:
-            out.append("**%s**" % s["name"])
+            out.append("　" + s["name"])
             out.append("")
             out.append("| 省份 | 新增 | 修改 | 下架 |")
             out.append("| --- | ---: | ---: | ---: |")
@@ -658,65 +616,56 @@ def _render_markdown(sec):
             tc += c
             tr += r
             provs += s["n"]
-            out.append("| **合计（%d 省）** | %d | %d | %d |" % (s["n"], a, c, r))
+            out.append("| 合计（%d 省） | %d | %d | %d |" % (s["n"], a, c, r))
             out.append("")
         if provs:
-            out.append(_totals_line(ta, tc, tr, provs))
+            out.append("　" + _totals_line(ta, tc, tr, provs))
             out.append("")
         return out
 
-    lines = []
+    lines = [sec["title"], ""]
     if sec["round"]:
-        lines.append("#### 本轮采集")
-        lines.append("")
+        lines.append(bar("本轮采集"))
         lines.extend(stat_md(sec["round"]))
-        lines.append("#### 今日累计")
-        lines.append("")
-        if sec["today"]:
-            lines.extend(stat_md(sec["today"]))
-        else:
-            lines.append("（你关注的范围今日暂无变化）")
-            lines.append("")
+        lines.append(bar("今日累计"))
+        lines.extend(stat_md(sec["today"]) if sec["today"] else ["　（你关注的范围今日暂无变化）", ""])
     if sec["announce"]:
-        lines.append("#### 公告新增")
-        lines.append("")
+        lines.append(bar("公告新增"))
         for s in sec["announce"]:
-            lines.append("**%s**" % s["name"])
+            lines.append("　" + s["name"])
             lines.append("")
-            lines.append("| 公告标题 | 日期 |")
-            lines.append("| --- | --- |")
             for it in s["items"]:
-                t = ("[%s](%s)" % (md_cell(it["title"]), it["link"])) if it["link"] else md_cell(it["title"])
-                lines.append("| %s | %s |" % (t, md_cell(it["date"])))
+                lines.append("　· %s（%s）" % (it["title"], it["date"]))
+                if it["link"]:
+                    lines.append("　　%s" % it["link"])
             lines.append("")
-    lines.append("（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）")
+    lines.append("─" * 24)
+    lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
     if sec["site"]:
-        lines.append("")
         lines.append("站点：%s" % sec["site"])
     return "\n".join(lines)
 
 
 def _render_table_html(sec):
-    """钉钉系 IM 的 HTML 表格版：markdown 消息类型支持 <table> HTML 子集（官方文档未收录的实践能力，
-    GFM 管道表不渲染）。社区实践约定——标签后带换行（否则 APP 端显示不全）、结构精简
-    （字体样式/背景不渲染），故独立于邮件 html 版；公告段单元格内链接渲染未经验证，
-    改用 markdown 列表 + 官方链接语法。"""
+    """钉钉 markdown 版式：<table> HTML 子集裸表格（官方未收录的实践能力，GFM 管道表不渲染）。
+    零标题标签、零加粗——板块标题用「── 名称 + 横线」标题条与全角缩进区分；
+    标签后带换行（否则 APP 端显示不全）；正文自带标题行（适配器不再拼 ### 前缀）。"""
 
     def esc(v):
         return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def md_esc(v):
-        return str(v).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    def bar(label):
+        return "── %s ──────────────" % label
 
     def table(headers, rows):
-        out = ["<table>\n"]
+        out = ["<table>"]
         for r in [headers] + rows:
-            out.append("<tr>\n")
+            out.append("<tr>")
             for c in r:
-                out.append("<td>%s</td>\n" % c)
-            out.append("</tr>\n")
-        out.append("</table>\n\n")
-        return "".join(out)
+                out.append("<td>%s</td>" % c)
+            out.append("</tr>")
+        out.append("</table>")
+        return "\n".join(out)
 
     def stat_tables(secs):
         out = []
@@ -730,33 +679,36 @@ def _render_table_html(sec):
             tr += r
             provs += s["n"]
             rows.append(["合计（%d 省）" % s["n"], str(a), str(c), str(r)])
-            out.append("**%s**\n\n" % s["name"])
+            out.append("　" + s["name"])
+            out.append("")
             out.append(table(["省份", "新增", "修改", "下架"], rows))
+            out.append("")
         if provs:
-            out.append(_totals_line(ta, tc, tr, provs))
-            out.append("\n")
+            out.append("　" + _totals_line(ta, tc, tr, provs))
+            out.append("")
         return out
 
-    parts = []
+    lines = [sec["title"], ""]
     if sec["round"]:
-        parts.append("**本轮采集**\n\n")
-        parts.extend(stat_tables(sec["round"]))
-        parts.append("**今日累计**\n\n")
-        parts.extend(stat_tables(sec["today"]) if sec["today"] else ["（你关注的范围今日暂无变化）\n\n"])
+        lines.append(bar("本轮采集"))
+        lines.extend(stat_tables(sec["round"]))
+        lines.append(bar("今日累计"))
+        lines.extend(stat_tables(sec["today"]) if sec["today"] else ["　（你关注的范围今日暂无变化）", ""])
     if sec["announce"]:
-        parts.append("**公告新增**\n\n")
+        lines.append(bar("公告新增"))
         for s in sec["announce"]:
-            parts.append("**%s**\n\n" % s["name"])
+            lines.append("　" + s["name"])
+            lines.append("")
             for it in s["items"]:
+                lines.append("　· %s（%s）" % (it["title"], it["date"]))
                 if it["link"]:
-                    parts.append("- [%s](%s)（%s）\n" % (md_esc(it["title"]), it["link"], it["date"]))
-                else:
-                    parts.append("- %s（%s）\n" % (md_esc(it["title"]), it["date"]))
-            parts.append("\n")
-    parts.append("（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）\n")
+                    lines.append("　　%s" % it["link"])
+            lines.append("")
+    lines.append("─" * 24)
+    lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
     if sec["site"]:
-        parts.append("站点：%s\n" % sec["site"])
-    return "".join(parts)
+        lines.append("站点：%s" % sec["site"])
+    return "\n".join(lines)
 
 
 def _render_html(sec):
@@ -830,9 +782,10 @@ def _render_html(sec):
 def build_digest_message(sub, digest, site=""):
     """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化且无公告）返回 None。
 
-    返回 (title, formats)：formats = {"im" 分隔符+缩进版式（钉钉/企微）, "plain" 纯文本行式,
-    "markdown" GFM 表格, "table_html" HTML 裸表格, "html" 内联样式表格（邮件）}，
-    各格式由同一份结构（_digest_sections）渲染，统计口径天然一致；
+    返回 (title, formats)：formats = {"markdown" GFM 表格（企微 markdown_v2）,
+    "table_html" HTML 裸表格（钉钉）, "html" 内联样式表格（邮件）, "plain" 纯文本行式（兜底）}，
+    各格式由同一份结构（_digest_sections）渲染，统计口径天然一致，且均自带标题行、
+    零标题标签零加粗（板块标题用「── 名称 + 横线」标题条 + 全角缩进区分）；
     渠道适配器经 pick_body 按自身声明取用。"""
     round_at = int(digest.get("round_at") or 0)
     stamp = time.strftime("%m-%d %H:%M", time.localtime(round_at / 1000)) if round_at else "本轮"
@@ -841,7 +794,7 @@ def build_digest_message(sub, digest, site=""):
     if sec is None:
         return None
     sec["title"] = title
-    return title, {"im": _render_im(sec), "plain": _render_plain(sec), "markdown": _render_markdown(sec),
+    return title, {"plain": _render_plain(sec), "markdown": _render_markdown(sec),
                    "table_html": _render_table_html(sec), "html": _render_html(sec)}
 
 
