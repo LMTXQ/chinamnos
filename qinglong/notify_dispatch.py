@@ -598,7 +598,7 @@ def _render_markdown(sec):
         return str(v).replace("|", "\\|").replace("\n", " ")
 
     def bar(label):
-        return "── %s ──────────────" % label
+        return "── %s ────" % label  # 全角 16 格封顶，手机消息面板一行放得下
 
     def stat_md(secs):
         out = []
@@ -639,7 +639,7 @@ def _render_markdown(sec):
                 if it["link"]:
                     lines.append("　　%s" % it["link"])
             lines.append("")
-    lines.append("─" * 24)
+    lines.append("─" * 16)
     lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
     if sec["site"]:
         lines.append("站点：%s" % sec["site"])
@@ -655,7 +655,7 @@ def _render_table_html(sec):
         return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     def bar(label):
-        return "── %s ──────────────" % label
+        return "── %s ────" % label  # 全角 16 格封顶，手机消息面板一行放得下
 
     def table(headers, rows):
         out = ["<table>"]
@@ -704,7 +704,7 @@ def _render_table_html(sec):
                 if it["link"]:
                     lines.append("　　%s" % it["link"])
             lines.append("")
-    lines.append("─" * 24)
+    lines.append("─" * 16)
     lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
     if sec["site"]:
         lines.append("站点：%s" % sec["site"])
