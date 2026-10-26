@@ -21,8 +21,10 @@ payload 行结构（Worker 写入，契约固定）：
   {nid, uid, kind, title, body, channel_type, cred}
   title/body 已由 Worker 按统一消息模板组装完成，本脚本不做二次加工。
   （采集播报行由本脚本自行组装，cred/email_target 来自订户名单端点；
-    额外携带 formats = {plain/markdown/html 三格式包}，适配器经 pick_body 按需取用——
-    渠道只需声明自己的格式偏好（如 ("html","plain")），无需自建排版）
+    额外携带 formats = {plain/markdown/table_html/html 四格式包}，适配器经 pick_body 按需取用——
+    渠道只需声明自己的格式偏好（如 ("html","plain")），无需自建排版。
+    渠道格式现状：邮件 html → 企微 markdown_v2(GFM 表格，失败回退 plain) →
+    钉钉 markdown(table_html 裸表格，服务端拒绝时回退 plain)）
 
 环境变量：
   NOTIFY_DATA_DIR     payload 与状态目录（默认：脚本同目录 data/）
@@ -129,12 +131,20 @@ def send_dingtalk(cred, title, body, row=None):
     if secret:
         ts = str(round(time.time() * 1000))
         url = "%s&timestamp=%s&sign=%s" % (url, ts, _dingtalk_sign(secret, ts))
-    _, text_body = pick_body(row, "markdown", "plain")  # 钉钉 md 不支持表格，markdown 版式出现前实际落在 plain
-    text = _trunc_bytes("## %s\n%s" % (title, text_body), 3800)
+    # 钉钉 markdown 支持 <table> HTML 子集（官方未收录的实践能力，GFM 管道表不渲染）；
+    # 被服务端拒绝时回退纯文本版式重发（老能力，保证必达）
+    fmt, text_body = pick_body(row, "table_html", "plain")
     try:
+        text = _trunc_bytes("## %s\n%s" % (title, text_body), 3800)
         res = _post(url, {"msgtype": "markdown",
                           "markdown": {"title": title[:64], "text": text}})
         ok = res.get("errcode") == 0
+        if not ok and fmt == "table_html":
+            _, text_body = pick_body(row, "plain")
+            text = _trunc_bytes("## %s\n%s" % (title, text_body), 3800)
+            res = _post(url, {"msgtype": "markdown",
+                              "markdown": {"title": title[:64], "text": text}})
+            ok = res.get("errcode") == 0
         return ok, "errcode=%s %s" % (res.get("errcode"), res.get("errmsg"))
     except urllib.error.HTTPError as e:
         return False, "HTTP %s %s" % (e.code, e.read().decode("utf-8", "ignore")[:150])
@@ -147,9 +157,17 @@ def send_wecom(cred, title, body, row=None):
     webhook = cred.get("webhook", "")
     if not webhook:
         return False, "缺少 webhook"
-    _, text_body = pick_body(row, "markdown", "plain")  # 企微 md 不支持表格，同钉钉落 plain
-    text = _trunc_bytes("## %s\n%s" % (title, text_body), 3800)  # 企微 markdown 上限 4096 字节，留余量
+    fmt, md_body = pick_body(row, "markdown", "plain")
     try:
+        if fmt == "markdown":
+            # 企微 markdown_v2（2025-08 文档新增）：支持 GFM 管道表格；老服务端不支持时回退现状版式
+            text = _trunc_bytes("## %s\n\n%s" % (title, md_body), 3800)  # markdown_v2 上限 4096 字节，留余量
+            res = _post(webhook, {"msgtype": "markdown_v2",
+                                  "markdown_v2": {"content": text}})
+            if res.get("errcode") == 0:
+                return True, "errcode=0 (markdown_v2 表格)"
+        _, plain_body = pick_body(row, "plain")
+        text = _trunc_bytes("## %s\n%s" % (title, plain_body), 3800)  # 企微 markdown 上限 4096 字节，留余量
         res = _post(webhook, {"msgtype": "markdown", "markdown": {"content": text}})
         ok = res.get("errcode") == 0
         return ok, "errcode=%s %s" % (res.get("errcode"), res.get("errmsg"))
@@ -636,6 +654,69 @@ def _render_markdown(sec):
     return "\n".join(lines)
 
 
+def _render_table_html(sec):
+    """钉钉系 IM 的 HTML 表格版：markdown 消息类型支持 <table> HTML 子集（官方文档未收录的实践能力，
+    GFM 管道表不渲染）。社区实践约定——标签后带换行（否则 APP 端显示不全）、结构精简
+    （字体样式/背景不渲染），故独立于邮件 html 版；公告段单元格内链接渲染未经验证，
+    改用 markdown 列表 + 官方链接语法。"""
+
+    def esc(v):
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def md_esc(v):
+        return str(v).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+    def table(headers, rows):
+        out = ["<table>\n"]
+        for r in [headers] + rows:
+            out.append("<tr>\n")
+            for c in r:
+                out.append("<td>%s</td>\n" % c)
+            out.append("</tr>\n")
+        out.append("</table>\n\n")
+        return "".join(out)
+
+    def stat_tables(secs):
+        out = []
+        ta = tc = tr = 0
+        provs = 0
+        for s in secs:
+            rows = [[esc(name), str(a), str(c), str(r)] for name, a, c, r in s["rows"]]
+            a, c, r = s["totals"]
+            ta += a
+            tc += c
+            tr += r
+            provs += s["n"]
+            rows.append(["合计（%d 省）" % s["n"], str(a), str(c), str(r)])
+            out.append("**%s**\n\n" % s["name"])
+            out.append(table(["省份", "新增", "修改", "下架"], rows))
+        if provs:
+            out.append(_totals_line(ta, tc, tr, provs))
+            out.append("\n")
+        return out
+
+    parts = []
+    if sec["round"]:
+        parts.append("**本轮采集**\n\n")
+        parts.extend(stat_tables(sec["round"]))
+        parts.append("**今日累计**\n\n")
+        parts.extend(stat_tables(sec["today"]) if sec["today"] else ["（你关注的范围今日暂无变化）\n\n"])
+    if sec["announce"]:
+        parts.append("**公告新增**\n\n")
+        for s in sec["announce"]:
+            parts.append("**%s**\n\n" % s["name"])
+            for it in s["items"]:
+                if it["link"]:
+                    parts.append("- [%s](%s)（%s）\n" % (md_esc(it["title"]), it["link"], it["date"]))
+                else:
+                    parts.append("- %s（%s）\n" % (md_esc(it["title"]), it["date"]))
+            parts.append("\n")
+    parts.append("（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）\n")
+    if sec["site"]:
+        parts.append("站点：%s\n" % sec["site"])
+    return "".join(parts)
+
+
 def _render_html(sec):
     """内联样式 HTML 表格版（邮箱客户端对 <style> 支持不一，全部内联最稳）：邮件渠道用。"""
     _td = 'border:1px solid #d0d3da;padding:5px 8px;font-size:13px'
@@ -707,9 +788,10 @@ def _render_html(sec):
 def build_digest_message(sub, digest, site=""):
     """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化且无公告）返回 None。
 
-    返回 (title, formats)：formats = {"plain" 纯文本行式, "markdown" GFM 表格, "html" 内联样式表格}，
-    三种格式由同一份结构（_digest_sections）渲染，统计口径天然一致；
-    渠道适配器经 pick_body 按自身声明取用（邮件 html，钉钉/企微 plain）。"""
+    返回 (title, formats)：formats = {"plain" 纯文本行式, "markdown" GFM 表格（企微 markdown_v2）,
+    "table_html" HTML 裸表格（钉钉 markdown）, "html" 内联样式表格（邮件）}，
+    四种格式由同一份结构（_digest_sections）渲染，统计口径天然一致；
+    渠道适配器经 pick_body 按自身声明取用。"""
     round_at = int(digest.get("round_at") or 0)
     stamp = time.strftime("%m-%d %H:%M", time.localtime(round_at / 1000)) if round_at else "本轮"
     title = "【ChinaMNOs 讯览台】资费监控通知（%s 轮）" % stamp
@@ -717,7 +799,8 @@ def build_digest_message(sub, digest, site=""):
     if sec is None:
         return None
     sec["title"] = title
-    return title, {"plain": _render_plain(sec), "markdown": _render_markdown(sec), "html": _render_html(sec)}
+    return title, {"plain": _render_plain(sec), "markdown": _render_markdown(sec),
+                   "table_html": _render_table_html(sec), "html": _render_html(sec)}
 
 
 def process_digest_files(processed, failed, workers=8):
