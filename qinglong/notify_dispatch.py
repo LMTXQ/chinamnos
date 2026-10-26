@@ -135,13 +135,13 @@ def send_dingtalk(cred, title, body, row=None):
     # 被服务端拒绝时回退纯文本版式重发（老能力，保证必达）
     fmt, text_body = pick_body(row, "table_html", "plain")
     try:
-        text = _trunc_bytes("## %s\n%s" % (title, text_body), 3800)
+        text = _trunc_bytes("### %s\n%s" % (title, text_body), 3800)  # 主标题三级避免过大
         res = _post(url, {"msgtype": "markdown",
                           "markdown": {"title": title[:64], "text": text}})
         ok = res.get("errcode") == 0
         if not ok and fmt == "table_html":
             _, text_body = pick_body(row, "plain")
-            text = _trunc_bytes("## %s\n%s" % (title, text_body), 3800)
+            text = _trunc_bytes("### %s\n%s" % (title, text_body), 3800)
             res = _post(url, {"msgtype": "markdown",
                               "markdown": {"title": title[:64], "text": text}})
             ok = res.get("errcode") == 0
@@ -161,7 +161,7 @@ def send_wecom(cred, title, body, row=None):
     try:
         if fmt == "markdown":
             # 企微 markdown_v2（2025-08 文档新增）：支持 GFM 管道表格；老服务端不支持时回退现状版式
-            text = _trunc_bytes("## %s\n\n%s" % (title, md_body), 3800)  # markdown_v2 上限 4096 字节，留余量
+            text = _trunc_bytes("### %s\n\n%s" % (title, md_body), 3800)  # markdown_v2 上限 4096 字节，留余量；主标题三级避免过大
             res = _post(webhook, {"msgtype": "markdown_v2",
                                   "markdown_v2": {"content": text}})
             if res.get("errcode") == 0:
@@ -625,10 +625,10 @@ def _render_markdown(sec):
 
     lines = []
     if sec["round"]:
-        lines.append("## 本轮采集")
+        lines.append("#### 本轮采集")
         lines.append("")
         lines.extend(stat_md(sec["round"]))
-        lines.append("## 今日累计")
+        lines.append("#### 今日累计")
         lines.append("")
         if sec["today"]:
             lines.extend(stat_md(sec["today"]))
@@ -636,7 +636,7 @@ def _render_markdown(sec):
             lines.append("（你关注的范围今日暂无变化）")
             lines.append("")
     if sec["announce"]:
-        lines.append("## 公告新增")
+        lines.append("#### 公告新增")
         lines.append("")
         for s in sec["announce"]:
             lines.append("**%s**" % s["name"])
