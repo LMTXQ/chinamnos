@@ -643,8 +643,11 @@ def _render_markdown(sec):
                 t = ("[%s](%s)" % (md_cell(it["title"]), it["link"])) if it["link"] else md_cell(it["title"])
                 lines.append("| %s | %s |" % (t, md_cell(it["date"])))
             lines.append("")
+    lines.append("")
     lines.append("─" * 16)
+    lines.append("")
     lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
+    lines.append("")
     if sec["site"]:
         lines.append("站点：%s" % sec["site"])
     return "\n".join(lines)
@@ -715,8 +718,11 @@ def _render_table_html(sec):
             lines.append("")
             lines.append(table(["公告标题", "日期"], rows))
             lines.append("")
+    lines.append("")
     lines.append("─" * 16)
+    lines.append("")
     lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
+    lines.append("")
     if sec["site"]:
         lines.append("站点：%s" % sec["site"])
     return "\n".join(lines)
