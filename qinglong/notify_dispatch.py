@@ -20,7 +20,9 @@
 payload 行结构（Worker 写入，契约固定）：
   {nid, uid, kind, title, body, channel_type, cred}
   title/body 已由 Worker 按统一消息模板组装完成，本脚本不做二次加工。
-  （采集播报行由本脚本自行组装，cred/email_target 来自订户名单端点）
+  （采集播报行由本脚本自行组装，cred/email_target 来自订户名单端点；
+    额外携带 formats = {plain/markdown/html 三格式包}，适配器经 pick_body 按需取用——
+    渠道只需声明自己的格式偏好（如 ("html","plain")），无需自建排版）
 
 环境变量：
   NOTIFY_DATA_DIR     payload 与状态目录（默认：脚本同目录 data/）
@@ -96,6 +98,19 @@ def _trunc_bytes(s, limit):
     return cut.decode("utf-8", "ignore") + "\n\n…（内容过长已截断）"
 
 
+def pick_body(row, *wants):
+    """渠道按格式偏好取正文的公用入口（三格式包由 build_digest_message 统一产出）。
+    按 wants 顺序取第一个存在的格式；行内无 formats（batch 现成信封行）或全部
+    未命中时回退 plain = row.body。返回 (格式名, 正文)。"""
+    formats = (row or {}).get("formats")
+    if isinstance(formats, dict):
+        for w in wants:
+            v = formats.get(w)
+            if v:
+                return w, v
+    return "plain", str((row or {}).get("body") or "")
+
+
 # ───────────────────────── 钉钉（加签可选） ─────────────────────────
 def _dingtalk_sign(secret, ts):
     """待签串 = f"{ts}\\n{secret}"，HMAC-SHA256 后 base64，再 url 编码（与官方文档一致）。"""
@@ -114,7 +129,8 @@ def send_dingtalk(cred, title, body, row=None):
     if secret:
         ts = str(round(time.time() * 1000))
         url = "%s&timestamp=%s&sign=%s" % (url, ts, _dingtalk_sign(secret, ts))
-    text = _trunc_bytes("## %s\n%s" % (title, body), 3800)
+    _, text_body = pick_body(row, "markdown", "plain")  # 钉钉 md 不支持表格，markdown 版式出现前实际落在 plain
+    text = _trunc_bytes("## %s\n%s" % (title, text_body), 3800)
     try:
         res = _post(url, {"msgtype": "markdown",
                           "markdown": {"title": title[:64], "text": text}})
@@ -131,7 +147,8 @@ def send_wecom(cred, title, body, row=None):
     webhook = cred.get("webhook", "")
     if not webhook:
         return False, "缺少 webhook"
-    text = _trunc_bytes("## %s\n%s" % (title, body), 3800)  # 企微 markdown 上限 4096 字节，留余量
+    _, text_body = pick_body(row, "markdown", "plain")  # 企微 md 不支持表格，同钉钉落 plain
+    text = _trunc_bytes("## %s\n%s" % (title, text_body), 3800)  # 企微 markdown 上限 4096 字节，留余量
     try:
         res = _post(webhook, {"msgtype": "markdown", "markdown": {"content": text}})
         ok = res.get("errcode") == 0
@@ -247,12 +264,13 @@ def send_email(cred, title, body, row=None):
                 s.starttls()
             s.login(box["user"], box["pass"])
             sender_name = box.get("from_name") or "ChinaMNOs 讯览台"
-            # HTML 邮件（仅采集播报行携带 html_body）：真表格版式；其他邮件维持纯文本不变
-            if row.get("html_body"):
-                msg = MIMEText(row["html_body"], "html", "utf-8")
+            # 邮件格式偏好 html 优先（采集播报行 formats.html = 真表格版式）；batch 行回退纯文本
+            fmt, mail_body = pick_body(row, "html", "plain")
+            if fmt == "html":
+                msg = MIMEText(mail_body, "html", "utf-8")
             else:
                 # 邮件正文补标题行：与钉钉/企微（markdown ## 标题）行为对齐，正文自证来源与轮次
-                msg = MIMEText("%s\n\n%s" % (title, body), "plain", "utf-8")
+                msg = MIMEText("%s\n\n%s" % (title, mail_body), "plain", "utf-8")
             msg["Subject"] = Header(title, "utf-8")
             msg["From"] = formataddr((str(Header(sender_name, "utf-8")), box["user"]))
             msg["To"] = to_addr
@@ -441,83 +459,36 @@ def _totals_line(a, c, r, provs):
     return "共 %d 省：%s" % (provs, " / ".join(parts))
 
 
-def build_digest_message(sub, digest, site=""):
-    """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化）返回 None。
-
-    返回 (title, 纯文本正文, HTML正文)；HTML 版仅供邮件渠道使用（真表格），
-    钉钉/企微使用纯文本版（其 markdown 不支持表格）。
-    """
+def _digest_sections(sub, digest, site):
+    """结构层：按订户省份偏好从货单抽取 → 格式无关的段落树（渲染层三格式共用）。
+    与本订户无关（本轮/今日均无变化且无公告）返回 None。
+    结构：{"title", "round": [运营商段], "today": [...], "announce": [公告段], "site"}
+      运营商段 = {"key", "name", "rows": [(省名, added, changed, removed)],
+                  "totals": (a, c, r), "n": 省数}
+      公告段   = {"key", "name", "items": [{"title", "date", "link"}]}"""
     pref = sub.get("provinces")
-    round_part = digest.get("round") if isinstance(digest.get("round"), dict) else {}
-    today_part = digest.get("today") if isinstance(digest.get("today"), dict) else {}
-    round_at = int(digest.get("round_at") or 0)
-    stamp = time.strftime("%m-%d %H:%M", time.localtime(round_at / 1000)) if round_at else "本轮"
-    title = "【ChinaMNOs 讯览台】资费监控通知（%s 轮）" % stamp
 
-    # HTML 邮件内联样式（邮箱客户端对 <style> 支持不一，全部内联最稳）
-    _td = 'border:1px solid #d0d3da;padding:5px 8px;font-size:13px'
-    _th = 'border:1px solid #d0d3da;padding:5px 8px;font-size:12px;background:#f2f3f5;text-align:left'
-    _tbl = 'border-collapse:collapse;width:100%;margin:4px 0 12px'
-    _h = 'margin:14px 0 4px;font-size:13.5px;font-weight:700'
-    _total = 'margin:4px 0 14px;font-size:12.5px;color:#444'
-    _trailer = 'margin:14px 0 2px;font-size:12px;color:#777'
-    _site = 'margin:0;font-size:12px'
-
-    def section(part_dict):
-        """一个统计区块：返回 (纯文本行列表, 是否有内容, HTML 片段列表)"""
-        lines = []
-        html = []
-        ta = tc = tr = 0
-        provs = 0
+    def stat_section(part_dict):
+        out = []
         for key in ("cmcc", "cucc", "ctcc", "cbn"):
             picks = _pick_provinces(part_dict.get(key) or {}, _prov_set_for(pref, key))
             if not picks:
                 continue
-            provs += len(picks)
-            cname = CARRIER_NAMES.get(key, key)
-            lines.append("══ %s ══" % cname)
-            rows = []
-            for name, p in picks.items():
-                seg = []
-                if p.get("added"):
-                    seg.append("新增 %d 条" % p["added"])
-                if p.get("removed"):
-                    seg.append("下架 %d 条" % p["removed"])
-                if p.get("changed"):
-                    seg.append("修改 %d 条" % p["changed"])
-                if seg:
-                    lines.append("  %s：%s" % (name, " / ".join(seg)))
-                rows.append('<tr><td style="%s">%s</td>'
-                            '<td style="%s;text-align:center">%d</td>'
-                            '<td style="%s;text-align:center">%d</td>'
-                            '<td style="%s;text-align:center">%d</td></tr>'
-                            % (_td, name, _td, int(p.get("added") or 0),
-                               _td, int(p.get("changed") or 0), _td, int(p.get("removed") or 0)))
-            a, c, r = _tot(picks)
-            ta += a
-            tc += c
-            tr += r
-            rows.append('<tr><td style="%s;font-weight:700">合计（%d 省）</td>'
-                        '<td style="%s;text-align:center;font-weight:700">%d</td>'
-                        '<td style="%s;text-align:center;font-weight:700">%d</td>'
-                        '<td style="%s;text-align:center;font-weight:700">%d</td></tr>'
-                        % (_td, len(picks), _td, a, _td, c, _td, r))
-            html.append('<p style="%s">%s</p>' % (_h, cname))
-            html.append('<table style="%s"><tr><th style="%s">省份</th>'
-                        '<th style="%s">新增</th><th style="%s">修改</th><th style="%s">下架</th></tr>%s</table>'
-                        % (_tbl, _th, _th, _th, _th, "".join(rows)))
-        if provs:
-            lines.append("")
-            lines.append(_totals_line(ta, tc, tr, provs))
-            html.append('<p style="%s">%s</p>' % (_total, _totals_line(ta, tc, tr, provs)))
-        return lines, provs > 0, html
+            rows = [(name, int(p.get("added") or 0), int(p.get("changed") or 0), int(p.get("removed") or 0))
+                    for name, p in picks.items()]
+            out.append({"key": key, "name": CARRIER_NAMES.get(key, key), "rows": rows,
+                        "totals": _tot(picks), "n": len(picks)})
+        return out
 
-    round_lines, has_round, round_html = section(round_part)
-    today_lines, has_today, today_html = section(today_part)
+    sec = {
+        "title": "",
+        "round": stat_section(digest.get("round") if isinstance(digest.get("round"), dict) else {}),
+        "today": stat_section(digest.get("today") if isinstance(digest.get("today"), dict) else {}),
+        "announce": [],
+        "site": site,
+    }
 
-    # 公告新增段（订户公告开关开 + 货单含 announce 段才渲染；按订户 运营商×省份 过滤）
-    ann_lines = []
-    ann_html = []
+    # 公告段（订户公告开关开 + 货单含 announce 段才进结构；按订户 运营商×省份 过滤）
     if sub.get("announce") is True:
         ann_list = digest.get("announce") if isinstance(digest.get("announce"), list) else []
         groups, order = {}, []
@@ -537,67 +508,216 @@ def build_digest_message(sub, digest, site=""):
                 order.append(carrier)
             groups[carrier].append(it)
         for carrier in order:
-            cname = CARRIER_NAMES.get(carrier, carrier)
-            ann_lines.append("══ %s ══" % cname)
-            rows = []
+            items = []
             for it in groups[carrier]:
                 t = str(it.get("title") or "").strip() or "(无标题公告)"
                 iid = str(it.get("id") or "")
                 link = ("%s/#ann_%s_%s" % (site, carrier, iid)) if (site and iid) else ""
-                if link:
-                    ann_lines.append("  · %s\n    %s" % (t, link))
-                else:
-                    ann_lines.append("  · %s" % t)
-                dt = str(it.get("date") or "")
-                et = t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                if link:
-                    rows.append('<tr><td style="%s"><a href="%s" style="color:#1a56db;text-decoration:none">%s</a></td>'
-                                '<td style="%s;text-align:center">%s</td></tr>' % (_td, link, et, _td, dt))
-                else:
-                    rows.append('<tr><td style="%s">%s</td><td style="%s;text-align:center">%s</td></tr>' % (_td, et, _td, dt))
-            ann_html.append('<p style="%s">%s</p>' % (_h, cname))
-            ann_html.append('<table style="%s"><tr><th style="%s">公告标题（点击查看）</th>'
-                            '<th style="%s">日期</th></tr>%s</table>' % (_tbl, _td, _td, "".join(rows)))
+                items.append({"title": t, "date": str(it.get("date") or ""), "link": link})
+            sec["announce"].append({"key": carrier, "name": CARRIER_NAMES.get(carrier, carrier), "items": items})
 
-    # 方案A：今日累计不作为独立触发源——仅「本轮有变化 或 公告新增」才推送，
-    # 今日累计降级为附加信息（仅在本轮有变化时顺带展示），
-    # 杜绝"本轮无变化仍每轮重复推送当日累计"的打扰（防重发 nid 含 round_at，每轮不同，旧逻辑必然重复）。
-    if not has_round and not ann_lines:
-        return None  # 该订户关注的范围本轮无变化且无公告新增 → 不发
+    # 方案A：今日累计不作为独立触发源——仅「本轮有变化 或 公告新增」才推送。
+    if not sec["round"] and not sec["announce"]:
+        return None
+    return sec
+
+
+def _render_plain(sec):
+    """纯文本行式版式（══ 段 ══ 风格）：钉钉/企微 markdown 消息体与纯文本渠道共用。"""
+    def stat_lines(secs):
+        lines = []
+        ta = tc = tr = 0
+        provs = 0
+        for s in secs:
+            lines.append("══ %s ══" % s["name"])
+            for name, a, c, r in s["rows"]:
+                seg = []
+                if a:
+                    seg.append("新增 %d 条" % a)
+                if r:
+                    seg.append("下架 %d 条" % r)
+                if c:
+                    seg.append("修改 %d 条" % c)
+                if seg:
+                    lines.append("  %s：%s" % (name, " / ".join(seg)))
+            a, c, r = s["totals"]
+            ta += a
+            tc += c
+            tr += r
+            provs += s["n"]
+        if provs:
+            lines.append("")
+            lines.append(_totals_line(ta, tc, tr, provs))
+        return lines
 
     lines = []
-    if has_round:
+    if sec["round"]:
         lines.append("═══ 本轮采集 ═══")
-        lines.extend(round_lines)
+        lines.extend(stat_lines(sec["round"]))
         lines.append("")
         lines.append("═══ 今日累计 ═══")
-        lines.extend(today_lines if has_today else ["  你关注的范围今日暂无变化"])
-    if ann_lines:
+        lines.extend(stat_lines(sec["today"]) if sec["today"] else ["  你关注的范围今日暂无变化"])
+    if sec["announce"]:
         if lines:
             lines.append("")
         lines.append("═══ 公告新增 ═══")
-        lines.extend(ann_lines)
+        for s in sec["announce"]:
+            lines.append("══ %s ══" % s["name"])
+            for it in s["items"]:
+                if it["link"]:
+                    lines.append("  · %s\n    %s" % (it["title"], it["link"]))
+                else:
+                    lines.append("  · %s" % it["title"])
     lines.append("")
     lines.append("（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）")
-    if site:
-        lines.append("站点：%s" % site)
+    if sec["site"]:
+        lines.append("站点：%s" % sec["site"])
+    return "\n".join(lines)
+
+
+def _render_markdown(sec):
+    """GFM 管道表格版（真 markdown 表格），供支持 md 表格的渠道按需取用；
+    钉钉/企微机器人 markdown 不支持表格，其 wants 声明实际落 plain。"""
+
+    def md_cell(v):
+        return str(v).replace("|", "\\|").replace("\n", " ")
+
+    def stat_md(secs):
+        out = []
+        ta = tc = tr = 0
+        provs = 0
+        for s in secs:
+            out.append("**%s**" % s["name"])
+            out.append("")
+            out.append("| 省份 | 新增 | 修改 | 下架 |")
+            out.append("| --- | ---: | ---: | ---: |")
+            for name, a, c, r in s["rows"]:
+                out.append("| %s | %d | %d | %d |" % (md_cell(name), a, c, r))
+            a, c, r = s["totals"]
+            ta += a
+            tc += c
+            tr += r
+            provs += s["n"]
+            out.append("| **合计（%d 省）** | %d | %d | %d |" % (s["n"], a, c, r))
+            out.append("")
+        if provs:
+            out.append(_totals_line(ta, tc, tr, provs))
+            out.append("")
+        return out
+
+    lines = []
+    if sec["round"]:
+        lines.append("## 本轮采集")
+        lines.append("")
+        lines.extend(stat_md(sec["round"]))
+        lines.append("## 今日累计")
+        lines.append("")
+        if sec["today"]:
+            lines.extend(stat_md(sec["today"]))
+        else:
+            lines.append("（你关注的范围今日暂无变化）")
+            lines.append("")
+    if sec["announce"]:
+        lines.append("## 公告新增")
+        lines.append("")
+        for s in sec["announce"]:
+            lines.append("**%s**" % s["name"])
+            lines.append("")
+            lines.append("| 公告标题 | 日期 |")
+            lines.append("| --- | --- |")
+            for it in s["items"]:
+                t = ("[%s](%s)" % (md_cell(it["title"]), it["link"])) if it["link"] else md_cell(it["title"])
+                lines.append("| %s | %s |" % (t, md_cell(it["date"])))
+            lines.append("")
+    lines.append("（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）")
+    if sec["site"]:
+        lines.append("")
+        lines.append("站点：%s" % sec["site"])
+    return "\n".join(lines)
+
+
+def _render_html(sec):
+    """内联样式 HTML 表格版（邮箱客户端对 <style> 支持不一，全部内联最稳）：邮件渠道用。"""
+    _td = 'border:1px solid #d0d3da;padding:5px 8px;font-size:13px'
+    _th = 'border:1px solid #d0d3da;padding:5px 8px;font-size:12px;background:#f2f3f5;text-align:left'
+    _tbl = 'border-collapse:collapse;width:100%;margin:4px 0 12px'
+    _h = 'margin:14px 0 4px;font-size:13.5px;font-weight:700'
+    _total = 'margin:4px 0 14px;font-size:12.5px;color:#444'
+    _trailer = 'margin:14px 0 2px;font-size:12px;color:#777'
+    _site = 'margin:0;font-size:12px'
+
+    def stat_html(secs):
+        html = []
+        ta = tc = tr = 0
+        provs = 0
+        for s in secs:
+            rows = []
+            for name, a, c, r in s["rows"]:
+                rows.append('<tr><td style="%s">%s</td>'
+                            '<td style="%s;text-align:center">%d</td>'
+                            '<td style="%s;text-align:center">%d</td>'
+                            '<td style="%s;text-align:center">%d</td></tr>'
+                            % (_td, name, _td, a, _td, c, _td, r))
+            a, c, r = s["totals"]
+            ta += a
+            tc += c
+            tr += r
+            provs += s["n"]
+            rows.append('<tr><td style="%s;font-weight:700">合计（%d 省）</td>'
+                        '<td style="%s;text-align:center;font-weight:700">%d</td>'
+                        '<td style="%s;text-align:center;font-weight:700">%d</td>'
+                        '<td style="%s;text-align:center;font-weight:700">%d</td></tr>'
+                        % (_td, s["n"], _td, a, _td, c, _td, r))
+            html.append('<p style="%s">%s</p>' % (_h, s["name"]))
+            html.append('<table style="%s"><tr><th style="%s">省份</th>'
+                        '<th style="%s">新增</th><th style="%s">修改</th><th style="%s">下架</th></tr>%s</table>'
+                        % (_tbl, _th, _th, _th, _th, "".join(rows)))
+        if provs:
+            html.append('<p style="%s">%s</p>' % (_total, _totals_line(ta, tc, tr, provs)))
+        return html
 
     html = ['<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',\'PingFang SC\',\'Microsoft YaHei\',sans-serif;color:#222;line-height:1.6">']
-    html.append('<h3 style="margin:0 0 10px;font-size:16px">%s</h3>' % title)
-    if has_round:
+    html.append('<h3 style="margin:0 0 10px;font-size:16px">%s</h3>' % sec["title"])
+    if sec["round"]:
         html.append('<p style="%s">本轮采集</p>' % _h)
-        html.extend(round_html)
+        html.extend(stat_html(sec["round"]))
         html.append('<p style="%s">今日累计</p>' % _h)
-        html.extend(today_html if has_today else ['<p style="margin:0 0 12px">（你关注的范围今日暂无变化）</p>'])
-    if ann_html:
+        html.extend(stat_html(sec["today"]) if sec["today"] else ['<p style="margin:0 0 12px">（你关注的范围今日暂无变化）</p>'])
+    if sec["announce"]:
         html.append('<p style="%s">公告新增</p>' % _h)
-        html.extend(ann_html)
+        for s in sec["announce"]:
+            rows = []
+            for it in s["items"]:
+                et = it["title"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                if it["link"]:
+                    rows.append('<tr><td style="%s"><a href="%s" style="color:#1a56db;text-decoration:none">%s</a></td>'
+                                '<td style="%s;text-align:center">%s</td></tr>' % (_td, it["link"], et, _td, it["date"]))
+                else:
+                    rows.append('<tr><td style="%s">%s</td><td style="%s;text-align:center">%s</td></tr>' % (_td, et, _td, it["date"]))
+            html.append('<p style="%s">%s</p>' % (_h, s["name"]))
+            html.append('<table style="%s"><tr><th style="%s">公告标题（点击查看）</th>'
+                        '<th style="%s">日期</th></tr>%s</table>' % (_tbl, _td, _td, "".join(rows)))
     html.append('<p style="%s">（你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭）</p>' % _trailer)
-    if site:
-        html.append('<p style="%s">站点：<a href="%s">%s</a></p>' % (_site, site, site))
+    if sec["site"]:
+        html.append('<p style="%s">站点：<a href="%s">%s</a></p>' % (_site, sec["site"], sec["site"]))
     html.append('</div>')
+    return "".join(html)
 
-    return title, "\n".join(lines), "".join(html)
+
+def build_digest_message(sub, digest, site=""):
+    """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化且无公告）返回 None。
+
+    返回 (title, formats)：formats = {"plain" 纯文本行式, "markdown" GFM 表格, "html" 内联样式表格}，
+    三种格式由同一份结构（_digest_sections）渲染，统计口径天然一致；
+    渠道适配器经 pick_body 按自身声明取用（邮件 html，钉钉/企微 plain）。"""
+    round_at = int(digest.get("round_at") or 0)
+    stamp = time.strftime("%m-%d %H:%M", time.localtime(round_at / 1000)) if round_at else "本轮"
+    title = "【ChinaMNOs 讯览台】资费监控通知（%s 轮）" % stamp
+    sec = _digest_sections(sub, digest, site)
+    if sec is None:
+        return None
+    sec["title"] = title
+    return title, {"plain": _render_plain(sec), "markdown": _render_markdown(sec), "html": _render_html(sec)}
 
 
 def process_digest_files(processed, failed, workers=8):
@@ -641,19 +761,18 @@ def process_digest_files(processed, failed, workers=8):
             msg = build_digest_message(sub, digest, site)
             if not msg:
                 continue
-            title, body, html_body = msg
+            title, formats = msg
             row = {
                 "nid": "collector_digest:%s:%s:%s" % (uid, round_at, channel),
                 "uid": uid, "kind": "collector_digest",
-                "title": title, "body": body, "channel_type": channel,
+                "title": title, "body": formats.get("plain", ""), "channel_type": channel,
             }
             cred = sub.get("cred")
             if isinstance(cred, dict):
                 row["cred"] = cred
             if channel == "email" and sub.get("email_target"):
                 row["email_target"] = sub.get("email_target")
-                if html_body:
-                    row["html_body"] = html_body  # 仅邮件行携带 HTML 表格版
+            row["formats"] = formats  # 三格式包：适配器经 pick_body 按声明取用（邮件 html / 钉钉企微 plain）
             rows.append(row)
 
         if not rows:
