@@ -1,7 +1,7 @@
 window.__FRONTEND_CONFIG__ = {
   "base": "./",
   "modules": [
-    { "id": "tariff", "src": "modules/tariff/tariff.js?v=20261025a", "route": "/" },
+    { "id": "tariff", "src": "modules/tariff/tariff.js?v=20261026b", "route": "/" },
     { "id": "config", "src": "modules/config/config.js?v=20261025a", "route": "/config" },
     { "id": "cardhub", "src": "modules/cardhub/cardhub.js?v=20261025a", "route": "/cardhub" },
     { "id": "ticket", "src": "modules/ticket/ticket.js?v=20261025a", "route": "/ticket" },

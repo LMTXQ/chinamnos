@@ -29,7 +29,7 @@ const cache = {};
 
 /* 前端版本号：与 frontend-config.js 中 tariff 的 ?v= 同步 bump；
    文件内自包含，关于页展示用——显示值即文件真实版本，判断缓存是否更新零歧义 */
-const TARIFF_VER = "20261025a";
+const TARIFF_VER = "20261026b";
 
 const AREA_CODE_MAP = {
 "0100":"北京","0200":"广州","0210":"上海","0220":"天津",
@@ -3346,7 +3346,7 @@ function fieldsTable(f) {
 /* ─────────────── 变更日志 ─────────────── */
 const clPageState = {};   // clKey(code+筛选) → 已显示批次数
 let clProvPending = false; // 直链 #changelog 时省份未就绪的补加载守卫
-let clView = null;        // 变更日志视图数据：{ logs, itemMap, groups, clKey }
+let clView = null;        // 变更日志视图数据：{ logs, itemMap, groups(批次), groupsDay(按天), clKey }
 const clOpenOverride = new Map();  // 批次 ts → bool（展开记忆，重渲染不弹回）
 const clSecOverride = new Map();   // ts|type → bool（类型子卡片展开记忆）
 let clForceCollapse = false;       // 「全部收起」后新批次也默认收起
@@ -3362,6 +3362,11 @@ let clObserver = null;             // 上滑自动加载哨兵 observer
    localStorage 跨会话记忆，弹窗内切换按钮实时生效 */
 let clDiffOnly = false;
 try { clDiffOnly = localStorage.getItem("chinamnos_cl_diff_mode") === "1"; } catch {}
+
+/* 时间轴分组模式：batch=按采集批次（默认，现状） / day=同天多轮采集合并为一个节点；
+   localStorage 跨会话记忆（样式复用资费页 .view-mode/.vm-btn 分段控件） */
+let clMode = "batch";
+try { clMode = localStorage.getItem("chinamnos_cl_group_mode") === "day" ? "day" : "batch"; } catch {}
 
 /** 打开变更详情弹窗（胶囊点击 / 弹窗内切换模式共用；模式切换零重拉） */
 function openClModal(log) {
@@ -3386,7 +3391,40 @@ function clBatchLabel(ts) {
   const md = (d.getMonth() + 1) + "-" + String(d.getDate()).padStart(2, "0");
   if (sameDay(d, now)) return "今天 " + hm;
   if (sameDay(d, new Date(now.getTime() - 86400000))) return "昨天 " + hm;
-  return md + " " + hm;
+  // 跨年条目带年份消除歧义（本年内保持简短 MM-DD）
+  return (d.getFullYear() !== now.getFullYear() ? d.getFullYear() + "-" : "") + md + " " + hm;
+}
+
+/** 时分（HH:MM，本地时区）；解析失败返回空串（按天模式下胶囊提示用） */
+function clHM(ts) {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "";
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+/** 天分组键：ts → 本地日期 "YYYY-MM-DD"；无法解析时回退原始串（该条自成一"天"） */
+function clDayKey(ts) {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return String(ts);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+/** 天节点头标签：今天 / 昨天 / 月-日（配合「· N 次采集」）；无法解析回退原始串 */
+function clDayLabel(dayKey) {
+  const d = new Date(dayKey + "T00:00:00"); // 无时区后缀 = 本地时间零点，与 clDayKey 同锚
+  if (isNaN(d.getTime())) return String(dayKey);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (d.getTime() === today.getTime()) return "今天";
+  if (d.getTime() === today.getTime() - 86400000) return "昨天";
+  // 跨年节点带年份消除歧义（dayKey 本身即 YYYY-MM-DD；本年内保持简短 MM-DD）
+  return d.getFullYear() !== today.getFullYear() ? dayKey : (d.getMonth() + 1) + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+/** 当前分组模式下的分组数组：day 视图数据缺失时回退按批次（防御旧缓存结构） */
+function clCurGroups() {
+  if (!clView) return null;
+  return clMode === "day" ? (clView.groupsDay || clView.groups) : clView.groups;
 }
 
 /* 变更详情弹窗复制：记录当前弹窗对应日志，名称/概要两种文本（概要复用 summaryOf 的字段铺法） */
@@ -3486,9 +3524,23 @@ function clDetailHTML(log, itemMap) {
 
 /** 加载更多批次（追加 6 个，重渲染不重新拉数据） */
 function clMoreBatch() {
-  if (!clView || !clView.groups || !clView.clKey) return;
-  const total = clView.groups.length;
+  if (!clView || !clView.clKey) return;
+  const groups = clCurGroups();
+  if (!groups) return;
+  const total = groups.length;
   clPageState[clView.clKey] = Math.min((clPageState[clView.clKey] || 6) + 6, total);
+  clDraw();
+}
+
+/** 分组模式切换（按批次/按天）：记忆 + 分页重置为初始组数 + 纯重绘（两套分组已预算好，不重拉数据） */
+function clSetMode(m) {
+  m = m === "day" ? "day" : "batch";
+  if (m === clMode) return;
+  clMode = m;
+  try { localStorage.setItem("chinamnos_cl_group_mode", clMode); } catch {}
+  const seg = $("clGroupMode");
+  if (seg) seg.querySelectorAll(".vm-btn").forEach(b => b.classList.toggle("on", b.dataset.mode === clMode));
+  if (clView && clView.clKey) clPageState[clView.clKey] = 6; // 切换粒度后从头展示，避免沿用大批次数
   clDraw();
 }
 
@@ -3638,65 +3690,81 @@ function renderChangelog() {
     const cnt = { added: 0, removed: 0, changed: 0 };
     filtered.forEach(l => { cnt[l.type] = (cnt[l.type] || 0) + 1; });
 
-    // 按采集批次分组：同一轮采集的全部 entries 共用 crawl_time（ts 全值相同），零数据改动
+    // 按采集批次分组：同一轮采集的全部 entries 共用 crawl_time（ts 全值相同），零数据改动；
+    // 同时按本地日期分一套天组（groupsDay，day 视图用，batches 记当天采集轮数）——两套分组一次算好，切换模式零重拉
     const groups = [];
     const gmap = {};
+    const groupsDay = [];
+    const dmap = {};
     filtered.forEach((log, idx) => {
+      const dk = clDayKey(log.ts);
+      let dg = dmap[dk];
+      if (!dg) { dg = { day: dk, ts: log.ts, batches: 0, items: [] }; dmap[dk] = dg; groupsDay.push(dg); }
       let g = gmap[log.ts];
-      if (!g) { g = { ts: log.ts, items: [] }; gmap[log.ts] = g; groups.push(g); }
+      if (!g) { g = { ts: log.ts, items: [] }; gmap[log.ts] = g; groups.push(g); dg.batches++; }
       g.items.push(idx);
+      dg.items.push(idx);
     });
 
     const clKey = code + "_" + typeFilter + "_" + t1Filter + "_" + t2Filter + "_" + clAttr + "_" + clQMode + "_" + clQ;
     if (!clPageState[clKey]) clPageState[clKey] = 6;
-    clView = { logs: filtered, itemMap, groups, clKey };
+    clView = { logs: filtered, itemMap, groups, groupsDay, clKey };
     clDraw();
   }).catch(e => {
     box.innerHTML = '<div class="empty">变更记录加载失败：' + esc(e.message) + ' <button data-act="retryChangelog" class="btn sm soft">重试</button></div>';
   });
 }
 
-/** 渲染时间轴（数据已就绪；加载更多/收展切换只走这里，不重新拉数据） */
+/** 渲染时间轴（数据已就绪；加载更多/收展切换只走这里，不重新拉数据）。
+    分组模式：batch=按采集批次 / day=同天多轮合并（clMode 决定取哪套分组） */
 function clDraw() {
   const box = $("changelogBox");
   clSyncToggleBtn(); // 搜索自动展开/清空/收起压制时同步按钮文案
   if (!box || !clView) return;
-  const { logs: filtered, groups, clKey } = clView;
+  const { logs: filtered, clKey } = clView;
+  const isDay = clMode === "day";
+  const groups = clCurGroups() || [];
+  const batchN = clView.groups ? clView.groups.length : 0;
 
   const shownN = Math.min(clPageState[clKey] || 6, groups.length);
   const shown = groups.slice(0, shownN);
 
-  // 统计条：每次渲染都重建（自动加载重渲染不丢）
+  // 统计条：每次渲染都重建（自动加载重渲染不丢）；按天模式附总批次数
   const cnt = { added: 0, removed: 0, changed: 0 };
   filtered.forEach(l => { cnt[l.type] = (cnt[l.type] || 0) + 1; });
 
   const chip = (cls, lbl, n) => `<span class="chip ${cls}">${lbl} ${n}</span>`;
   const statsBar = $("clStats");
-  if (statsBar) statsBar.innerHTML = `共 <strong>${filtered.length}</strong> 条变更 · <strong>${groups.length}</strong> 个采集批次
+  if (statsBar) statsBar.innerHTML = `共 <strong>${filtered.length}</strong> 条变更 · ` +
+    (isDay ? `<strong>${groups.length}</strong> 天（${batchN} 个批次）` : `<strong>${groups.length}</strong> 个采集批次`) +
+    `
     <span class="cl-stat-chips">${chip("add", "新增", cnt.added || 0)}${chip("del", "下架", cnt.removed || 0)}${chip("mod", "变更", cnt.changed || 0)}</span>`;
 
   let html = '<div class="tl">';
   shown.forEach((g, gi) => {
-    const tsKey = String(g.ts ?? ("#" + gi));
+    // 展开记忆键：按批次=ts（ISO 串）/ 按天=日期串——两套键空间天然不冲突，切换模式互不干扰
+    const tsKey = isDay ? g.day : String(g.ts ?? ("#" + gi));
     const gc = { added: 0, removed: 0, changed: 0 };
     g.items.forEach(idx => { const l = filtered[idx]; gc[l.type] = (gc[l.type] || 0) + 1; });
 
-    // 展开状态优先级：用户单批次记忆 > 全部展开模式 > 搜索期收起压制 > 搜索(视为重新展开) > 收起模式 > 默认仅最新批次（fresh）
+    // 展开状态优先级：用户单批次记忆 > 全部展开模式 > 搜索期收起压制 > 搜索(视为重新展开) > 收起模式 > 默认仅最新节点（fresh，按天=含最新批次的那天）
     const fresh = gi === 0;
     const open = clOpenOverride.has(tsKey) ? clOpenOverride.get(tsKey)
       : clExpandAll ? true
       : (clCollapseArmed ? false : clQ ? true : clForceCollapse ? false : fresh);
-    // 折叠态色条：不用数字堆叠，一眼看出本轮变化的类型构成
+    // 折叠态色条：不用数字堆叠，一眼看出本轮（按天=全天）变化的类型构成
     const bars =
       (gc.added ? '<i class="b-add" title="有新增"></i>' : "") +
       (gc.changed ? '<i class="b-mod" title="有变更"></i>' : "") +
       (gc.removed ? '<i class="b-del" title="有下架"></i>' : "") +
       (!gc.added && !gc.changed && !gc.removed ? '<i class="b-none" title="无变化"></i>' : "");
 
+    const headLbl = isDay ? `${esc(clDayLabel(g.day))} · ${g.batches} 次采集` : `${esc(clBatchLabel(g.ts))} 采集`;
     html += `<div class="tl-item${open ? " open" : ""}${fresh ? " fresh" : ""}" data-cts="${esc(tsKey)}" role="button" aria-expanded="${open}">`;
-    html += `<div class="tl-head" tabindex="0" role="button"><span class="tl-time">${esc(clBatchLabel(g.ts))} 采集</span>${fresh ? '<span class="tl-fresh">最新</span>' : ""}<span class="tl-bars">${bars}</span><span class="tl-arrow"></span></div>`;
+    html += `<div class="tl-head" tabindex="0" role="button"><span class="tl-time">${headLbl}</span>${fresh ? '<span class="tl-fresh">最新</span>' : ""}<span class="tl-bars">${bars}</span><span class="tl-arrow"></span></div>`;
 
-    // 展开后：类型子卡片（新增/下架/变更），卡片体为业务胶囊，点击弹窗看详情
+    // 展开后：类型子卡片（新增/下架/变更），卡片体为业务胶囊，点击弹窗看详情；
+    // 按天模式下胶囊为全天多轮合并，hover 提示带采集时刻便于区分
     html += '<div class="tl-sec-list">';
     ["added", "removed", "changed"].forEach(tp => {
       if (!gc[tp]) return;
@@ -3711,7 +3779,8 @@ function clDraw() {
         const log = filtered[idx];
         const sym = tp === "added" ? "+" : tp === "removed" ? "-" : "✎";
         const diffN = tp === "changed" && log.diff ? Object.keys(log.diff).length : 0;
-        return `<a class="tl-chip-btn c-${cls}" href="javascript:void(0)" data-clidx="${idx}" title="点击查看该业务详情">${sym} <span>${esc(log.name || "")}</span>${diffN ? `<b class="cn">${diffN}项</b>` : ""}</a>`;
+        const tip = isDay && clHM(log.ts) ? `${clHM(log.ts)} 采集 · ` : "";
+        return `<a class="tl-chip-btn c-${cls}" href="javascript:void(0)" data-clidx="${idx}" title="${tip}点击查看该业务详情">${sym} <span>${esc(log.name || "")}</span>${diffN ? `<b class="cn">${diffN}项</b>` : ""}</a>`;
       }).join("");
       html += '</div></div></div>';
     });
@@ -3720,7 +3789,7 @@ function clDraw() {
   html += '</div>';
 
   if (groups.length > shown.length) {
-    html += `<div class="cl-more" id="clSentinel"><span class="cl-hint">上滑加载更多（剩余 ${groups.length - shown.length} 个批次）…</span></div>`;
+    html += `<div class="cl-more" id="clSentinel"><span class="cl-hint">上滑加载更多（剩余 ${groups.length - shown.length} ${isDay ? "天" : "个批次"}）…</span></div>`;
   }
   box.innerHTML = html;
   setupClAutoLoad(groups.length);
@@ -4496,6 +4565,11 @@ function initTariff() {
   loadAboutLinks();    // 关于页友情链接：站长配置（空数组整块隐藏；申请走工单预填）
 
   if ($("clToggleAll")) $("clToggleAll").addEventListener("click", clToggleAll);
+  const clModeSeg = $("clGroupMode");
+  if (clModeSeg) clModeSeg.addEventListener("click", (e) => {
+    const b = e.target.closest(".vm-btn");
+    if (b) clSetMode(b.dataset.mode);
+  });
 
   /* 弹窗内分享按钮分发（顶层 dialog，tab 级委托捕获不到） */
   window.__MODAL_ACT__ = {
@@ -5527,6 +5601,10 @@ Shell.registerPage({
         <select id="cT1" class="sel" style="width:auto"><option value="">全部归属</option></select>
         <select id="cT2" class="sel" style="width:auto"><option value="">全部类型</option></select>
         <button type="button" class="btn ghost" id="clToggleAll" title="全部收起/展开">${icon("chevronsDown")}<span>全部展开</span></button>
+        <div class="view-mode" id="clGroupMode" title="分组方式：按采集批次时间轴 / 同天多轮合并">
+          <button type="button" class="vm-btn${clMode === "batch" ? " on" : ""}" data-mode="batch">按批次</button>
+          <button type="button" class="vm-btn${clMode === "day" ? " on" : ""}" data-mode="day">按天</button>
+        </div>
       </div>
       <div id="clMetaBar" class="cl-meta-bar">
         <div id="clStats" class="cl-stats"></div>
