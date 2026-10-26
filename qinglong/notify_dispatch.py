@@ -626,18 +626,22 @@ def _render_markdown(sec):
     lines = [sec["title"], ""]
     if sec["round"]:
         lines.append(bar("本轮采集"))
+        lines.append("")  # 标题条与后续内容必须空行隔开，markdown 会把相邻行并成一段
         lines.extend(stat_md(sec["round"]))
         lines.append(bar("今日累计"))
+        lines.append("")
         lines.extend(stat_md(sec["today"]) if sec["today"] else ["　（你关注的范围今日暂无变化）", ""])
     if sec["announce"]:
         lines.append(bar("公告新增"))
+        lines.append("")
         for s in sec["announce"]:
             lines.append("　" + s["name"])
             lines.append("")
+            lines.append("| 公告标题 | 日期 |")
+            lines.append("| --- | --- |")
             for it in s["items"]:
-                lines.append("　· %s（%s）" % (it["title"], it["date"]))
-                if it["link"]:
-                    lines.append("　　%s" % it["link"])
+                t = ("[%s](%s)" % (md_cell(it["title"]), it["link"])) if it["link"] else md_cell(it["title"])
+                lines.append("| %s | %s |" % (t, md_cell(it["date"])))
             lines.append("")
     lines.append("─" * 16)
     lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
@@ -691,18 +695,25 @@ def _render_table_html(sec):
     lines = [sec["title"], ""]
     if sec["round"]:
         lines.append(bar("本轮采集"))
+        lines.append("")  # 标题条与后续内容空行隔开，避免与运营商名并成一段
         lines.extend(stat_tables(sec["round"]))
         lines.append(bar("今日累计"))
+        lines.append("")
         lines.extend(stat_tables(sec["today"]) if sec["today"] else ["　（你关注的范围今日暂无变化）", ""])
     if sec["announce"]:
         lines.append(bar("公告新增"))
+        lines.append("")
         for s in sec["announce"]:
+            rows = []
+            for it in s["items"]:
+                et = esc(it["title"])
+                if it["link"]:
+                    rows.append(['<a href="%s">%s</a>' % (it["link"], et), esc(it["date"])])
+                else:
+                    rows.append([et, esc(it["date"])])
             lines.append("　" + s["name"])
             lines.append("")
-            for it in s["items"]:
-                lines.append("　· %s（%s）" % (it["title"], it["date"]))
-                if it["link"]:
-                    lines.append("　　%s" % it["link"])
+            lines.append(table(["公告标题", "日期"], rows))
             lines.append("")
     lines.append("─" * 16)
     lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
