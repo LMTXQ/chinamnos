@@ -21,9 +21,9 @@ payload 行结构（Worker 写入，契约固定）：
   {nid, uid, kind, title, body, channel_type, cred}
   title/body 已由 Worker 按统一消息模板组装完成，本脚本不做二次加工。
   （采集播报行由本脚本自行组装，cred/email_target 来自订户名单端点；
-    额外携带 formats = {markdown/table_html/html/plain 四格式包}，适配器经 pick_body 按需取用——
+    额外携带 formats = {markdown/html/plain 三格式包}，适配器经 pick_body 按需取用——
     渠道只需声明自己的格式偏好（如 ("html","plain")），无需自建排版。
-    渠道格式现状：企微 markdown(GFM 表格, markdown_v2 消息类型) → 钉钉 table_html(裸表格) →
+    渠道格式现状：企微/钉钉 markdown(GFM 表格, markdown_v2 消息类型) →
     邮件 html(内联样式表格)；digest 各格式自带标题行，板块标题用「── 名称 + 横线」标题条区分，
     零标题标签零加粗）
 
@@ -134,7 +134,7 @@ def send_dingtalk(cred, title, body, row=None):
         url = "%s&timestamp=%s&sign=%s" % (url, ts, _dingtalk_sign(secret, ts))
     # 钉钉 markdown 支持 <table> HTML 子集（官方未收录的实践能力，GFM 管道表不渲染）；
     # digest 行正文自带标题行，batch 回退行（无 formats）保持「标题 + 正文」拼接
-    fmt, text_body = pick_body(row, "table_html", "plain")
+    fmt, text_body = pick_body(row, "markdown", "plain")
     text = _trunc_bytes(text_body if fmt != "plain" else "### %s\n%s" % (title, text_body), 3800)
     try:
         res = _post(url, {"msgtype": "markdown",
@@ -653,81 +653,6 @@ def _render_markdown(sec):
     return "\n".join(lines)
 
 
-def _render_table_html(sec):
-    """钉钉 markdown 版式：<table> HTML 子集裸表格（官方未收录的实践能力，GFM 管道表不渲染）。
-    零标题标签、零加粗——板块标题用「── 名称 + 横线」标题条与全角缩进区分；
-    标签后带换行（否则 APP 端显示不全）；正文自带标题行（适配器不再拼 ### 前缀）。"""
-
-    def esc(v):
-        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    def bar(label):
-        return "── %s ────" % label  # 全角 16 格封顶，手机消息面板一行放得下
-
-    def table(headers, rows):
-        out = ["<table>"]
-        for r in [headers] + rows:
-            out.append("<tr>")
-            for c in r:
-                out.append("<td>%s</td>" % c)
-            out.append("</tr>")
-        out.append("</table>")
-        return "\n".join(out)
-
-    def stat_tables(secs):
-        out = []
-        ta = tc = tr = 0
-        provs = 0
-        for s in secs:
-            rows = [[esc(name), str(a), str(c), str(r)] for name, a, c, r in s["rows"]]
-            a, c, r = s["totals"]
-            ta += a
-            tc += c
-            tr += r
-            provs += s["n"]
-            rows.append(["合计（%d 省）" % s["n"], str(a), str(c), str(r)])
-            out.append("　" + s["name"])
-            out.append("")
-            out.append(table(["省份", "新增", "修改", "下架"], rows))
-            out.append("")
-        if provs:
-            out.append("　" + _totals_line(ta, tc, tr, provs))
-            out.append("")
-        return out
-
-    lines = [sec["title"], ""]
-    if sec["round"]:
-        lines.append(bar("本轮采集"))
-        lines.append("")  # 标题条与后续内容空行隔开，避免与运营商名并成一段
-        lines.extend(stat_tables(sec["round"]))
-        lines.append(bar("今日累计"))
-        lines.append("")
-        lines.extend(stat_tables(sec["today"]) if sec["today"] else ["　（你关注的范围今日暂无变化）", ""])
-    if sec["announce"]:
-        lines.append(bar("公告新增"))
-        lines.append("")
-        for s in sec["announce"]:
-            rows = []
-            for it in s["items"]:
-                et = esc(it["title"])
-                if it["link"]:
-                    rows.append(['<a href="%s">%s</a>' % (it["link"], et), esc(it["date"])])
-                else:
-                    rows.append([et, esc(it["date"])])
-            lines.append("　" + s["name"])
-            lines.append("")
-            lines.append(table(["公告标题", "日期"], rows))
-            lines.append("")
-    lines.append("")
-    lines.append("─" * 16)
-    lines.append("")
-    lines.append("你关注省份的变更摘要已送达 · 若希望关闭打扰，请前往站点「通知设置」调整关注范围或关闭")
-    lines.append("")
-    if sec["site"]:
-        lines.append("站点：%s" % sec["site"])
-    return "\n".join(lines)
-
-
 def _render_html(sec):
     """内联样式 HTML 表格版（邮箱客户端对 <style> 支持不一，全部内联最稳）：邮件渠道用。"""
     _td = 'border:1px solid #d0d3da;padding:5px 8px;font-size:13px'
@@ -800,7 +725,7 @@ def build_digest_message(sub, digest, site=""):
     """按订户省份偏好从货单抽取并组装消息；与本订户无关（本轮+今日均无变化且无公告）返回 None。
 
     返回 (title, formats)：formats = {"markdown" GFM 表格（企微 markdown_v2）,
-    "table_html" HTML 裸表格（钉钉）, "html" 内联样式表格（邮件）, "plain" 纯文本行式（兜底）}，
+    "html" 内联样式表格（邮件）, "plain" 纯文本行式（兜底）}，
     各格式由同一份结构（_digest_sections）渲染，统计口径天然一致，且均自带标题行、
     零标题标签零加粗（板块标题用「── 名称 + 横线」标题条 + 全角缩进区分）；
     渠道适配器经 pick_body 按自身声明取用。"""
@@ -812,7 +737,7 @@ def build_digest_message(sub, digest, site=""):
         return None
     sec["title"] = title
     return title, {"plain": _render_plain(sec), "markdown": _render_markdown(sec),
-                   "table_html": _render_table_html(sec), "html": _render_html(sec)}
+                   "html": _render_html(sec)}
 
 
 def process_digest_files(processed, failed, workers=8):
