@@ -1119,6 +1119,9 @@ async function renderNchList() {
     return;
   }
   const items = Array.isArray(r.data?.items) ? r.data.items : [];
+  // 按 NCH_TYPES 固定顺序展示（接口默认按绑定时间倒序，与添加页顺序不一致）
+  const typeOrder = new Map(NCH_TYPES.map((t, i) => [t.type, i]));
+  items.sort((a, b) => (typeOrder.get(a.channel_type) ?? 99) - (typeOrder.get(b.channel_type) ?? 99));
   nchItems = items;
   // 账号全局播报范围（拉取失败静默降级：摘要显示"未设置"，不影响渠道操作）
   const gr = await api.digestGlobal();

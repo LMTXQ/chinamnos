@@ -3378,7 +3378,7 @@ function openClModal(log) {
     `<button type="button" class="btn ghost sm btn-ico-sm" data-act="clShare" title="复制本条变更链接或唤起系统分享">${icon("share")}<span class="btn-txt">分享</span></button>` +
     `<button type="button" class="btn ghost sm btn-ico-sm" data-act="clModalCopy" data-mode="name" title="复制资费名称">${icon("copy")}<span class="btn-txt">名称</span></button>` +
     `<button type="button" class="btn ghost sm btn-ico-sm" data-act="clModalCopy" data-mode="summary" title="复制资费概要">${icon("list")}<span class="btn-txt">概要</span></button>` +
-    (diffN ? `<button type="button" class="btn ghost sm" data-act="clModalDiff" title="在「全部字段」与「仅看变化」两种显示模式间切换">${clDiffOnly ? icon("list") + "全部字段" : icon("filter") + "仅看变化"}</button>` : ""));
+    (diffN ? `<button type="button" class="btn ghost sm btn-ico-sm" data-act="clModalDiff" title="在「全部字段」与「仅看变化」两种显示模式间切换">${clDiffOnly ? icon("list") + '<span class="btn-txt">全部字段</span>' : icon("filter") + '<span class="btn-txt">仅看变化</span>'}</button>` : ""));
 }
 
 /** 批次时间标签：相对日（今天/昨天）+ 时分；更早为 月-日 时分 */
