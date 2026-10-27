@@ -5500,7 +5500,7 @@ Shell.registerPage({
   id: "tariff",
   route: "/",
   onEnter: async function(root) {
-    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261025a");
+    await ensureStylesheet(Shell.config.base + "modules/tariff/style.css?v=20261027a");
     root.innerHTML = `
 <div id="tariffRoot">
 <header class="topbar">
