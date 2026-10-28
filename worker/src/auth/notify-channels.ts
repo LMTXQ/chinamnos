@@ -64,11 +64,12 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
   return ok({ items });
 }
 
-// POST /api/me/notify-channels/prefs  body: { channel_type, kinds, scope? }
+// POST /api/me/notify-channels/prefs  body: { channel_type, kinds, scope?, kinds_mode? }
 //   渠道级事件偏好：kinds 为全量 15 类的子集（空数组 = 该渠道静音）；
 //   scope='global' → 写账号全局事件偏好（user_digest_prefs.kinds_json，所有跟随渠道生效）；
-//   缺省 scope='channel' → 写渠道 kinds_json（仅在 kinds_mode='custom' 时被推送消费）。
-//   推送时与站点白名单取交集——用户在全量里勾选，站长放开/缩减后勾选长期有效
+//   缺省 scope='channel' → 写渠道 kinds_json + kinds_mode（'custom' 独立配置 | 'follow' 跟随全局，
+//   仅 kinds_mode='custom' 时推送消费渠道自有 kinds）。推送时与站点白名单取交集。
+//   ⚠️ kinds_mode 必须随 kinds 一并落库——曾因全局化重构漏写该列，独立配置保存后重进回到跟随（已修）。
 export async function handleNotifyChannelPrefs(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
@@ -90,12 +91,13 @@ export async function handleNotifyChannelPrefs(request: Request, env: Env): Prom
 
   const type = typeof body.channel_type === 'string' ? body.channel_type : '';
   if (!type) return fail(ERR.VALIDATION_ERROR, '缺少渠道类型', 400, { field: 'channel_type' });
+  const kindsMode = body.kinds_mode === 'custom' ? 'custom' : 'follow';
 
   const r = await env.DB.prepare(
-    'UPDATE user_notify_channels SET kinds_json = ?1 WHERE user_id = ?2 AND channel_type = ?3',
-  ).bind(JSON.stringify(kinds), g.viewer.id, type).run();
+    'UPDATE user_notify_channels SET kinds_json = ?1, kinds_mode = ?2 WHERE user_id = ?3 AND channel_type = ?4',
+  ).bind(JSON.stringify(kinds), kindsMode, g.viewer.id, type).run();
   if (!r.meta.changes) return fail(ERR.NOT_FOUND, '未找到该渠道绑定', 404, { field: 'channel_type' });
-  return ok({ channel_type: type, kinds });
+  return ok({ channel_type: type, kinds, kinds_mode: kindsMode });
 }
 
 // GET /api/me/digest-prefs —— 账号全局播报范围 + 事件偏好 + 公告开关（0041/0042/0043；null = 未设置 = 全收/关）
