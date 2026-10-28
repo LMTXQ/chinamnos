@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261025a"
+SCRIPT_VERSION = "20261028a"
 
 import os
 import sys
@@ -2156,11 +2156,24 @@ class CmccApi(_BaseCarrierApi):
             'limit': limit,
         }
         encrypted_body = self._build_encrypted_body(params, xk)
-        return self._call(self.tariff_url, headers, encrypted_body,
-                          retry_times=retry_times,
-                          retry_base_ms=retry_base_ms,
-                          retry_max_ms=retry_max_ms,
-                          retry_jitter=retry_jitter)
+        result = self._call(self.tariff_url, headers, encrypted_body,
+                            retry_times=retry_times,
+                            retry_base_ms=retry_base_ms,
+                            retry_max_ms=retry_max_ms,
+                            retry_jitter=retry_jitter)
+        return self._align_upstream_keys(result)
+
+    @staticmethod
+    def _align_upstream_keys(result):
+        """移动上游键名对齐（仅限本类，不动公共转换层）：
+        上游原始键 otherFees(带s) 与下游 _nm_to_fields 认的 otherFee 不一致，
+        实测存量数据中 2641 条有值被整批丢弃，就地改名。
+        （宽带键上游本就用 brandwidth，无需处理）"""
+        for bean in ((result or {}).get('data') or {}).get('beans') or []:
+            for nm in bean.get('nonModuleList') or []:
+                if 'otherFees' in nm:
+                    nm['otherFee'] = nm.pop('otherFees')
+        return result
 
     def resolve_categories(self, prov_code, category_mode, fixed_categories,
                            retry_times=3, retry_base_ms=1000, retry_max_ms=30000, retry_jitter=0.3,
@@ -2380,25 +2393,35 @@ class CuccApi(_BaseCarrierApi):
                 bean = {
                     'tariffName': name,
                     'nonModuleList': [{
+                        # 键名左侧为下游 _nm_to_fields 认的标准键，右侧为联通 operateData 实测键
+                        # （2026-10-28 实测对齐：此前白名单键名沿用移动/电信命名，导致超出资费/上下线
+                        #  日期/适用范围/在网要求等字段被整批丢弃，详见 Temp/probe_cucc_raw.js 探针）
                         'name': name,
                         'fees': _s(d.get('feesStandard')),
                         'feesUnit': _s(d.get('feeUnit') or '元/月'),
                         'reportNo': _s(d.get('reportNo') or d.get('id') or d.get('tariffId')),
                         'productCode': _s(d.get('productCode') or d.get('goodsCode')),
-                        'applicablePeople': _s(d.get('applicablePeople') or d.get('crowd')),
+                        'applicablePeople': _s(d.get('useScope') or d.get('applicablePeople') or d.get('crowd')),
                         'channel': _s(d.get('saleChnl') or d.get('saleChannel') or d.get('channel')),
                         'unsubscribe': _s(d.get('unsubscribeMethod') or d.get('unsubscribe')),
                         'responsibility': _s(d.get('responsibility') or d.get('breachOfContract') or d.get('contractDuty')),
                         'validPeriod': _s(d.get('validPeriod')),
-                        'duration': _s(d.get('duration') or d.get('inNetRequire')),
+                        'duration': _s(d.get('onlinePeriod') or d.get('duration') or d.get('inNetRequire')),
                         'call': _s(d.get('minute') or d.get('callMinute')),
                         'data': _s(d.get('commonData') or d.get('data')),
                         'dataUnit': _s(d.get('dataUnit') or 'MB'),
                         'orientTraffic': _s(d.get('orientTraffic')),
                         'orientTrafficUnit': _s(d.get('orientTrafficUnit') or 'MB'),
                         'brandwidth': _s(d.get('broadBand') or d.get('broadband') or d.get('brandwidth')),
+                        'iptv': _s(d.get('iptv')),
                         'sms': _s(d.get('sms') or d.get('smsCount')),
-                        'tariffDesc': _s(d.get('serviceContent') or d.get('tariffDesc') or d.get('feeDesc') or d.get('productDesc') or d.get('extraFees')),
+                        'rights': _s(d.get('equityCoupon') or d.get('rights')),
+                        'extraFees': _s(d.get('extraFees')),
+                        'otherFee': _s(d.get('otherFees') or d.get('otherFee')),
+                        'onlineDay': _s(d.get('startDate')),
+                        'offlineDay': _s(d.get('endDate')),
+                        'otherDesc': _s(d.get('otherDesc')),
+                        'tariffDesc': _s(d.get('serviceContent') or d.get('tariffDesc') or d.get('feeDesc') or d.get('productDesc')),
                         'status': _s(d.get('state') or d.get('status')),
                     }],
                 }
@@ -2456,6 +2479,11 @@ def _ctcc_stealth_script():
 class CtccApi(_BaseCarrierApi):
     DIRECT_API_URL = 'https://www.189.cn/wapportalweb/wapportalweb/tariffSection.do'
     DIRECT_AES_KEY = b'telecom_wap_2018'
+
+    # wap 直连出口拿得到、而 web pw 出口页面模板不渲染的字段（2026-10-28 青龙实测对齐）。
+    # pw 轮（直连失败回退 / playwright_only）这些字段必为空，用上一轮快照回填，
+    # 避免模式切换轮 diff 把它们整体判空、变更日志刷出一片假清空。
+    PW_UNFILLED_FIELDS = ('其他费用', '宽带', '移动高清', '短信', '权益')
 
     def __init__(self, config):
         super().__init__(config)
@@ -2638,8 +2666,10 @@ class CtccApi(_BaseCarrierApi):
             'orientTrafficUnit': _s(x.get('orientTrafficUnit')),
             'sms': _s(x.get('sms')),
             'iptv': _s(x.get('iptv')),
-            'bandwidth': _s(x.get('bandwidth')),
-            'otherFees': _s(x.get('otherFees')),
+            # wap 直连上游原始键为 bandwidth(无r)/otherFees(带s)，此处就地改名成
+            # _nm_to_fields 的标准键 brandwidth/otherFee（电信私有小写名不出本类）
+            'brandwidth': _s(x.get('bandwidth')),
+            'otherFee': _s(x.get('otherFees')),
             'rights': _s(x.get('rights')),
             'otherContent': _s(x.get('otherContent')),
             'lable1Name': l1_name,
@@ -2934,12 +2964,23 @@ class CtccApi(_BaseCarrierApi):
                 continue
             jbxx = self._parse_jbxx(item.get('jbxx', ''))
             ffnr = self._parse_ffnr(item.get('ffnr', ''))
+            # 资费标准尾缀即真实计费单位（元/月|次|年|季|天|日|周），随取随剥。
+            # 旧写法硬编码 feesUnit='元/月'，遇「10元/次」类套餐会拼出「10元/次元/月」
+            # 畸形值（2026-10-28 青龙 pw 实测采样发现；直连模式 feesStandard 为纯数字不受影响）
+            _std_raw = jbxx.get('资费标准', '').replace('(全周期)', '')
+            _mu = re.search(r'(元/(?:月|次|年|季|天|日|周))\s*$', _std_raw.strip())
+            if _mu:
+                _fees = _std_raw.strip()[:-len(_mu.group(1))].strip()
+                _unit = _mu.group(1)
+            else:
+                _fees = _std_raw.replace('元/月', '')
+                _unit = '元/月'
             bean = {
                 'tariffName': name,
                 'nonModuleList': [{
                     'name': name,
-                    'fees': jbxx.get('资费标准', '').replace('元/月', '').replace('(全周期)', ''),
-                    'feesUnit': '元/月',
+                    'fees': _fees,
+                    'feesUnit': _unit,
                     'reportNo': _s(item.get('report_no') or item.get('reportNo')),
                     'applicablePeople': jbxx.get('适用范围', ''),
                     'channel': jbxx.get('销售渠道', ''),
@@ -3684,6 +3725,37 @@ def _drop_stale_added(added, new_items_map, vfr_cfg, baseline_dt=None):
         basis = f'上线日期早于上一轮基线 {baseline_dt}' if baseline_dt else f'上线日期早于今日 {stale_days} 天以上'
         logger.info(f'  剔除假新增 {len(dropped)} 条（{basis}，属漏采补录）：{"、".join(n for n in names if n)}{suffix}')
     return real, len(dropped)
+
+
+def _backfill_missing_fields(items, old_items, keys):
+    """用上一轮同 id 条目回填本轮缺失字段，返回发生回填的条数。
+
+    通用工具，不感知运营商：keys 由调用方决定（哪个采集出口天然拿不到哪些字段）。
+    规则：仅当本轮值为空且上一轮同 id 非空时才回填，绝不覆盖本轮真实抓到的值；
+    本轮有值/上游真清空的场景一律不动，变更日志语义不受影响。
+    """
+    if not items or not old_items or not keys:
+        return 0
+    old_by_id = {}
+    for _it in old_items:
+        _id = _it.get('id')
+        if _id:
+            old_by_id[_id] = _it
+    filled = 0
+    for it in items:
+        old_it = old_by_id.get(it.get('id'))
+        if not old_it:
+            continue
+        nf = it.setdefault('fields', {})
+        of = old_it.get('fields') or {}
+        hit = False
+        for k in keys:
+            if not _s(nf.get(k)) and _s(of.get(k)):
+                nf[k] = of[k]
+                hit = True
+        if hit:
+            filled += 1
+    return filled
 
 
 # 设计决策：不引入 changelog 瘦身（hunan 的 slim_change），原因：
@@ -6366,6 +6438,18 @@ def crawl_one_carrier(config, carrier_key, storage, old_stats, crawl_time):
             old_items = (old_snap or {}).get('items', [])
             old_count = len(old_items)
             new_count = len(items)
+
+            # ===== 电信 pw 轮窄字段回填（直连↔pw 出口形态差异的止血）=====
+            # wap 直连接口返回结构化键（其他费用/宽带/移动高清/短信/权益），
+            # web pw 出口的页面模板不渲染这些栏位 → pw 轮这些字段必为空。
+            # 直连失败回退 pw（或 playwright_only 模式）时若不回填，下方 diff 会把它们
+            # 整体判空，变更日志刷出一片假清空。仅回填 CtccApi.PW_UNFILLED_FIELDS
+            # 这几个 pw 拿不到的字段，本轮真实抓到的值一律不覆盖。
+            if (carrier_key == 'ctcc' and items and old_items
+                    and (pw_fallback_mode or ctcc_direct_mode == 'playwright_only')):
+                _bf = _backfill_missing_fields(items, old_items, CtccApi.PW_UNFILLED_FIELDS)
+                if _bf:
+                    logger.info(f'  {prov_name}: pw 轮窄字段回填 {_bf} 条（防假清空误报）')
 
             if data['status'] == 'failed' or data['status'] == 'error':
                 logger.warning(f'  {prov_name}: 采集失败, 耗时={prov_time}s')
