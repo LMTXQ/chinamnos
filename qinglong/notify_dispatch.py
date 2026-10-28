@@ -23,6 +23,11 @@
   qqbot     cred: {appid, secret, targets[]}  QQ 官方机器人群聊直连（targets=group_openid 列表，
                                         回调绑定码流程写入）；纯文本 msg_type=0，多群串行节流，
                                         token 文件缓存 .qqbot_token.json，超频码 22009 不重试
+  feishu    cred: {webhook, secret?}   飞书自定义机器人；仅 text 纯文本（官方 webhook 无 markdown 类型），
+                                        加签可选（timestamp+secret 整串为 HMAC 密钥对空串签名）
+  bark      cred: {key, server?}       Bark iOS 推送；POST /push JSON，server=自建 bark-server（可选）
+  pushplus  cred: {token}              微信公众号推送；template=markdown 官方支持，响应 code=200 仅代表
+                                        受理（异步），900=超量 903=token 无效 905=未实名
 
 payload 行结构（Worker 写入，契约固定）：
   {nid, uid, kind, title, body, channel_type, cred}
@@ -489,6 +494,113 @@ def send_qbot(cred, title, body, row=None):
     return False, "全部 %d 群失败：%s" % (len(targets), "; ".join(e for _, e in errs)[:180])
 
 
+# ───────────────────────── 飞书自定义机器人（群聊） ─────────────────────────
+FEISHU_BODY_LIMIT = 18000  # 官方请求体 ≤20KB（含 JSON 包装与转义），留余量
+
+
+def _feishu_sign(secret, ts):
+    """官方加签规则（与钉钉相反）：以 f"{ts}\\n{secret}" 整串为 HMAC-SHA256 密钥，
+    对空消息体签名，再 base64 编码。ts 为秒级时间戳（距发送须 ≤1 小时）。"""
+    string_to_sign = "%s\n%s" % (ts, secret)
+    hmac_code = hmac.new(string_to_sign.encode("utf-8"),
+                         digestmod=hashlib.sha256).digest()
+    return base64.b64encode(hmac_code).decode("utf-8")
+
+
+def send_feishu(cred, title, body, row=None):
+    """飞书自定义机器人：官方 webhook 仅支持 text/post/image/share_chat/interactive，
+    无独立 markdown 类型（卡片 lark_md 亦无表格），故仅发 text 纯文本（digest 取 plain 版式，
+    统一补标题行）。加签（可选）：payload 顶层带 timestamp（秒，字符串）与 sign。
+    成功响应 code=0；频控单机器人 100 次/分钟，正常频率远低于此不做节流。"""
+    webhook = cred.get("webhook", "")
+    if not webhook:
+        return False, "缺少 webhook"
+    _, text_body = pick_body(row, "plain")
+    payload = {
+        "msg_type": "text",
+        "content": {"text": _trunc_bytes(_plainify("%s\n\n%s" % (title, text_body)), FEISHU_BODY_LIMIT)},
+    }
+    secret = cred.get("secret", "")
+    if secret:
+        ts = int(time.time())
+        payload["timestamp"] = str(ts)
+        payload["sign"] = _feishu_sign(secret, ts)
+    try:
+        res = _post(webhook, payload)
+        if int(res.get("code", -1)) == 0:
+            return True, "sent"
+        return False, "code=%s %s" % (res.get("code"), str(res.get("msg") or "")[:80])
+    except urllib.error.HTTPError as e:
+        return False, "HTTP %s %s" % (e.code, e.read().decode("utf-8", "ignore")[:100])
+    except Exception as e:
+        return False, str(e)[:100]
+
+
+# ───────────────────────── Bark（iOS 推送 App） ─────────────────────────
+BARK_DEFAULT_SERVER = "https://api.day.app"
+BARK_BODY_LIMIT = 3000  # APNs 单条推送载荷约 4KB 上限（官方未文档化长度限制），留 JSON 包装余量
+
+
+def send_bark(cred, title, body, row=None):
+    """Bark iOS 推送：POST {server}/push JSON（device_key 必填 + title + body），title 单独传参
+    （通知卡片标题行），正文取 plain 版式（Bark markdown 参数不支持表格）。server=自建 bark-server
+    可覆盖官方 api.day.app。成功响应 HTTP 200 且 code=200（CommonResp），失败 HTTP 400/500。
+    官方无频控（异常使用才封 IP）。"""
+    key = cred.get("key", "")
+    if not key:
+        return False, "缺少 device key"
+    _, text_body = pick_body(row, "plain")
+    payload = {
+        "device_key": key,
+        "title": title,
+        "body": _trunc_bytes(_plainify(text_body), BARK_BODY_LIMIT),
+    }
+    server = (cred.get("server") or BARK_DEFAULT_SERVER).rstrip("/")
+    try:
+        res = _post("%s/push" % server, payload)
+        if int(res.get("code", 0)) == 200:
+            return True, "sent"
+        return False, "code=%s %s" % (res.get("code"), str(res.get("message") or "")[:80])
+    except urllib.error.HTTPError as e:
+        return False, "HTTP %s %s" % (e.code, e.read().decode("utf-8", "ignore")[:100])
+    except Exception as e:
+        return False, str(e)[:100]
+
+
+# ───────────────────────── PushPlus（微信公众号推送） ─────────────────────────
+PUSHPLUS_SEND_URL = "https://www.pushplus.plus/send"
+PUSHPLUS_TITLE_LIMIT = 100   # 官方标题上限 100 字（实名用户）
+PUSHPLUS_CONTENT_LIMIT = 18000  # 官方内容上限 2 万字（实名用户），字节级截断保守留余
+
+
+def send_pushplus(cred, title, body, row=None):
+    """PushPlus 微信公众号推送：template=markdown 官方支持（digest 取 markdown 版式含 GFM 表格，
+    若公众号侧表格渲染异常再降 plain；batch 行回退 plain 并补标题）。接口异步——同步响应
+    code=200 仅代表受理，最终结果需流水号查询（本渠道以受理为准，不追踪流水号）。
+    错误码：900=超量 903=token 无效 905=未实名。免费额度（实名）：200 次/日、1 分钟 5 次、
+    相同内容 1 小时 3 条——单人单 token 频率远低于此，不做节流。"""
+    token = cred.get("token", "")
+    if not token:
+        return False, "缺少 token"
+    fmt, text_body = pick_body(row, "markdown", "plain")
+    content = text_body if fmt == "markdown" else _plainify("%s\n\n%s" % (title, text_body))
+    payload = {
+        "token": token,
+        "title": title[:PUSHPLUS_TITLE_LIMIT],
+        "content": _trunc_bytes(content, PUSHPLUS_CONTENT_LIMIT),
+        "template": "markdown",
+    }
+    try:
+        res = _post(PUSHPLUS_SEND_URL, payload)
+        if int(res.get("code", 0)) == 200:
+            return True, "accepted"
+        return False, "code=%s %s" % (res.get("code"), str(res.get("msg") or "")[:80])
+    except urllib.error.HTTPError as e:
+        return False, "HTTP %s %s" % (e.code, e.read().decode("utf-8", "ignore")[:100])
+    except Exception as e:
+        return False, str(e)[:100]
+
+
 # 适配器注册表（与 Worker 渠道注册表同构；新渠道上线时在此注册）
 # 约定：adapter(cred, title, body, row) —— row 为完整 payload 行（邮件适配器用 email_target）
 ADAPTERS = {
@@ -497,6 +609,9 @@ ADAPTERS = {
     "email": send_email,
     "qmsg": send_qmsg,
     "qqbot": send_qbot,
+    "feishu": send_feishu,
+    "bark": send_bark,
+    "pushplus": send_pushplus,
 }
 
 

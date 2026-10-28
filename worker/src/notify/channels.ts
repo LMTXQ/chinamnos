@@ -337,8 +337,190 @@ const qqbot: ChannelDef = {
   },
 };
 
-/* 注册表：dingtalk / wecom / email / qmsg / qqbot 已上线；feishu/pushplus 按同结构即插即用 */
-export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email, qmsg, qqbot };
+/* ── 飞书自定义机器人（群聊）──
+   群设置 → 群机器人 → 添加「自定义机器人」，复制 Webhook 地址；安全设置开启「签名校验」则需填密钥。
+   官方文档（2025-10 版）：支持的 msg_type 仅 text / post / image / share_chat / interactive（卡片）——
+   无独立 markdown 类型，卡片 lark_md 亦不支持表格，故仅发 text 纯文本（plainify 净化后）。
+   加签规则与钉钉相反：以 `timestamp + "\n" + secret` 整串为 HMAC-SHA256 密钥对空消息体签名，
+   再 Base64；payload 顶层带 timestamp（秒级字符串）与 sign，时间戳距发送须 ≤1 小时。
+   请求体 ≤20KB；频控单机器人 100 次/分钟、5 次/秒（正常通知频率远低于此，不做节流）；成功响应 code=0。 */
+const FEISHU_BODY_LIMIT = 18000; // 请求体 20KB 上限（含 JSON 包装与转义），留余量
+
+async function feishuSign(secret: string, ts: number): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(`${ts}\n${secret}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new Uint8Array(0));
+  let bin = '';
+  for (const b of new Uint8Array(sig)) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+const feishu: ChannelDef = {
+  type: 'feishu',
+  label: '飞书机器人',
+  desc: '在飞书群（建议单人群）设置中添加「自定义机器人」，复制 Webhook 地址粘贴绑定；安全设置若开启「签名校验」，请一并填入密钥。验证码与后续通知都会发到该群。',
+  fields: [
+    { key: 'webhook', label: 'Webhook 地址', placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/…' },
+    { key: 'secret', label: '签名密钥（可选）', placeholder: '仅安全设置开启「签名校验」时填写' },
+  ],
+  validate(raw) {
+    const v = typeof raw.webhook === 'string' ? raw.webhook.trim() : '';
+    // 国内版 open.feishu.cn / 国际版 Lark open.larksuite.com（webhook 主域不同，结构一致）
+    if (!/^https:\/\/(open\.feishu\.cn|open\.larksuite\.com)\/open-apis\/bot\/v2\/hook\/[0-9a-zA-Z_-]{16,}$/.test(v)) {
+      return { ok: false, error: 'Webhook 地址格式不正确，请复制飞书自定义机器人的完整 Webhook 地址' };
+    }
+    // 飞书签名密钥无固定前缀/格式（区别于钉钉 SEC 开头），仅排除空白字符
+    const s = typeof raw.secret === 'string' ? raw.secret.trim() : '';
+    if (s && !/^\S{6,64}$/.test(s)) {
+      return { ok: false, error: '签名密钥格式不正确：应为机器人「签名校验」设置中生成的密钥' };
+    }
+    // 显式构造 cred（避免可选属性 union 推断无法赋给 ChannelCred）
+    const cred: ChannelCred = { webhook: v };
+    if (s) cred.secret = s;
+    return { ok: true, cred };
+  },
+  hint(cred) {
+    const m = /hook\/([0-9a-zA-Z_-]+)/.exec(cred.webhook || '');
+    return `飞书机器人 · 尾号 ${m ? m[1].slice(-4) : '****'}${cred.secret ? '（加签）' : ''}`;
+  },
+  async send(cred, title, body) {
+    const payload: Record<string, unknown> = {
+      msg_type: 'text',
+      content: { text: truncBytes(plainify(`${title}\n\n${body}`), FEISHU_BODY_LIMIT) },
+    };
+    if (cred.secret) {
+      const ts = Math.floor(Date.now() / 1000);
+      payload.timestamp = String(ts);
+      payload.sign = await feishuSign(cred.secret, ts);
+    }
+    let res: Response;
+    try {
+      res = await fetch(cred.webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      return { ok: false, error: `网络错误: ${String(e)}` };
+    }
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { code?: number; msg?: string };
+    if (data.code !== 0) return { ok: false, error: `code=${data.code} ${data.msg || ''}`.trim() };
+    return { ok: true };
+  },
+};
+
+/* ── Bark（iOS 推送 App）──
+   cred: {key, server?}，key = App 内推送 URL 中的 Device Key；server = 自建 bark-server 地址
+   （官方明确支持自建，默认 https://api.day.app）。发送：POST {server}/push JSON（device_key+title+body），
+   成功响应 HTTP 200 且 code=200（bark-server CommonResp），失败返回 HTTP 400/500。
+   官方无频控（异常使用才封 IP）；无文档级长度上限，但 APNs 单条推送载荷约 4KB 上限——超长直接被苹果拒收，
+   故按字节截断。markdown 参数不支持表格，统一发纯文本。 */
+const BARK_DEFAULT_SERVER = 'https://api.day.app';
+const BARK_BODY_LIMIT = 3000; // APNs 载荷 4KB 上限，留 JSON 包装（title/icon 等）余量
+
+const bark: ChannelDef = {
+  type: 'bark',
+  label: 'Bark（iOS）',
+  desc: 'iPhone 安装 Bark App 后复制推送 URL 中的 Key 绑定；自建服务器用户可改填服务器地址。验证码与通知直达 iPhone 通知中心。',
+  fields: [
+    { key: 'key', label: 'Device Key', placeholder: 'Bark App 内复制，如 https://api.day.app/你的Key 中的 Key' },
+    { key: 'server', label: '服务器地址（可选）', placeholder: '留空使用官方 api.day.app；自建填 https:// 完整域名' },
+  ],
+  validate(raw) {
+    const v = typeof raw.key === 'string' ? raw.key.trim() : '';
+    if (!/^[0-9a-zA-Z]{16,64}$/.test(v)) {
+      return { ok: false, error: 'Device Key 格式不正确，请在 Bark App 复制推送 URL 中的 Key（一串字母数字）' };
+    }
+    const s = typeof raw.server === 'string' ? raw.server.trim().replace(/\/+$/, '') : '';
+    if (s && !/^https:\/\/[^\s/]+$/.test(s)) {
+      return { ok: false, error: '服务器地址格式不正确：应为 https:// 开头的完整域名' };
+    }
+    const cred: ChannelCred = { key: v };
+    if (s) cred.server = s;
+    return { ok: true, cred };
+  },
+  hint(cred) {
+    return `Bark · key 尾号 ${(cred.key || '').slice(-4) || '****'}${cred.server ? '（自建）' : ''}`;
+  },
+  async send(cred, title, body) {
+    const server = (cred.server || BARK_DEFAULT_SERVER).replace(/\/+$/, '');
+    let res: Response;
+    try {
+      res = await fetch(`${server}/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({
+          device_key: cred.key,
+          title: title.slice(0, 64),
+          body: truncBytes(plainify(body), BARK_BODY_LIMIT),
+        }),
+      });
+    } catch (e) {
+      return { ok: false, error: `网络错误: ${String(e)}` };
+    }
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { code?: number; message?: string };
+    if (data.code !== 200) return { ok: false, error: `code=${data.code} ${data.message || ''}`.trim() };
+    return { ok: true };
+  },
+};
+
+/* ── PushPlus（微信公众号推送，第三方中转）──
+   cred: {token}，微信扫码登录 pushplus.plus 获取。发送：POST /send JSON（token+title+content+template=markdown）。
+   官方文档 V1.18（2026-09）：markdown 模板官方支持；接口异步——同步响应 code=200 仅代表受理，
+   最终结果需流水号查询/回调（本渠道以此为准，不追踪流水号）。免费额度（实名用户）：200 次/日、
+   1 分钟 5 次、相同内容 1 小时 3 条——单人单 token 频率远低于此，不做节流；同内容去重由消息本身含轮次/时间戳天然规避。
+   错误码：900=请求超量 903=token 无效 905=未实名。限制（实名）：标题 ≤100 字、内容 ≤2 万字。 */
+const PUSHPLUS_SEND_URL = 'https://www.pushplus.plus/send';
+const PUSHPLUS_TITLE_LIMIT = 100;
+const PUSHPLUS_CONTENT_LIMIT = 18000; // 内容上限 2 万字（实名），UTF-8 字节级截断保守留余
+
+const pushplus: ChannelDef = {
+  type: 'pushplus',
+  label: 'PushPlus',
+  desc: '微信扫码登录 pushplus.plus（pushplus推送加公众号）获取 token 绑定，通知经其中转推送到你的微信。建议完成实名认证，未实名无法发送（错误码 905）。',
+  fields: [
+    { key: 'token', label: 'PushPlus Token', placeholder: 'pushplus.plus 个人中心获取' },
+  ],
+  validate(raw) {
+    const v = typeof raw.token === 'string' ? raw.token.trim() : '';
+    if (!/^[0-9a-zA-Z]{24,64}$/.test(v)) {
+      return { ok: false, error: 'Token 格式不正确，请在 pushplus.plus 个人中心复制完整 token' };
+    }
+    return { ok: true, cred: { token: v } };
+  },
+  hint(cred) {
+    return `PushPlus · token 尾号 ${(cred.token || '').slice(-4) || '****'}`;
+  },
+  async send(cred, title, body) {
+    let res: Response;
+    try {
+      // markdown 模板直接保留标记（公众号侧渲染）；表格渲染未实测，异常时改发 plain
+      res = await fetch(PUSHPLUS_SEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: cred.token,
+          title: title.slice(0, PUSHPLUS_TITLE_LIMIT),
+          content: truncBytes(body, PUSHPLUS_CONTENT_LIMIT),
+          template: 'markdown',
+        }),
+      });
+    } catch (e) {
+      return { ok: false, error: `网络错误: ${String(e)}` };
+    }
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { code?: number; msg?: string };
+    if (data.code !== 200) return { ok: false, error: `code=${data.code} ${data.msg || ''}`.trim() };
+    return { ok: true };
+  },
+};
+
+/* 注册表：dingtalk / wecom / email / qmsg / qqbot / feishu / bark / pushplus 已上线 */
+export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email, qmsg, qqbot, feishu, bark, pushplus };
 
 export function getChannel(type: string): ChannelDef | undefined {
   return CHANNELS[type];

@@ -1117,8 +1117,30 @@ const NCH_TYPES = [
       { key: "secret", label: "加签密钥（可选）", placeholder: "SEC 开头，仅安全设置选「加签」时填写" },
     ],
   },
-  { type: "feishu", label: "飞书机器人", desc: "群机器人 Webhook + 加签密钥", soon: true },
-  { type: "pushplus", label: "PushPlus", desc: "微信推送，填个人 token", soon: true },
+  {
+    type: "feishu",
+    label: "飞书机器人",
+    desc: "在飞书群（建议单人群）设置中添加「自定义机器人」，复制 Webhook 地址粘贴绑定；安全设置若开启「签名校验」，请一并填入密钥。验证码与后续通知都会发到该群。",
+    ready: true,
+    fields: [
+      { key: "webhook", label: "Webhook 地址", placeholder: "https://open.feishu.cn/open-apis/bot/v2/hook/…" },
+      { key: "secret", label: "签名密钥（可选）", placeholder: "仅安全设置开启「签名校验」时填写" },
+    ],
+  },
+  {
+    type: "pushplus",
+    label: "PushPlus",
+    desc: "微信扫码登录 pushplus.plus（关注 pushplus推送加 公众号）获取 token 绑定，通知经其中转推送到你的微信。建议完成实名认证，未实名无法发送。",
+    ready: true,
+    steps: [
+      "微信扫码登录 pushplus.plus，关注「pushplus推送加」公众号，个人中心复制 token",
+      "建议在公众号完成实名认证（2024 年 8 月起未实名无法发送消息）",
+      "回到本页填入 token 提交；验证码会推送到你的微信",
+    ],
+    fields: [
+      { key: "token", label: "PushPlus Token", placeholder: "pushplus.plus 个人中心获取" },
+    ],
+  },
   {
     type: "qmsg",
     label: "Qmsg酱",
@@ -1151,6 +1173,21 @@ const NCH_TYPES = [
     fields: [
       { key: "appid", label: "AppID", placeholder: "QQ 开放平台机器人的数字 AppID" },
       { key: "secret", label: "AppSecret", placeholder: "QQ 开放平台生成的密钥字符串" },
+    ],
+  },
+  {
+    type: "bark",
+    label: "Bark（iOS）",
+    desc: "iPhone 安装 Bark App 后复制推送 URL 中的 Key 绑定；自建服务器用户可改填服务器地址。验证码与通知直达 iPhone 通知中心。",
+    ready: true,
+    steps: [
+      "iPhone 在 App Store 安装 Bark，打开 App 复制推送 URL 中最后一段 Key（一串字母数字）",
+      "自建 bark-server 用户：额外把服务器地址填入「服务器地址」，留空使用官方 api.day.app",
+      "回到本页填入 Key 提交；验证码会推送到你的 iPhone",
+    ],
+    fields: [
+      { key: "key", label: "Device Key", placeholder: "Bark App 内复制，如 https://api.day.app/你的Key 中的 Key" },
+      { key: "server", label: "服务器地址（可选）", placeholder: "留空使用官方 api.day.app；自建填 https:// 完整域名" },
     ],
   },
   { type: "email", label: "邮件", desc: "一键绑定你的注册邮箱。到期提醒、采集播报等批量通知将发送到该邮箱；私信与审核类通知本就会发送到你的邮箱，不受此绑定影响。", ready: true, fields: [] },
@@ -1581,10 +1618,10 @@ function renderNchVerify() {
   const body = getModal().querySelector("#nchBody");
   if (!body) return;
   body.innerHTML = `
-    <p class="hint" style="margin-top:0">验证码已发送到你绑定的通知渠道，请在对应 App（企业微信 / 钉钉 / QQ）中查看（10 分钟内有效）。</p>
+    <p class="hint" style="margin-top:0">验证码已发送到你绑定的通知渠道（群机器人 / 推送 App / 微信公众号按绑定渠道而定），请在对应 App 中查看（10 分钟内有效）。</p>
     <div class="fg">
       <label>6 位验证码</label>
-      <input class="inp" id="nchCode" type="text" inputmode="numeric" maxlength="6" placeholder="群里收到的 6 位数字">
+      <input class="inp" id="nchCode" type="text" inputmode="numeric" maxlength="6" placeholder="收到的 6 位数字">
     </div>
     <div class="actions">
       <button class="btn ghost" data-act="nchResend">重新发送</button>
