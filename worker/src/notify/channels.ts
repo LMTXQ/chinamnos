@@ -186,16 +186,37 @@ const QMSG_SEND_PATH = '/v3/jsend/';
 const QMSG_MSG_LIMIT = 1800; // 官方文档：最长 1800 字符（UTF-8 字节级截断）
 const QMSG_GROUP_INTERVAL_MS = 5000; // 同 Key 限流 5 秒/次，多群串行必须间隔
 
-/* plain 渠道净化：绑定验证码/即时消息正文可能含 markdown 标记（**验证码**、[站点](url)），
-   Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读。
+/* plain 渠道净化（导出：notify-channels 群验证码复用）：绑定验证码/即时消息正文可能含
+   markdown 标记（**验证码**、[站点](url)），Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读。
    链接文字与网址相同（纯域名链接）时只保留网址，避免"域名: 网址"重复显示。 */
-function plainify(s: string): string {
+export function plainify(s: string): string {
   return s
     .replace(/\[([^\]\s]+)\]\(([^)\s]+)\)/g, (_m, text: string, url: string) => {
       const bare = url.replace(/^https?:\/\//, '').replace(/\/+$/, '');
       return text.replace(/\/+$/, '') === bare ? url : `${text}: ${url}`;
     })
     .replace(/\*\*([^*]+)\*\*/g, '$1');
+}
+
+/** Qmsg 单目标发送（targets 循环与群验证码共用）：group=null = 平台默认目标 */
+export async function qmsgSendRaw(
+  cred: ChannelCred,
+  group: string | null,
+  text: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${cred.domain || QMSG_DEFAULT_DOMAIN}${QMSG_SEND_PATH}${encodeURIComponent(cred.key || '')}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msg: text, ...(group ? { group } : {}) }),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { success?: boolean; reason?: string; message?: string };
+    if (data.success === true) return { ok: true };
+    return { ok: false, error: data.reason || data.message || 'Qmsg 返回失败' };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 120) };
+  }
 }
 
 const qmsg: ChannelDef = {
@@ -237,20 +258,10 @@ const qmsg: ChannelDef = {
     const errs: string[] = [];
     for (let i = 0; i < jobs.length; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, QMSG_GROUP_INTERVAL_MS));
-      try {
-        const group = jobs[i].group as string | undefined;
-        const res = await fetch(`${cred.domain || QMSG_DEFAULT_DOMAIN}${QMSG_SEND_PATH}${encodeURIComponent(cred.key || '')}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ msg: text, ...(group ? { group } : {}) }),
-        });
-        if (!res.ok) { errs.push(`${group || '默认'}: HTTP ${res.status}`); continue; }
-        const data = (await res.json().catch(() => ({}))) as { success?: boolean; reason?: string; message?: string };
-        if (data.success === true) sent++;
-        else errs.push(`${group || '默认'}: ${data.reason || data.message || 'Qmsg 返回失败'}`);
-      } catch (e) {
-        errs.push(`${group || '默认'}: ${String(e).slice(0, 80)}`);
-      }
+      const group = jobs[i].group as string | undefined;
+      const r = await qmsgSendRaw(cred, group || null, text);
+      if (r.ok) sent++;
+      else errs.push(`${group || '默认'}: ${r.error || '未知错误'}`);
     }
     if (!sent) return { ok: false, error: `全部发送失败：${errs.join('；').slice(0, 250)}` };
     if (errs.length) {

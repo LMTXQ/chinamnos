@@ -870,10 +870,19 @@ function onModalClick(e) {
     authGuarded(el, () => nchTargetsAdd(ctype));
     return;
   }
+  if (act === "nchTargetsResend") {
+    const el2 = el;
+    authGuarded(el, () => nchTargetsResend(el2.dataset.ctype || "", el2.dataset.group || ""));
+    return;
+  }
+  if (act === "nchTargetsVerify") {
+    const el2 = el;
+    authGuarded(el, () => nchTargetsVerify(el2.dataset.ctype || "", el2.dataset.group || ""));
+    return;
+  }
   if (act === "nchTargetsDel") {
-    const ctype = el.dataset.ctype || "";
-    const group = el.dataset.group || "";
-    authGuarded(el, () => nchTargetsOp(ctype, "remove", group));
+    const el2 = el;
+    authGuarded(el, () => nchTargetsRemove(el2.dataset.ctype || "", el2.dataset.group || ""));
     return;
   }
   if (act === "nchPrefs") { renderNchPrefs(el.dataset.ctype || ""); return; }
@@ -1632,15 +1641,16 @@ async function nchBindCode(ctype) {
   if (r.data?.bind_code) renderNchBindCode(r.data.bind_code);
 }
 
-/* Qmsg 手动群目标视图：列出已登记群号 + 添加/移除（群通知需 Qmsg 控制台绑群 + 群主开主动消息） */
+/* Qmsg 手动群目标视图：两段式（输入群号发验证码 → 群内收码回填确认），对齐企微/钉钉绑定流。
+   前置：Qmsg 控制台已绑群（验证码发不出去=未绑定）；群通知需群主开「机器人主动在群聊内发言」。 */
 function renderNchTargets(ctype) {
   const it = nchItems.find((x) => x.channel_type === ctype && x.status === "active");
   const body = getModal().querySelector("#nchBody");
   if (!body || !it) return;
   const targets = Array.isArray(it.targets) ? it.targets : [];
   body.innerHTML = `
-    <p class="hint" style="margin-top:0">Qmsg酱 · 已登记群 ${targets.length} 个${targets.length ? "" : "（当前仅发送平台默认目标）"}。群通知需先把 Qmsg 机器人拉进群，并让<b>群主</b>在群设置开启「机器人主动在群聊内发言」，否则群消息发送失败。</p>
-    <p class="hint" style="margin:0 0 8px">添加步骤：Qmsg 控制台添加并绑定该群 → 回到这里登记群号（平台限流：同 Key 每 5 秒 1 次，多群通知自动间隔发送）。</p>
+    <p class="hint" style="margin-top:0">Qmsg酱 · 已登记群 ${targets.length} 个${targets.length ? "" : "（当前仅发送平台默认目标）"}。</p>
+    <p class="hint" style="margin:0 0 8px"><b>添加群前提</b>：先在 Qmsg 控制台把机器人拉进群并<b>绑定该群</b>（否则验证码发不出去）；群通知需<b>群主</b>在群设置开启「机器人主动在群聊内发言」。平台限流：同 Key 每 5 秒 1 次。</p>
     <div class="nch-list">
       ${targets.map((g) => `
       <div class="nch-card"><div class="nch-meta"><div class="t">群 ${esc(g)}</div></div>
@@ -1652,7 +1662,24 @@ function renderNchTargets(ctype) {
     </div>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
-      <button class="btn primary" data-act="nchTargetsAdd" data-ctype="${esc(ctype)}">添加</button>
+      <button class="btn primary" data-act="nchTargetsAdd" data-ctype="${esc(ctype)}">发送验证码</button>
+    </div>`;
+  mountIcons(body);
+}
+
+/* 回填视图：验证码已发到群，群内查看后回填确认 */
+function renderNchTargetVerify(ctype, group) {
+  const body = getModal().querySelector("#nchBody");
+  if (!body) return;
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">验证码已通过 Qmsg 发送到群 <b>${esc(group)}</b>，请在群内查看后回填（10 分钟内有效）。</p>
+    <div class="fg">
+      <label>6 位验证码</label>
+      <input class="inp" id="nchTargetCode" inputmode="numeric" maxlength="6" placeholder="群里收到的 6 位数字">
+    </div>
+    <div class="actions">
+      <button class="btn ghost" data-act="nchTargetsResend" data-ctype="${esc(ctype)}" data-group="${esc(group)}">重新发送</button>
+      <button class="btn primary" data-act="nchTargetsVerify" data-ctype="${esc(ctype)}" data-group="${esc(group)}">确认添加</button>
     </div>`;
   mountIcons(body);
 }
@@ -1661,15 +1688,34 @@ async function nchTargetsAdd(ctype) {
   const inp = getModal().querySelector("#nchGroupNo");
   const group = (inp?.value || "").trim();
   if (!/^\d{5,11}$/.test(group)) { toast("请输入 5~11 位数字 QQ 群号"); return; }
-  await nchTargetsOp(ctype, "add", group);
+  const r = await api.notifyChannelTargets(ctype, "add", group);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "发送失败，请稍后再试"); return; }
+  toast("验证码已发送到群");
+  renderNchTargetVerify(ctype, group);
 }
 
-async function nchTargetsOp(ctype, op, group) {
-  if (!ctype || !group) return;
-  const r = await api.notifyChannelTargets(ctype, op, group);
+async function nchTargetsResend(ctype, group) {
+  const r = await api.notifyChannelTargets(ctype, "add", group);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "发送失败，请稍后再试"); return; }
+  toast("验证码已重新发送");
+}
+
+async function nchTargetsVerify(ctype, group) {
+  const inp = getModal().querySelector("#nchTargetCode");
+  const code = (inp?.value || "").trim();
+  if (!/^\d{6}$/.test(code)) { toast("请输入 6 位数字验证码"); return; }
+  const r = await api.notifyChannelTargets(ctype, "verify", group, code);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "验证失败，请稍后再试"); return; }
+  toast("群已添加");
+  await renderNchList();
+  renderNchTargets(ctype);
+}
+
+async function nchTargetsRemove(ctype, group) {
+  const r = await api.notifyChannelTargets(ctype, "remove", group);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "操作失败，请稍后再试"); return; }
-  toast(op === "add" ? "群已登记" : "已移除");
-  await renderNchList(); // 刷新 nchItems（targets/target_hint 同步）
+  toast("已移除");
+  await renderNchList();
   renderNchTargets(ctype);
 }
 

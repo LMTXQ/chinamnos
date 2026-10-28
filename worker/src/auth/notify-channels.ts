@@ -5,7 +5,7 @@ import { hitLimit } from '../common/ratelimit';
 import { ulid, randomDigits, sha256Hex } from '../common/crypto';
 import { NOTIFY_KINDS } from '../common/notifications';
 import { getSetting } from '../common/settings';
-import { getChannel, sealCred, openCred } from '../notify/channels';
+import { getChannel, sealCred, openCred, plainify, qmsgSendRaw } from '../notify/channels';
 import { getAppAccessToken } from '../notify/qqbot';
 
 // 站点名称（验证码/站外推送消息标识来源，防钓鱼仿冒）：读管理后台 site_name 设置
@@ -366,10 +366,13 @@ export async function handleNotifyChannelBindCode(request: Request, env: Env): P
   return ok({ bind_code: code, channel_type: type, expires_in_hours: 24 });
 }
 
-// POST /api/me/notify-channels/targets  body: { channel_type, op: 'add'|'remove', group }
-//   Qmsg 手动群目标管理：openCred → 增/删 targets → sealCred 回写 + target_hint 重算。
-//   add 校验 QQ 群号（5~11 位数字）+ 去重；remove 不存在返回 404。
-//   行级 id 寻址就绪：单实例期按 (user_id, channel_type) 定行，增量 3 后改按行 id 传入。
+// POST /api/me/notify-channels/targets  body: { channel_type, op: 'add'|'verify'|'remove', group, code? }
+//   Qmsg 群目标管理（对齐企微/钉钉验证码流）：
+//   add    = 发起：经 Qmsg 向该群发送 6 位验证码（群未在 Qmsg 控制台绑定时发送失败——前置条件天然校验），
+//            待验证群号存 cred.pending_group，码哈希存行 verify_code_hash（10 分钟 TTL，CODE_TTL）；
+//   verify = 回填：校验 pending_group 与码 → 群号正式入 targets（一次性消费）→ 清 pending；
+//   remove = 移除已登记群。
+//   同一时间仅一个待验证群（新 add 覆盖旧的）；行级 id 寻址就绪（增量 3 改传行 id）。
 export async function handleNotifyChannelTargets(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
@@ -379,35 +382,67 @@ export async function handleNotifyChannelTargets(request: Request, env: Env): Pr
   const type = typeof body.channel_type === 'string' ? body.channel_type : '';
   const def = getChannel(type);
   if (!def?.manualTargets) return fail(ERR.VALIDATION_ERROR, '该渠道不支持手动群目标', 400, { field: 'channel_type' });
-  const op = body.op === 'remove' ? 'remove' : 'add';
+  const op = ['add', 'verify', 'remove'].includes(String(body.op)) ? String(body.op) : 'add';
   const group = typeof body.group === 'string' ? body.group.trim() : '';
   if (!/^\d{5,11}$/.test(group)) return fail(ERR.VALIDATION_ERROR, '群号格式不正确：应为 5~11 位数字 QQ 群号', 400, { field: 'group' });
 
-  // 频控：与发起绑定同额度
+  // 频控：add 会真实外发验证码，与发起绑定同额度（5 次/小时）
   const rl = await hitLimit(env, `nch:create:${g.viewer.id}`, 5, 3600);
   if (rl.limited) return fail(ERR.RATE_LIMITED, '操作过于频繁，请 1 小时后再试', 429);
 
   const row = await env.DB.prepare(
-    `SELECT id, cred_enc FROM user_notify_channels
+    `SELECT id, cred_enc, verify_code_hash, verify_expires_at FROM user_notify_channels
      WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active'`,
-  ).bind(g.viewer.id, type).first<{ id: string; cred_enc: string }>();
+  ).bind(g.viewer.id, type).first<{ id: string; cred_enc: string; verify_code_hash: string | null; verify_expires_at: number | null }>();
   if (!row) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定', 404, { field: 'channel_type' });
 
   const cred = await openCred(env, row.cred_enc);
   const targets = Array.isArray(cred.targets) ? cred.targets.filter(Boolean) : [];
+
   if (op === 'add') {
     if (targets.includes(group)) return fail(ERR.VALIDATION_ERROR, '该群已在列表中', 400);
-    targets.push(group);
-  } else {
-    const idx = targets.indexOf(group);
-    if (idx < 0) return fail(ERR.NOT_FOUND, '该群不在列表中', 404);
-    targets.splice(idx, 1);
+    // 验证码经 Qmsg 发到该群：群未在 Qmsg 控制台绑定时发送失败 → 引导用户先去平台绑群
+    const code = randomDigits(6);
+    const site = env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org';
+    const siteName = await getSiteName(env);
+    const sendRes = await qmsgSendRaw(cred, group, plainify(
+      `【${siteName}】群通知绑定验证码\n\n站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n绑定验证码：**${code}**（10 分钟内有效）\n\n回站点输入该验证码完成添加；若非你本人在 ${siteName} 操作，请忽略。`,
+    ));
+    if (!sendRes.ok) {
+      return fail(ERR.INTERNAL_ERROR, `验证码发送失败：${sendRes.error || '渠道无响应'}——请确认已在 Qmsg 控制台添加并绑定该群（机器人已在群内）`, 502);
+    }
+    const nextCred: Record<string, string> = { ...cred, pending_group: group } as Record<string, string>;
+    await env.DB.prepare(
+      `UPDATE user_notify_channels SET cred_enc = ?1, verify_code_hash = ?2, verify_expires_at = ?3 WHERE id = ?4 AND user_id = ?5`,
+    ).bind(await sealCred(env, nextCred), await sha256Hex(code), Date.now() + CODE_TTL, row.id, g.viewer.id).run();
+    return ok({ sent: true, group, expires_in_minutes: 10 });
   }
+
+  if (op === 'verify') {
+    const code = typeof body.code === 'string' ? body.code.trim() : '';
+    if (!/^\d{6}$/.test(code)) return fail(ERR.VALIDATION_ERROR, '请输入 6 位数字验证码', 400, { field: 'code' });
+    const pendingGroup = typeof cred.pending_group === 'string' ? cred.pending_group : '';
+    if (!pendingGroup || pendingGroup !== group) return fail(ERR.VALIDATION_ERROR, '没有待验证的群，请先发送验证码', 400, { field: 'group' });
+    if ((row.verify_expires_at ?? 0) < Date.now()) return fail(ERR.VALIDATION_ERROR, '验证码已过期，请重新发送', 400, { field: 'code' });
+    if ((await sha256Hex(code)) !== row.verify_code_hash) return fail(ERR.VALIDATION_ERROR, '验证码错误', 400, { field: 'code' });
+
+    const nextTargets = targets.includes(group) ? targets : [...targets, group];
+    const { pending_group: _drop, ...rest } = cred;
+    const nextCred: Record<string, string> = { ...rest, targets: nextTargets as unknown as string[] };
+    await env.DB.prepare(
+      `UPDATE user_notify_channels SET cred_enc = ?1, target_hint = ?2, verify_code_hash = NULL, verify_expires_at = NULL WHERE id = ?3 AND user_id = ?4`,
+    ).bind(await sealCred(env, nextCred), def.hint(nextCred), row.id, g.viewer.id).run();
+    return ok({ channel_type: type, targets: nextTargets });
+  }
+
+  // remove
+  const idx = targets.indexOf(group);
+  if (idx < 0) return fail(ERR.NOT_FOUND, '该群不在列表中', 404);
+  targets.splice(idx, 1);
   const nextCred: Record<string, string> = { ...cred, targets: targets as unknown as string[] };
-  const hint = def.hint(nextCred);
   await env.DB.prepare(
     `UPDATE user_notify_channels SET cred_enc = ?1, target_hint = ?2 WHERE id = ?3 AND user_id = ?4`,
-  ).bind(await sealCred(env, nextCred), hint, row.id, g.viewer.id).run();
+  ).bind(await sealCred(env, nextCred), def.hint(nextCred), row.id, g.viewer.id).run();
   return ok({ channel_type: type, targets });
 }
 
