@@ -7078,9 +7078,12 @@ def run():
 
     _build_and_save_stats(config, storage, all_crawl_results, crawl_time, crawl_duration_ms, all_success_count, all_fail_count, old_stats)
     # ── 公告监测（与资费采集隔离：失败仅记日志，不影响资费上传）──
+    # 移动集团（全国）公告门控：本轮移动任一省份省级采集启动才随轮补采
+    _ran_carriers = {k for k in enabled_carriers
+                     if get_target_provinces(get_carrier_config(config, k), k)}
     _announce_new = None
     try:
-        _announce_new = fetch_announcements(config, storage)
+        _announce_new = fetch_announcements(config, storage, ran_carriers=_ran_carriers)
     except Exception as _ann_e:
         logger.warning('[announce] 公告采集异常(已忽略，不影响资费): %s' % str(_ann_e)[:120])
 
@@ -7186,6 +7189,8 @@ ANN_CMCC_PROVINCES = {
     "宁夏": "nx/951", "新疆": "xj/991",
 }
 ANN_CMCC_LIST_TPL = "https://www.10086.cn/aboutus/news/pannounce/%s/5004505_873_2361.json"
+# 集团（全国）公告列表：与省级同一 CMS 静态 JSON 模式；移动任一省份资费采集启动的轮次随轮补采
+ANN_CMCC_GROUP_LIST_URL = "https://www.10086.cn/aboutus/news/announced/5018465_5593_11777.json"
 
 # 联通 31 省 code → 省名（2026-10-10 creatorProvinceName 直读钉死；031=上海 非湖南）
 ANN_CUCC_CODES = {
@@ -7511,10 +7516,60 @@ def _ann_src_enabled(ann_cfg, key, default=True):
     return bool(src.get("enabled", default))
 
 
+# ---------------- 移动集团（全国）公告：announced 静态 JSON，随移动省级采集同轮补采 ----------------
+def _ann_cmcc_group(ann_cfg):
+    """集团（全国）公告单源。列表/详情与省级同构，两处差异：
+    ▸ 行标题键是 mainTitle（省级 noticeTitle）；详情正文键是 mainBody（省级 text）；
+    ▸ detail_href 即详情页路径（省级由 path 分段拼 page_url）。
+    返回 (items, source_stat)；列表失败 → ok:false，单条详情失败 → 正文留空走继承。"""
+    lim = ann_cfg["limits"]
+    try:
+        j = json.loads(_ann_http_get(ANN_CMCC_GROUP_LIST_URL, timeout=lim["timeout_s"],
+                                     retries=lim["retries"]))
+        lst = (j.get("cData") or {}).get("list") or []
+    except Exception as e:
+        logger.warning("[announce][cmcc] 集团 列表失败: %s" % str(e)[:80])
+        return [], {"ok": False, "err": str(e)[:80]}
+    rows = []
+    for row in lst:
+        m = re.search(r"_detail_(\d+)\.", row.get("detail_href") or "")
+        if m:
+            rows.append({"id": m.group(1), "title": row.get("mainTitle") or "",
+                         "date": row.get("publishTime") or "",
+                         "href": row.get("detail_href") or ""})
+    rows.sort(key=lambda x: x["date"], reverse=True)
+    rows = rows[: _ann_limit(lim, "cmcc")]
+    dir_url = ANN_CMCC_GROUP_LIST_URL.rsplit("/", 1)[0]
+    stem = ANN_CMCC_GROUP_LIST_URL.rsplit("/", 1)[1][:-5]
+    ok_cnt = 0
+    items = []
+    for row in rows:
+        try:
+            dj = json.loads(_ann_http_get("%s/%s_detail_%s.json" % (dir_url, stem, row["id"]),
+                                          timeout=lim["timeout_s"], retries=lim["retries"]))
+            c = (dj.get("cData") or {}).get("content") or {}
+            content = _ann_clean_html(c.get("mainBody") or c.get("text") or "", "https://www.10086.cn")
+        except Exception:
+            content = ""
+        items.append(_ann_mkitem("cmcc", "group", row["id"], row["title"], row["date"],
+                                 "", "national",
+                                 ("https://www.10086.cn" + row["href"]) if row["href"] else "",
+                                 content=content, base="https://www.10086.cn"))
+        ok_cnt += 1
+        time.sleep(lim["sleep_s"])
+    return items, {"ok": True, "count": len(rows), "fetched": ok_cnt}
+
+
 # ---------------- 移动（30 省，静态 JSON；广东走 gd_pw 二期） ----------------
-def _ann_cmcc(ann_cfg):
+def _ann_cmcc(ann_cfg, include_group=True):
     lim = ann_cfg["limits"]
     sources, items = {}, []
+    # 集团（全国）公告：移动任一省份资费采集启动的轮次随轮补采（include_group 由调用方按本轮是否跑了移动省级采集决定）
+    if include_group:
+        g_items, g_stat = _ann_cmcc_group(ann_cfg)
+        sources["集团"] = g_stat
+        items.extend(g_items)
+        logger.info("[announce][cmcc] 集团 %d 条" % len(g_items))
     for prov, path in ANN_CMCC_PROVINCES.items():
         list_url = ANN_CMCC_LIST_TPL % path
         try:
@@ -8094,9 +8149,11 @@ def _ann_cmcc_gd(ann_cfg):
 
 
 # ---------------- 调度器 ----------------
-def fetch_announcements(config, storage):
+def fetch_announcements(config, storage, ran_carriers=None):
     """主流程尾部调用：四源独立 try，产出 4 × data/{carrier}/announce.json。
     抓空且全源失败 → 跳过该 carrier 写盘（防源站抖动清空线上公告）。
+    ran_carriers：本轮实际启动了省级资费采集的运营商键集合（run() 传入）。
+    移动集团（全国）公告仅在移动省级采集启动的轮次随轮补采；未传参数时保持旧行为（总是采）。
     返回公告新增清单 {carrier: [ {carrier,id,title,date,province} ]}（采集播报用，
     首轮建基线/无新增/未启用 → 空对象）。"""
     announce_new = {}
@@ -8105,8 +8162,10 @@ def fetch_announcements(config, storage):
         logger.info("[announce] 公告采集未启用（TARIFF_CONFIG.announce.enabled=false），跳过")
         return announce_new
     lim = ann_cfg["limits"]
+    # 移动集团公告随轮门控：本轮移动任一省份资费采集启动才采（未传 ran_carriers → 旧行为总是采）
+    _cmcc_group_on = (not ran_carriers) or ('cmcc' in ran_carriers)
     jobs = [
-        ("cmcc", _ann_cmcc, True),
+        ("cmcc", (lambda cfg: _ann_cmcc(cfg, include_group=_cmcc_group_on)), True),
         ("cucc", _ann_cucc, True),
         ("ctcc", _ann_ctcc, True),
         ("cbn", _ann_cbn, True),
