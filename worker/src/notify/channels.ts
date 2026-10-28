@@ -2,6 +2,7 @@
 // 新增渠道 = 在 CHANNELS 加一个 ChannelDef，绑定流与后续推送分支（方案 B/C/D）零改动。
 import type { Env } from '../common/env';
 import { aesGcmEncrypt, aesGcmDecrypt } from '../common/crypto';
+import { qqbotSendGroup, type QqBotCred } from './qqbot';
 
 export interface SendResult {
   ok: boolean;
@@ -23,6 +24,8 @@ export interface ChannelDef {
   fields: ChannelField[];
   /** 绑定即生效（邮件渠道：凭证即账号邮箱，无需验证码） */
   skipVerify?: boolean;
+  /** 绑定后由平台回调激活/追加群（QQ 官方机器人）：create 不外发验证码，改返回 24h 绑定码由群内 @机器人 消费 */
+  bindByCallback?: boolean;
   /** 仅参与青龙批量管线（方案 C），即时分支跳过该渠道 */
   bulkOnly?: boolean;
   validate(raw: Record<string, unknown>, viewerEmail?: string): { ok: true; cred: ChannelCred } | { ok: false; error: string };
@@ -233,8 +236,65 @@ const qmsg: ChannelDef = {
   },
 };
 
-/* 注册表：dingtalk / wecom / email / qmsg 已上线；feishu/pushplus 按同结构即插即用 */
-export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email, qmsg };
+/* ── QQ 官方机器人（群聊，直连 OpenAPI）──
+   cred: {appid, secret, targets[]}，targets = group_openid 列表，由回调绑定码流程写入
+   （见 qqbot-callback.ts）。v1 用纯文本 msg_type=0：QQ 官方 markdown 为受限子集（无表格）
+   且部分机器人需模板/权限，留待实测后启用（届时改 qqbotSendGroup 的 payload 即可）。
+   消息内容含 URL 需在 q.qq.com 后台「开发设置 → 消息URL配置」预先登记域名，否则发送失败。 */
+const QQBOT_MSG_LIMIT = 1500; // 官方文本 content 上限约 1500 字节（UTF-8），超限截断不拆条
+
+const qqbot: ChannelDef = {
+  type: 'qqbot',
+  label: 'QQ官方机器人',
+  desc: '在 QQ 开放平台创建机器人，填入 AppID 与 AppSecret 绑定实例；再把机器人拉进群，在群内 @机器人 发送绑定码完成加群。通知直连官方接口发到群，需群主在群设置开启「机器人主动在群聊内发言」。',
+  bindByCallback: true,
+  fields: [
+    { key: 'appid', label: 'AppID', placeholder: 'QQ 开放平台机器人的数字 AppID' },
+    { key: 'secret', label: 'AppSecret', placeholder: 'QQ 开放平台生成的密钥字符串' },
+  ],
+  validate(raw) {
+    const appid = typeof raw.appid === 'string' ? raw.appid.trim() : '';
+    if (!/^\d{6,20}$/.test(appid)) {
+      return { ok: false, error: 'AppID 格式不正确：应为 QQ 开放平台的数字 AppID' };
+    }
+    const secret = typeof raw.secret === 'string' ? raw.secret.trim() : '';
+    if (!/^[0-9a-zA-Z]{16,64}$/.test(secret)) {
+      return { ok: false, error: 'AppSecret 格式不正确：应为开放平台生成的密钥字符串' };
+    }
+    // targets 只能由回调流程追加：绑定时不接受用户提交的 targets（防伪造 group_openid）
+    const cred: ChannelCred = { appid, secret };
+    return { ok: true, cred };
+  },
+  hint(cred) {
+    const n = Array.isArray(cred.targets) ? cred.targets.length : 0;
+    return `QQ机器人 ${String(cred.appid || '').slice(-4)} · ${n} 个群`;
+  },
+  async send(cred, title, body) {
+    const targets = Array.isArray(cred.targets) ? cred.targets.filter(Boolean) : [];
+    if (!targets.length) return { ok: false, error: '未绑定任何群：先在群内 @机器人 发送绑定码' };
+    const content = truncBytes(`${title}\n\n${body}`, QQBOT_MSG_LIMIT);
+    let sent = 0;
+    const errs: string[] = [];
+    await Promise.all(targets.map(async (g) => {
+      try {
+        const r = await qqbotSendGroup(cred as unknown as QqBotCred, g, { msg_type: 0, content });
+        if (r.ok) sent++;
+        else errs.push(`${g.slice(-6)}: ${r.error || '未知错误'}`);
+      } catch (e) {
+        errs.push(`${g.slice(-6)}: ${String(e).slice(0, 80)}`);
+      }
+    }));
+    if (!sent) return { ok: false, error: `全部 ${targets.length} 个群发送失败：${errs.join('；').slice(0, 250)}` };
+    if (errs.length) {
+      // 多群部分失败聚合为单值结果（文档口径）；频控/配额错误（22009 等）不区分对待，仅记录
+      return { ok: false, error: `部分失败 ${sent}/${targets.length}：${errs.join('；').slice(0, 200)}` };
+    }
+    return { ok: true };
+  },
+};
+
+/* 注册表：dingtalk / wecom / email / qmsg / qqbot 已上线；feishu/pushplus 按同结构即插即用 */
+export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email, qmsg, qqbot };
 
 export function getChannel(type: string): ChannelDef | undefined {
   return CHANNELS[type];

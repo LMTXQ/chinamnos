@@ -857,6 +857,11 @@ function onModalClick(e) {
     withPending(el, () => nchDelete(ctype));
     return;
   }
+  if (act === "nchBindCode") {
+    const ctype = el.dataset.ctype || "";
+    authGuarded(el, () => nchBindCode(ctype));
+    return;
+  }
   if (act === "nchPrefs") { renderNchPrefs(el.dataset.ctype || ""); return; }
   if (act === "nchPrefsSave") {
     const ptype = el.dataset.ctype || "";
@@ -1100,6 +1105,16 @@ const NCH_TYPES = [
       { key: "key", label: "Qmsg Key", placeholder: "Qmsg 平台个人中心获取" },
     ],
   },
+  {
+    type: "qqbot",
+    label: "QQ官方机器人",
+    desc: "在 QQ 开放平台创建机器人，填入 AppID / AppSecret 绑定实例；再把机器人拉进群，在群内 @机器人 发送绑定码完成加群。通知直连官方接口发到群，需群主在群设置开启「机器人主动在群聊内发言」；消息含站点网址需在平台后台「开发设置 → 消息URL配置」登记域名。",
+    ready: true,
+    fields: [
+      { key: "appid", label: "AppID", placeholder: "QQ 开放平台机器人的数字 AppID" },
+      { key: "secret", label: "AppSecret", placeholder: "QQ 开放平台生成的密钥字符串" },
+    ],
+  },
   { type: "email", label: "邮件", desc: "一键绑定你的注册邮箱。到期提醒、采集播报等批量通知将发送到该邮箱；私信与审核类通知本就会发送到你的邮箱，不受此绑定影响。", ready: true, fields: [] },
 ];
 let nchAddState = null; // 待验证绑定 { type, cred }（重新发送验证码用）
@@ -1177,11 +1192,15 @@ function nchCard(it) {
   const digestBtn = it.status === "active"
     ? '<button class="nch-del" data-act="nchDigest" data-ctype="' + esc(it.channel_type) + '">采集播报</button>'
     : "";
+  // QQ 官方机器人：生效实例提供「添加群」入口（取新绑定码在群内消费）
+  const bindGroupBtn = it.status === "active" && Array.isArray(it.targets)
+    ? '<button class="nch-del" data-act="nchBindCode" data-ctype="' + esc(it.channel_type) + '">添加群</button>'
+    : "";
   return `
     <div class="nch-card">
       <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}${kindsSummary}${digestSummary}</div>
       ${tag}
-      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${prefsBtn}${digestBtn}
+      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${bindGroupBtn}${prefsBtn}${digestBtn}
       <button class="nch-del" data-act="nchDelete" data-ctype="${esc(it.channel_type)}">解绑</button></div>
     </div>`;
 }
@@ -1549,8 +1568,34 @@ async function nchSubmit() {
     await renderNchList();
     return;
   }
+  // QQ 官方机器人：绑定码不外发，直接展示由用户在群内 @机器人 消费
+  if (r.data?.bind_code) {
+    nchAddState = null;
+    renderNchBindCode(r.data.bind_code);
+    return;
+  }
   nchAddState = { type: t.type, cred };
   renderNchVerify();
+}
+
+/* QQ 官方机器人绑定码视图：展示 6 位码 + 群内 @机器人 发码指引（消费后回调自动激活/追加群） */
+function renderNchBindCode(code) {
+  const body = getModal().querySelector("#nchBody");
+  if (!body) return;
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">实例已登记。把机器人拉进目标群，然后在群内 <b>@机器人</b> 发送下面的绑定码（机器人会回复确认）：</p>
+    <div style="display:flex;justify-content:center;padding:14px 0"><span style="font-size:32px;font-weight:800;letter-spacing:10px;font-family:ui-monospace,monospace">${esc(code)}</span></div>
+    <p class="hint" style="margin:0 0 6px">· 绑定码 24 小时内有效，发送成功立即消费（一个码绑一个群）；<br>· 同一机器人可绑多个群：生效后回渠道列表点「添加群」再取新码；<br>· 需群主在群设置开启「机器人主动在群聊内发言」，否则主动通知发送失败；<br>· 消息含站点网址：需在 q.qq.com 后台「开发设置 → 消息URL配置」登记 chinamnos.ftac.dpdns.org。</p>
+    <div class="actions"><button class="btn primary" data-act="nchBack">完成</button></div>`;
+  mountIcons(body);
+}
+
+/* 「添加群」：为已生效 QQ 机器人实例取新绑定码 */
+async function nchBindCode(ctype) {
+  if (!ctype) return;
+  const r = await api.notifyChannelBindCode(ctype);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "获取失败，请稍后再试"); return; }
+  if (r.data?.bind_code) renderNchBindCode(r.data.bind_code);
 }
 
 async function nchVerify() {

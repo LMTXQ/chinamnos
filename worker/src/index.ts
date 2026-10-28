@@ -18,8 +18,9 @@ import { handleResetPassword } from './auth/reset-password';
 import { handleLogout } from './auth/logout';
 import { handleMe } from './auth/me';
 import { handleNickname } from './auth/nickname';
-import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete, handleNotifyChannelDigestPrefs, handleDigestGlobalGet, handleDigestGlobalSet } from './auth/notify-channels';
+import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete, handleNotifyChannelDigestPrefs, handleNotifyChannelBindCode, handleDigestGlobalGet, handleDigestGlobalSet } from './auth/notify-channels';
 import { handleDigestSubscribers } from './notify/digest-pull';
+import { handleQqBotCallback } from './notify/qqbot-callback';
 import { handleSetProfile, handlePublicProfile, handleAvatar, handleSetMyAvatar } from './auth/profile';
 import { handleSetAvatar } from './admin/users';
 import { moduleGuard } from './cardhub/module-guard';
@@ -177,6 +178,10 @@ export default {
         resp = await handleNotifyChannelDelete(request, env); // 解绑
       } else if (p === '/api/me/notify-channels/digest-prefs' && m === 'POST') {
         resp = await handleNotifyChannelDigestPrefs(request, env); // 渠道级采集播报订阅（开关+模式+省份）
+      } else if (p === '/api/me/notify-channels/bindcode' && m === 'POST') {
+        resp = await handleNotifyChannelBindCode(request, env); // QQ 机器人「添加群」：为生效实例生成新绑定码
+      } else if (p === '/api/notify/qqbot/callback' && m === 'POST') {
+        resp = await handleQqBotCallback(request, env); // QQ 平台回调（公开路由，内部 Ed25519 验签）
       } else if (p === '/api/me/digest-prefs' && m === 'GET') {
         resp = await handleDigestGlobalGet(request, env); // 账号全局播报范围
       } else if (p === '/api/me/digest-prefs' && m === 'PUT') {

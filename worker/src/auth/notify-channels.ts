@@ -22,6 +22,7 @@ export async function getSiteName(env: Env): Promise<string> {
    同类型重复绑定顶替旧记录（保留原行 id 与 collect_report）；总数上限 3。 */
 
 const CODE_TTL = 10 * 60 * 1000;
+const BIND_CODE_TTL = 24 * 3600 * 1000; // QQ 机器人绑定码（群内发码消费）有效期
 const MAX_BINDINGS = 3; // 用户决策：降低上限减轻服务端通知扇出压力
 
 // GET /api/me/notify-channels：本人绑定列表（凭证永不回显）
@@ -37,10 +38,10 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
   ).bind(g.viewer.id, Date.now()).run();
 
   const rows = await env.DB.prepare(
-    `SELECT id, channel_type, target_hint, status, collect_report, kinds_json, kinds_mode, provinces_json, digest_mode, announce_push, created_at
+    `SELECT id, channel_type, cred_enc, target_hint, status, collect_report, kinds_json, kinds_mode, provinces_json, digest_mode, announce_push, created_at
      FROM user_notify_channels WHERE user_id = ?1 ORDER BY created_at DESC`,
-  ).bind(g.viewer.id).all<{ id: string; channel_type: string; target_hint: string; status: string; collect_report: number; kinds_json: string | null; kinds_mode: string; provinces_json: string | null; digest_mode: string; announce_push: number | null; created_at: number }>();
-  const items = (rows.results || []).map((r) => {
+  ).bind(g.viewer.id).all<{ id: string; channel_type: string; cred_enc: string; target_hint: string; status: string; collect_report: number; kinds_json: string | null; kinds_mode: string; provinces_json: string | null; digest_mode: string; announce_push: number | null; created_at: number }>();
+  const items = await Promise.all((rows.results || []).map(async (r) => {
     let kinds: string[] | null = null;
     if (r.kinds_json) {
       try { kinds = JSON.parse(r.kinds_json) as string[]; } catch { kinds = null; }
@@ -49,8 +50,16 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
     if (r.provinces_json) {
       try { provinces = JSON.parse(r.provinces_json) as unknown; } catch { provinces = []; }
     }
-    return { id: r.id, channel_type: r.channel_type, target_hint: r.target_hint, status: r.status, collect_report: r.collect_report === 1, digest_mode: r.digest_mode === 'custom' ? 'custom' : 'follow', kinds_mode: r.kinds_mode === 'custom' ? 'custom' : 'follow', announce_push: r.announce_push, provinces, created_at: r.created_at, kinds };
-  });
+    // 回调绑定渠道（QQ 机器人）：解密 cred 取已绑群列表供前端展示（group_openid 非敏感，secret 不出库）
+    let targets: string[] | undefined;
+    if (getChannel(r.channel_type)?.bindByCallback) {
+      try {
+        const cred = await openCred(env, r.cred_enc);
+        if (Array.isArray(cred.targets)) targets = cred.targets.filter(Boolean);
+      } catch { targets = undefined; }
+    }
+    return { id: r.id, channel_type: r.channel_type, target_hint: r.target_hint, status: r.status, collect_report: r.collect_report === 1, digest_mode: r.digest_mode === 'custom' ? 'custom' : 'follow', kinds_mode: r.kinds_mode === 'custom' ? 'custom' : 'follow', announce_push: r.announce_push, provinces, created_at: r.created_at, kinds, targets };
+  }));
   return ok({ items });
 }
 
@@ -268,13 +277,14 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
     return fail(ERR.VALIDATION_ERROR, `最多绑定 ${MAX_BINDINGS} 个通知渠道`, 400);
   }
 
-  // 邮件类渠道（skipVerify）绑定即生效；其余渠道走验证码流程
+  // 邮件类渠道（skipVerify）绑定即生效；QQ 机器人（bindByCallback）不外发验证码——
+  // 生成 24h 绑定码随响应返回（前端展示，群内 @机器人 消费），其余渠道走验证码流程
   const activated = !!def.skipVerify;
   const code = activated ? '' : randomDigits(6);
   const now = Date.now();
   const credEnc = await sealCred(env, v.cred);
   const codeHash = activated ? null : await sha256Hex(code);
-  const expires = activated ? null : now + CODE_TTL;
+  const expires = activated ? null : (def.bindByCallback ? now + BIND_CODE_TTL : now + CODE_TTL);
   // 同类型顶替：ON CONFLICT 保留原 id / created_at / collect_report，重置状态
   await env.DB.prepare(
     `INSERT INTO user_notify_channels
@@ -293,6 +303,11 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
 
   if (activated) return ok({ activated: true, channel_type: type });
 
+  // QQ 机器人（bindByCallback）：不外发，绑定码随响应返回由前端展示，群内发码后由回调激活/追加
+  if (def.bindByCallback) {
+    return ok({ bind_code: code, channel_type: type, expires_in_hours: 24 });
+  }
+
   // 验证码真实外发（失败保留 pending，用户可重发；每次重发重新计码）
   // 消息强调站点身份与网址：群机器人收到的消息需能一眼识别来源，防钓鱼仿冒
   const site = env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org';
@@ -304,6 +319,35 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
   );
   if (!r.ok) return fail(ERR.INTERNAL_ERROR, `验证码发送失败：${r.error || '渠道无响应'}`, 502);
   return ok({ sent: true, channel_type: type });
+}
+
+// POST /api/me/notify-channels/bindcode  body: { channel_type }
+//   QQ 机器人「添加群」：为已生效实例生成新绑定码（24h、消费即失效），随响应返回由前端展示。
+//   行级 id 寻址就绪：单实例期按 (user_id, channel_type) 定行，增量 3 多实例后改按行 id 传入即可。
+export async function handleNotifyChannelBindCode(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+
+  let body: Record<string, unknown> = {};
+  try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
+  const type = typeof body.channel_type === 'string' ? body.channel_type : '';
+  const def = getChannel(type);
+  if (!def?.bindByCallback) return fail(ERR.VALIDATION_ERROR, '该渠道不支持绑定码加群', 400, { field: 'channel_type' });
+
+  // 频控：与发起绑定同额度（5 次/小时）
+  const rl = await hitLimit(env, `nch:create:${g.viewer.id}`, 5, 3600);
+  if (rl.limited) return fail(ERR.RATE_LIMITED, '操作过于频繁，请 1 小时后再试', 429);
+
+  const row = await env.DB.prepare(
+    `SELECT id FROM user_notify_channels WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active'`,
+  ).bind(g.viewer.id, type).first<{ id: string }>();
+  if (!row) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定，请先完成实例绑定', 404, { field: 'channel_type' });
+
+  const code = randomDigits(6);
+  await env.DB.prepare(
+    `UPDATE user_notify_channels SET verify_code_hash = ?1, verify_expires_at = ?2 WHERE id = ?3 AND user_id = ?4`,
+  ).bind(await sha256Hex(code), Date.now() + BIND_CODE_TTL, row.id, g.viewer.id).run();
+  return ok({ bind_code: code, channel_type: type, expires_in_hours: 24 });
 }
 
 // POST /api/me/notify-channels/verify  body: { code }

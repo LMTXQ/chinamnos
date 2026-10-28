@@ -19,6 +19,9 @@
   email     cred: {email}              实际收件人优先取行内 email_target
   qmsg      cred: {key, domain?}       仅 plain（Qmsg 不支持 markdown）；域名/上限以实测为准，
                                         常量 QMSG_DEFAULT_DOMAIN / QMSG_MSG_LIMIT，cred.domain 可覆盖
+  qqbot     cred: {appid, secret, targets[]}  QQ 官方机器人群聊直连（targets=group_openid 列表，
+                                        回调绑定码流程写入）；纯文本 msg_type=0，多群串行节流，
+                                        token 文件缓存 .qqbot_token.json，超频码 22009 不重试
 
 payload 行结构（Worker 写入，契约固定）：
   {nid, uid, kind, title, body, channel_type, cred}
@@ -347,6 +350,95 @@ def send_qmsg(cred, title, body, row=None):
         return False, str(e)
 
 
+# ───────────────────────── QQ 官方机器人（群聊，直连 OpenAPI） ─────────────────────────
+QQBOT_API_BASE = "https://api.bot.qq.com"
+QQBOT_TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
+QQBOT_MSG_LIMIT = 1500      # 官方文本 content 上限约 1500 字节（UTF-8），超限截断不拆条
+QQBOT_GROUP_INTERVAL = 0.15  # 多群串行节流（秒）：单群频控 20 qpm、账号 60 qpm（2026-06-22 群主动推送全量开放）
+QQBOT_NORETRY_CODES = (22009,)  # 频控/配额类错误码：不重试只记录（清单可按平台变化调整）
+QQBOT_TOKEN_TTL_MS = 2 * 3600 * 1000
+QQBOT_TOKEN_AHEAD_MS = 5 * 60 * 1000
+
+
+def _qqbot_token(cred):
+    """AppID+Secret 换 access_token（约 2h 有效）；本地文件缓存 .qqbot_token.json，
+    提前 5 分钟刷新；失败抛异常由调用方兜底。"""
+    appid = cred.get("appid", "")
+    if not appid:
+        raise RuntimeError("缺少 appid")
+    cache_path = os.path.join(DATA_DIR, ".qqbot_token.json")
+    cache = _read_json(cache_path, {})
+    rec = cache.get(appid) or {}
+    if rec.get("token") and rec.get("expires_at", 0) > time.time() * 1000 + QQBOT_TOKEN_AHEAD_MS:
+        return rec["token"]
+    req = urllib.request.Request(
+        QQBOT_TOKEN_URL,
+        data=json.dumps({"appId": appid, "clientSecret": cred.get("secret", "")}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        d = json.load(r)
+    token = str(d.get("access_token") or "")
+    if not token:
+        raise RuntimeError("token 响应缺少 access_token: %s" % json.dumps(d, ensure_ascii=False)[:120])
+    ttl = int(str(d.get("expires_in") or "7200") or 7200) * 1000
+    cache[appid] = {"token": token, "expires_at": int(time.time() * 1000) + min(ttl, QQBOT_TOKEN_TTL_MS)}
+    _write_json(cache_path, cache)
+    return token
+
+
+def _qqbot_post_group(token, group_openid, payload):
+    """发单群消息，返回 (err_code, message)。HTTP/网络异常上抛由调用方兜底。"""
+    req = urllib.request.Request(
+        "%s/v2/groups/%s/messages" % (QQBOT_API_BASE, group_openid),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": "QQBot " + token, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        res = json.load(r)
+    return int(res.get("err_code") or 0), str(res.get("message") or "")
+
+
+def send_qbot(cred, title, body, row=None):
+    """QQ 官方机器人群消息（直连 OpenAPI）。v1 纯文本 msg_type=0：官方 markdown 为受限子集
+    （无表格）且需权限，留待实测后启用。多群串行 + 节流；不拆条（拆条成倍消耗各群配额），
+    超长截断保头部。返回语义：部分成功 = (True, "sent m/n ...")——避免上层行级重试把已送达
+    的群重发；全败且错误码全属频控/配额清单 = (True, "skipped ...") 同样不重试；
+    其余全败 = (False, 错误串) 走行内重试。"""
+    targets = [t for t in (cred.get("targets") or []) if t]
+    if not targets:
+        return False, "未绑定任何群（targets 为空）"
+    _, text_body = pick_body(row, "plain")
+    content = _trunc_bytes(_plainify("%s\n\n%s" % (title, text_body)), QQBOT_MSG_LIMIT)
+    try:
+        token = _qqbot_token(cred)
+    except Exception as e:
+        return False, "token 获取失败: %s" % str(e)[:120]
+
+    ok_n = 0
+    errs = []  # (err_code, 描述)
+    for i, g in enumerate(targets):
+        if i:
+            time.sleep(QQBOT_GROUP_INTERVAL)
+        try:
+            ec, msg = _qqbot_post_group(token, g, {"msg_type": 0, "content": content})
+            if ec == 0:
+                ok_n += 1
+            else:
+                errs.append((ec, "%s: err_code=%s %s" % (g[-6:], ec, msg[:60])))
+        except urllib.error.HTTPError as e:
+            errs.append((None, "%s: HTTP %s %s" % (g[-6:], e.code, e.read().decode("utf-8", "ignore")[:80])))
+        except Exception as e:
+            errs.append((None, "%s: %s" % (g[-6:], str(e)[:80])))
+
+    if ok_n:
+        note = "" if ok_n == len(targets) else "（部分失败 %d/%d：%s）" % (ok_n, len(targets), "; ".join(e for _, e in errs)[:150])
+        return True, "sent %d/%d%s" % (ok_n, len(targets), note)
+    if errs and all(ec in QQBOT_NORETRY_CODES for ec, _ in errs):
+        return True, "skipped：全部群命中频控/配额（%s），不重试" % ("; ".join(e for _, e in errs)[:150])
+    return False, "全部 %d 群失败：%s" % (len(targets), "; ".join(e for _, e in errs)[:180])
+
+
 # 适配器注册表（与 Worker 渠道注册表同构；新渠道上线时在此注册）
 # 约定：adapter(cred, title, body, row) —— row 为完整 payload 行（邮件适配器用 email_target）
 ADAPTERS = {
@@ -354,6 +446,7 @@ ADAPTERS = {
     "wecom": send_wecom,
     "email": send_email,
     "qmsg": send_qmsg,
+    "qqbot": send_qbot,
 }
 
 
