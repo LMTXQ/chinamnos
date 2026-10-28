@@ -238,10 +238,11 @@ const qmsg: ChannelDef = {
 
 /* ── QQ 官方机器人（群聊，直连 OpenAPI）──
    cred: {appid, secret, targets[]}，targets = group_openid 列表，由回调绑定码流程写入
-   （见 qqbot-callback.ts）。v1 用纯文本 msg_type=0：QQ 官方 markdown 为受限子集（无表格）
-   且部分机器人需模板/权限，留待实测后启用（届时改 qqbotSendGroup 的 payload 即可）。
-   消息内容含 URL 需在 q.qq.com 后台「开发设置 → 消息URL配置」预先登记域名，否则发送失败。 */
+   （见 qqbot-callback.ts）。md 优先（2026-10-29 实测：原生 md 含 GFM 表格渲染正常），
+   无 md 权限的机器人自动降级 plain（plainify 净化后发送）——其他用户自有机器人未必有 md 权限。
+   消息内容含 URL 需在 q.qq.com 后台「消息URL配置」登记域名（2026-10-29 实测当前平台未强制）。 */
 const QQBOT_MSG_LIMIT = 1500; // 官方文本 content 上限约 1500 字节（UTF-8），超限截断不拆条
+const QQBOT_USE_MD = true;
 
 const qqbot: ChannelDef = {
   type: 'qqbot',
@@ -272,12 +273,20 @@ const qqbot: ChannelDef = {
   async send(cred, title, body) {
     const targets = Array.isArray(cred.targets) ? cred.targets.filter(Boolean) : [];
     if (!targets.length) return { ok: false, error: '未绑定任何群：先在群内 @机器人 发送绑定码' };
-    const content = truncBytes(`${title}\n\n${body}`, QQBOT_MSG_LIMIT);
+    const raw = `${title}\n\n${body}`;
+    const mdContent = truncBytes(raw, QQBOT_MSG_LIMIT);
+    const plainContent = truncBytes(plainify(raw), QQBOT_MSG_LIMIT);
     let sent = 0;
     const errs: string[] = [];
     await Promise.all(targets.map(async (g) => {
       try {
-        const r = await qqbotSendGroup(cred as unknown as QqBotCred, g, { msg_type: 0, content });
+        // md 优先（表格/加粗/链接可渲染）；平台拒绝或异常 → 降级 plain 重发
+        let r = QQBOT_USE_MD
+          ? await qqbotSendGroup(cred as unknown as QqBotCred, g, { msg_type: 2, markdown: { content: mdContent } })
+          : { ok: false as const, error: 'md off' };
+        if (!r.ok && QQBOT_USE_MD) {
+          r = await qqbotSendGroup(cred as unknown as QqBotCred, g, { msg_type: 0, content: plainContent });
+        }
         if (r.ok) sent++;
         else errs.push(`${g.slice(-6)}: ${r.error || '未知错误'}`);
       } catch (e) {

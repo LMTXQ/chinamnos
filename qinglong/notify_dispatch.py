@@ -358,6 +358,8 @@ QQBOT_GROUP_INTERVAL = 0.15  # 多群串行节流（秒）：单群频控 20 qpm
 QQBOT_NORETRY_CODES = (22009,)  # 频控/配额类错误码：不重试只记录（清单可按平台变化调整）
 QQBOT_TOKEN_TTL_MS = 2 * 3600 * 1000
 QQBOT_TOKEN_AHEAD_MS = 5 * 60 * 1000
+QQBOT_USE_MD = True  # 官方 2026-04 起群聊开放原生 markdown（受限子集：加粗/标题/链接，无表格）；
+                     # 平台拒绝（无权限/不支持）时自动降级 plain 重发一次，降级事件写日志
 
 
 def _qqbot_token(cred):
@@ -400,40 +402,69 @@ def _qqbot_post_group(token, group_openid, payload):
 
 
 def send_qbot(cred, title, body, row=None):
-    """QQ 官方机器人群消息（直连 OpenAPI）。v1 纯文本 msg_type=0：官方 markdown 为受限子集
-    （无表格）且需权限，留待实测后启用。多群串行 + 节流；不拆条（拆条成倍消耗各群配额），
+    """QQ 官方机器人群消息（直连 OpenAPI）。md 优先（QQBOT_USE_MD）：digest 取 markdown 版式
+    （GFM 管道表——QQ md 无表格时会原样显示管道符，若观感差再换 qq_markdown 渲染器）；
+    平台拒绝 md 时自动降级 plain 重发。多群串行 + 节流；不拆条（拆条成倍消耗各群配额），
     超长截断保头部。返回语义：部分成功 = (True, "sent m/n ...")——避免上层行级重试把已送达
     的群重发；全败且错误码全属频控/配额清单 = (True, "skipped ...") 同样不重试；
     其余全败 = (False, 错误串) 走行内重试。"""
     targets = [t for t in (cred.get("targets") or []) if t]
     if not targets:
         return False, "未绑定任何群（targets 为空）"
-    _, text_body = pick_body(row, "plain")
-    content = _trunc_bytes(_plainify("%s\n\n%s" % (title, text_body)), QQBOT_MSG_LIMIT)
     try:
         token = _qqbot_token(cred)
     except Exception as e:
         return False, "token 获取失败: %s" % str(e)[:120]
 
+    # 组装两种版式：md 优先（digest 自带标题行；batch 行补标题、保留链接语法不 plainify），plain 兜底
+    fmt, text_body = pick_body(row, "markdown", "plain")
+    if fmt == "markdown":
+        md_content = _trunc_bytes(text_body, QQBOT_MSG_LIMIT)
+    else:
+        md_content = _trunc_bytes("%s\n\n%s" % (title, text_body), QQBOT_MSG_LIMIT)
+    plain_content = _trunc_bytes(_plainify("%s\n\n%s" % (title, text_body)), QQBOT_MSG_LIMIT)
+
     ok_n = 0
+    md_ok_n = 0
     errs = []  # (err_code, 描述)
+    degraded = False
     for i, g in enumerate(targets):
         if i:
             time.sleep(QQBOT_GROUP_INTERVAL)
-        try:
-            ec, msg = _qqbot_post_group(token, g, {"msg_type": 0, "content": content})
-            if ec == 0:
-                ok_n += 1
-            else:
-                errs.append((ec, "%s: err_code=%s %s" % (g[-6:], ec, msg[:60])))
-        except urllib.error.HTTPError as e:
-            errs.append((None, "%s: HTTP %s %s" % (g[-6:], e.code, e.read().decode("utf-8", "ignore")[:80])))
-        except Exception as e:
-            errs.append((None, "%s: %s" % (g[-6:], str(e)[:80])))
+        sent = False
+        if QQBOT_USE_MD:
+            try:
+                ec, msg = _qqbot_post_group(token, g, {"msg_type": 2, "markdown": {"content": md_content}})
+                if ec == 0:
+                    ok_n += 1
+                    md_ok_n += 1
+                    sent = True
+                else:
+                    errs.append((ec, "%s md: err_code=%s %s" % (g[-6:], ec, msg[:60])))
+            except urllib.error.HTTPError as e:
+                errs.append((None, "%s md: HTTP %s %s" % (g[-6:], e.code, e.read().decode("utf-8", "ignore")[:80])))
+            except Exception as e:
+                errs.append((None, "%s md: %s" % (g[-6:], str(e)[:80])))
+        if not sent:
+            # md 未启用或被拒：降级 plain（网络类异常同样兜底重发 plain）
+            degraded = True
+            try:
+                ec, msg = _qqbot_post_group(token, g, {"msg_type": 0, "content": plain_content})
+                if ec == 0:
+                    ok_n += 1
+                else:
+                    errs.append((ec, "%s plain: err_code=%s %s" % (g[-6:], ec, msg[:60])))
+            except urllib.error.HTTPError as e:
+                errs.append((None, "%s plain: HTTP %s %s" % (g[-6:], e.code, e.read().decode("utf-8", "ignore")[:80])))
+            except Exception as e:
+                errs.append((None, "%s plain: %s" % (g[-6:], str(e)[:80])))
 
     if ok_n:
         note = "" if ok_n == len(targets) else "（部分失败 %d/%d：%s）" % (ok_n, len(targets), "; ".join(e for _, e in errs)[:150])
-        return True, "sent %d/%d%s" % (ok_n, len(targets), note)
+        mode = "md" if md_ok_n == ok_n and ok_n else "mixed" if md_ok_n else "plain(降级)"
+        if degraded and md_ok_n == 0 and QQBOT_USE_MD:
+            note = ("md 被平台拒绝，已降级 plain；" + note)[:200]
+        return True, "sent %d/%d [%s]%s" % (ok_n, len(targets), mode, note)
     if errs and all(ec in QQBOT_NORETRY_CODES for ec, _ in errs):
         return True, "skipped：全部群命中频控/配额（%s），不重试" % ("; ".join(e for _, e in errs)[:150])
     return False, "全部 %d 群失败：%s" % (len(targets), "; ".join(e for _, e in errs)[:180])
@@ -943,7 +974,7 @@ def process_digest_files(processed, failed, workers=8):
             if status == "ok":
                 ok_cnt += 1
                 f_ok += 1
-                print("  ✅ %s → %s" % (nid, channel))
+                print("  ✅ %s → %s %s" % (nid, channel, str(note)[:90]))
             elif status == "skip":
                 skip_cnt += 1
                 f_skip += 1
@@ -1004,7 +1035,7 @@ def main():
             for nid, channel, status, note in dispatch_rows(rows, processed, workers):
                 if status == "ok":
                     ok_cnt += 1
-                    print("  ✅ %s → %s" % (nid, channel))
+                    print("  ✅ %s → %s %s" % (nid, channel, str(note)[:90]))
                 elif status == "skip":
                     skip_cnt += 1
                     print("  ⏭  %s 已处理过，去重跳过" % nid)
