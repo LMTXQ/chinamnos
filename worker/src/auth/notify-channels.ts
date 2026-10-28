@@ -51,12 +51,15 @@ export async function handleNotifyChannelsList(request: Request, env: Env): Prom
     if (r.provinces_json) {
       try { provinces = JSON.parse(r.provinces_json) as unknown; } catch { provinces = []; }
     }
-    // 回调绑定渠道（QQ 机器人）：解密 cred 取已绑群列表供前端展示（group_openid 非敏感，secret 不出库）
+    // 群目标渠道（QQ 机器人回调收集 / Qmsg 手动登记）：解密 cred 取群列表供前端展示
+    // （group_openid / QQ 群号非敏感，secret/key 不出库）
     let targets: string[] | undefined;
-    if (getChannel(r.channel_type)?.bindByCallback) {
+    const chDef = getChannel(r.channel_type);
+    if (chDef?.bindByCallback || chDef?.manualTargets) {
       try {
         const cred = await openCred(env, r.cred_enc);
         if (Array.isArray(cred.targets)) targets = cred.targets.filter(Boolean);
+        else if (chDef.manualTargets) targets = [];
       } catch { targets = undefined; }
     }
     return { id: r.id, channel_type: r.channel_type, target_hint: r.target_hint, status: r.status, collect_report: r.collect_report === 1, digest_mode: r.digest_mode === 'custom' ? 'custom' : 'follow', kinds_mode: r.kinds_mode === 'custom' ? 'custom' : 'follow', announce_push: r.announce_push, provinces, created_at: r.created_at, kinds, targets };
@@ -361,6 +364,51 @@ export async function handleNotifyChannelBindCode(request: Request, env: Env): P
     `UPDATE user_notify_channels SET verify_code_hash = ?1, verify_expires_at = ?2 WHERE id = ?3 AND user_id = ?4`,
   ).bind(await sha256Hex(code), Date.now() + BIND_CODE_TTL, row.id, g.viewer.id).run();
   return ok({ bind_code: code, channel_type: type, expires_in_hours: 24 });
+}
+
+// POST /api/me/notify-channels/targets  body: { channel_type, op: 'add'|'remove', group }
+//   Qmsg 手动群目标管理：openCred → 增/删 targets → sealCred 回写 + target_hint 重算。
+//   add 校验 QQ 群号（5~11 位数字）+ 去重；remove 不存在返回 404。
+//   行级 id 寻址就绪：单实例期按 (user_id, channel_type) 定行，增量 3 后改按行 id 传入。
+export async function handleNotifyChannelTargets(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+
+  let body: Record<string, unknown> = {};
+  try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
+  const type = typeof body.channel_type === 'string' ? body.channel_type : '';
+  const def = getChannel(type);
+  if (!def?.manualTargets) return fail(ERR.VALIDATION_ERROR, '该渠道不支持手动群目标', 400, { field: 'channel_type' });
+  const op = body.op === 'remove' ? 'remove' : 'add';
+  const group = typeof body.group === 'string' ? body.group.trim() : '';
+  if (!/^\d{5,11}$/.test(group)) return fail(ERR.VALIDATION_ERROR, '群号格式不正确：应为 5~11 位数字 QQ 群号', 400, { field: 'group' });
+
+  // 频控：与发起绑定同额度
+  const rl = await hitLimit(env, `nch:create:${g.viewer.id}`, 5, 3600);
+  if (rl.limited) return fail(ERR.RATE_LIMITED, '操作过于频繁，请 1 小时后再试', 429);
+
+  const row = await env.DB.prepare(
+    `SELECT id, cred_enc FROM user_notify_channels
+     WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active'`,
+  ).bind(g.viewer.id, type).first<{ id: string; cred_enc: string }>();
+  if (!row) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定', 404, { field: 'channel_type' });
+
+  const cred = await openCred(env, row.cred_enc);
+  const targets = Array.isArray(cred.targets) ? cred.targets.filter(Boolean) : [];
+  if (op === 'add') {
+    if (targets.includes(group)) return fail(ERR.VALIDATION_ERROR, '该群已在列表中', 400);
+    targets.push(group);
+  } else {
+    const idx = targets.indexOf(group);
+    if (idx < 0) return fail(ERR.NOT_FOUND, '该群不在列表中', 404);
+    targets.splice(idx, 1);
+  }
+  const nextCred: Record<string, string> = { ...cred, targets: targets as unknown as string[] };
+  const hint = def.hint(nextCred);
+  await env.DB.prepare(
+    `UPDATE user_notify_channels SET cred_enc = ?1, target_hint = ?2 WHERE id = ?3 AND user_id = ?4`,
+  ).bind(await sealCred(env, nextCred), hint, row.id, g.viewer.id).run();
+  return ok({ channel_type: type, targets });
 }
 
 // POST /api/me/notify-channels/verify  body: { code }

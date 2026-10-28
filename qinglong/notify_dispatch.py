@@ -17,8 +17,9 @@
   dingtalk  cred: {webhook, secret?}   secret = SEC 开头加签密钥（可选）
   wecom     cred: {webhook}
   email     cred: {email}              实际收件人优先取行内 email_target
-  qmsg      cred: {key, domain?}       仅 plain（Qmsg 不支持 markdown）；域名/上限以实测为准，
-                                        常量 QMSG_DEFAULT_DOMAIN / QMSG_MSG_LIMIT，cred.domain 可覆盖
+  qmsg      cred: {key, domain?, targets?[]}  QQ 推送中转；targets=QQ 群号数组（站内手动登记，
+                                        需先在 Qmsg 控制台绑定该群），空=发平台默认目标；同 Key
+                                        硬限流 5 秒/次故多群串行间隔，每日 500 次
   qqbot     cred: {appid, secret, targets[]}  QQ 官方机器人群聊直连（targets=group_openid 列表，
                                         回调绑定码流程写入）；纯文本 msg_type=0，多群串行节流，
                                         token 文件缓存 .qqbot_token.json，超频码 22009 不重试
@@ -313,7 +314,8 @@ def send_email(cred, title, body, row=None):
 # ───────────────────────── Qmsg酱（QQ 推送，第三方中转） ─────────────────────────
 QMSG_DEFAULT_DOMAIN = "https://qmsg.zendee.cn"  # 新版文档出现 api.atku.cn，以实测为准；cred.domain 可覆盖
 QMSG_SEND_PATH = "/v3/jsend/"
-QMSG_MSG_LIMIT = 1800  # UTF-8 字节上限（旧版），新版实测确认后调整
+QMSG_MSG_LIMIT = 1800  # 官方文档：最长 1800 字符
+QMSG_GROUP_INTERVAL = 5  # 同 Key 硬限流 5 秒/次、每日 500 次；多群串行必须间隔（秒）
 
 
 def _plainify(s):
@@ -331,23 +333,40 @@ def _plainify(s):
 
 
 def send_qmsg(cred, title, body, row=None):
-    """Qmsg酱：仅 plain 文本（Qmsg 不支持 markdown 透传），推送目标在 Qmsg 平台侧绑定，
-    API 默认发往平台绑定目标（v1 不存 targets）。plain 版式（digest）与 batch 行均不带
-    标题行，统一在此补标题（对齐邮件 plain 行为）；key 错误时返回失败串不抛异常。"""
-    key = cred.get("key", "")
-    if not key:
+    """Qmsg酱：仅 plain 文本（Qmsg 不支持 markdown 透传）。cred.targets 非空 = 逐群推送
+    （payload 加 group=群号，需已在 Qmsg 控制台绑定该群），同 Key 硬限流 5 秒/次故串行间隔；
+    空 = 发平台绑定默认目标（单聊，无 group）。plain 版式（digest）与 batch 行均不带标题行，
+    统一在此补标题（对齐邮件 plain 行为）；部分成功 = True 不重试（防重发已送达群）。"""
+    if not cred.get("key"):
         return False, "缺少 qmsg key"
     _, text_body = pick_body(row, "plain")
     text = _trunc_bytes(_plainify("%s\n\n%s" % (title, text_body)), QMSG_MSG_LIMIT)
-    url = "%s%s%s" % ((cred.get("domain") or QMSG_DEFAULT_DOMAIN).rstrip("/"), QMSG_SEND_PATH, key)
-    try:
-        res = _post(url, {"msg": text})
-        ok = res.get("success") is True
-        return ok, "success=%s %s" % (res.get("success"), res.get("reason") or res.get("message") or "")
-    except urllib.error.HTTPError as e:
-        return False, "HTTP %s %s" % (e.code, e.read().decode("utf-8", "ignore")[:150])
-    except Exception as e:
-        return False, str(e)
+    targets = [g for g in (cred.get("targets") or []) if g]
+    jobs = targets if targets else [None]  # None = 无 group 参数（默认目标）
+
+    ok_n = 0
+    errs = []
+    for i, g in enumerate(jobs):
+        if i:
+            time.sleep(QMSG_GROUP_INTERVAL)
+        payload = {"msg": text} if g is None else {"msg": text, "group": g}
+        label = g if g else "默认目标"
+        try:
+            res = _post("%s%s%s" % ((cred.get("domain") or QMSG_DEFAULT_DOMAIN).rstrip("/"), QMSG_SEND_PATH, cred.get("key", "")), payload)
+            if res.get("success") is True:
+                ok_n += 1
+            else:
+                errs.append("%s: %s" % (label, str(res.get("reason") or res.get("message") or "失败")[:60]))
+        except urllib.error.HTTPError as e:
+            errs.append("%s: HTTP %s %s" % (label, e.code, e.read().decode("utf-8", "ignore")[:100]))
+        except Exception as e:
+            errs.append("%s: %s" % (label, str(e)[:80]))
+
+    if not ok_n:
+        return False, "全部发送失败：%s" % ("; ".join(errs)[:180])
+    if errs:
+        return True, "sent %d/%d（部分失败：%s）" % (ok_n, len(jobs), "; ".join(errs)[:120])
+    return True, "sent %d/%d" % (ok_n, len(jobs))
 
 
 # ───────────────────────── QQ 官方机器人（群聊，直连 OpenAPI） ─────────────────────────

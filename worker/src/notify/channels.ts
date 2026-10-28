@@ -26,6 +26,8 @@ export interface ChannelDef {
   skipVerify?: boolean;
   /** 绑定后由平台回调激活/追加群（QQ 官方机器人）：create 不外发验证码，改返回 24h 绑定码由群内 @机器人 消费 */
   bindByCallback?: boolean;
+  /** 目标群手动登记（Qmsg：Qmsg 控制台绑群后回站内登记群号，经 targets 端点增删） */
+  manualTargets?: boolean;
   /** 仅参与青龙批量管线（方案 C），即时分支跳过该渠道 */
   bulkOnly?: boolean;
   validate(raw: Record<string, unknown>, viewerEmail?: string): { ok: true; cred: ChannelCred } | { ok: false; error: string };
@@ -173,12 +175,16 @@ const email: ChannelDef = {
 };
 
 /* ── Qmsg酱（QQ 推送，第三方中转）──
-   在 Qmsg 平台获取 Key，推送目标（QQ 号/群）在 Qmsg 平台侧绑定，本站只存 Key。
+   cred: {key, domain?, targets?[]}，targets = QQ 群号数组（手动登记：Qmsg 控制台绑定群后抄群号，
+   经 targets 端点管理——Qmsg 无回调，与 qqbot 的自动收集不同）。targets 空 = 发平台绑定默认目标。
    仅 plain 文本（Qmsg 不支持 markdown 透传）。域名/截断上限以实测为准：
-   新版文档出现 api.atku.cn、旧版 qmsg.zendee.cn——实测后只改下面常量（cred.domain 可覆盖域名）。 */
+   新版文档出现 api.atku.cn、旧版 qmsg.zendee.cn——实测后只改下面常量（cred.domain 可覆盖域名）。
+   平台硬限流：同 Key 每 5 秒 1 次、每日 500 次（多群串行间隔 5s）；URL/连续数字为风控点（实测未拦）。
+   群通知需群主在群设置开启「机器人主动在群聊内发言」（与 qqbot 同理）。 */
 const QMSG_DEFAULT_DOMAIN = 'https://qmsg.zendee.cn';
 const QMSG_SEND_PATH = '/v3/jsend/';
-const QMSG_MSG_LIMIT = 1800; // UTF-8 字节上限（旧版），新版实测确认后调整
+const QMSG_MSG_LIMIT = 1800; // 官方文档：最长 1800 字符（UTF-8 字节级截断）
+const QMSG_GROUP_INTERVAL_MS = 5000; // 同 Key 限流 5 秒/次，多群串行必须间隔
 
 /* plain 渠道净化：绑定验证码/即时消息正文可能含 markdown 标记（**验证码**、[站点](url)），
    Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读。
@@ -195,7 +201,8 @@ function plainify(s: string): string {
 const qmsg: ChannelDef = {
   type: 'qmsg',
   label: 'Qmsg酱',
-  desc: '在 Qmsg 平台获取 Key，并在 Qmsg 平台内绑定推送目标（QQ 号/群）。验证码与后续通知经 Qmsg 中转发往 QQ。',
+  desc: '在 Qmsg 平台获取 Key，默认发送到平台绑定的 QQ 单聊；群通知在 Qmsg 控制台绑定群后，回站内「添加群」登记群号。消息经 Qmsg 中转发往 QQ。',
+  manualTargets: true,
   fields: [
     { key: 'key', label: 'Qmsg Key', placeholder: 'Qmsg 平台个人中心获取' },
   ],
@@ -215,23 +222,40 @@ const qmsg: ChannelDef = {
     return { ok: true, cred };
   },
   hint(cred) {
-    return `Qmsg酱 · key 尾号 ${(cred.key || '').slice(-4) || '****'}`;
+    const n = Array.isArray(cred.targets) ? cred.targets.length : 0;
+    return `Qmsg酱 · key 尾号 ${(cred.key || '').slice(-4) || '****'}${n ? ` · ${n} 群` : ''}`;
   },
   async send(cred, title, body) {
-    const text = truncBytes(plainify(`${title}\n\n${body}`), QMSG_MSG_LIMIT);
-    let res: Response;
-    try {
-      res = await fetch(`${cred.domain || QMSG_DEFAULT_DOMAIN}${QMSG_SEND_PATH}${encodeURIComponent(cred.key)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ msg: text }),
-      });
-    } catch (e) {
-      return { ok: false, error: `网络错误: ${String(e)}` };
+    const raw = `${title}\n\n${body}`;
+    const text = truncBytes(plainify(raw), QMSG_MSG_LIMIT);
+    const targets = Array.isArray(cred.targets) ? cred.targets.filter(Boolean) : [];
+    // targets 空 = 平台绑定默认目标（单聊），无 group 参数；非空 = 逐群 + 5s 限流间隔
+    const jobs: Array<Record<string, unknown>> = targets.length
+      ? targets.map((g) => ({ msg: text, group: g }))
+      : [{ msg: text }];
+    let sent = 0;
+    const errs: string[] = [];
+    for (let i = 0; i < jobs.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, QMSG_GROUP_INTERVAL_MS));
+      try {
+        const group = jobs[i].group as string | undefined;
+        const res = await fetch(`${cred.domain || QMSG_DEFAULT_DOMAIN}${QMSG_SEND_PATH}${encodeURIComponent(cred.key || '')}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ msg: text, ...(group ? { group } : {}) }),
+        });
+        if (!res.ok) { errs.push(`${group || '默认'}: HTTP ${res.status}`); continue; }
+        const data = (await res.json().catch(() => ({}))) as { success?: boolean; reason?: string; message?: string };
+        if (data.success === true) sent++;
+        else errs.push(`${group || '默认'}: ${data.reason || data.message || 'Qmsg 返回失败'}`);
+      } catch (e) {
+        errs.push(`${group || '默认'}: ${String(e).slice(0, 80)}`);
+      }
     }
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    const data = (await res.json().catch(() => ({}))) as { success?: boolean; reason?: string; message?: string };
-    if (data.success !== true) return { ok: false, error: data.reason || data.message || 'Qmsg 返回失败' };
+    if (!sent) return { ok: false, error: `全部发送失败：${errs.join('；').slice(0, 250)}` };
+    if (errs.length) {
+      return { ok: false, error: `部分失败 ${sent}/${jobs.length}：${errs.join('；').slice(0, 200)}` };
+    }
     return { ok: true };
   },
 };

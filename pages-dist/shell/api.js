@@ -188,6 +188,9 @@ export const api = {
   async notifyChannelBindCode(channelType) {
     return this.request("/api/me/notify-channels/bindcode", { method: "POST", body: { channel_type: channelType } });
   },
+  async notifyChannelTargets(channelType, op, group) {
+    return this.request("/api/me/notify-channels/targets", { method: "POST", body: { channel_type: channelType, op, group } });
+  },
 
   /** 修改登录邮箱（k=当前密码派生密钥；两步：request 发验证码 → confirm 落库；成功后邮件通知渠道自动解绑） */
   async myKdfParams() {

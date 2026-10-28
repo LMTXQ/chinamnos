@@ -857,9 +857,23 @@ function onModalClick(e) {
     withPending(el, () => nchDelete(ctype));
     return;
   }
-  if (act === "nchBindCode") {
+  if (act === "nchAddGroup") {
+    // 按渠道 targetsMode 分流：callback = QQ 机器人取绑定码；manual = Qmsg 手动登记群号
     const ctype = el.dataset.ctype || "";
+    const tmode = (NCH_TYPES.find((x) => x.type === ctype) || {}).targetsMode;
+    if (tmode === "manual") { renderNchTargets(ctype); return; }
     authGuarded(el, () => nchBindCode(ctype));
+    return;
+  }
+  if (act === "nchTargetsAdd") {
+    const ctype = el.dataset.ctype || "";
+    authGuarded(el, () => nchTargetsAdd(ctype));
+    return;
+  }
+  if (act === "nchTargetsDel") {
+    const ctype = el.dataset.ctype || "";
+    const group = el.dataset.group || "";
+    authGuarded(el, () => nchTargetsOp(ctype, "remove", group));
     return;
   }
   if (act === "nchPrefs") { renderNchPrefs(el.dataset.ctype || ""); return; }
@@ -1099,8 +1113,15 @@ const NCH_TYPES = [
   {
     type: "qmsg",
     label: "Qmsg酱",
-    desc: "在 Qmsg 平台获取 Key，并在 Qmsg 平台内绑定推送目标（QQ 号/群）。验证码与后续通知经 Qmsg 中转发往 QQ。",
+    desc: "在 Qmsg 平台获取 Key，默认发送到平台绑定的 QQ 单聊；群通知在 Qmsg 控制台绑定群后，回站内「添加群」登记群号。消息经 Qmsg 中转发往 QQ。",
     ready: true,
+    targetsMode: "manual",
+    steps: [
+      "Qmsg 控制台（qmsg.zendee.cn）QQ 登录后获取 API Key，并按提示添加机器人为 QQ 好友（默认发单聊）",
+      "要发群通知：把 Qmsg 机器人拉进目标群，在 Qmsg 控制台添加并绑定该群",
+      "⚠️ 群通知需群主在群设置开启「机器人主动在群聊内发言」，否则群消息发送失败",
+      "回到本页填入 Key 提交；群绑定完成后回渠道列表点「添加群」登记群号（平台限流：同 Key 每 5 秒 1 次，多群通知间隔发送）",
+    ],
     fields: [
       { key: "key", label: "Qmsg Key", placeholder: "Qmsg 平台个人中心获取" },
     ],
@@ -1110,6 +1131,7 @@ const NCH_TYPES = [
     label: "QQ官方机器人",
     desc: "使用你自己在 QQ 开放平台创建的机器人，通知直连官方接口发到群。",
     ready: true,
+    targetsMode: "callback",
     steps: [
       "登录 q.qq.com 创建机器人，在「开发设置」拿到 AppID 与 AppSecret",
       "回到本页填入 AppID / AppSecret 提交（本站会即时校验凭证），获得绑定码",
@@ -1199,15 +1221,15 @@ function nchCard(it) {
   const digestBtn = it.status === "active"
     ? '<button class="nch-del" data-act="nchDigest" data-ctype="' + esc(it.channel_type) + '">采集播报</button>'
     : "";
-  // QQ 官方机器人：生效实例提供「添加群」入口（取新绑定码在群内消费）
-  const bindGroupBtn = it.status === "active" && Array.isArray(it.targets)
-    ? '<button class="nch-del" data-act="nchBindCode" data-ctype="' + esc(it.channel_type) + '">添加群</button>'
+  // 群目标渠道：QQ 机器人（生效实例取新绑定码）/ Qmsg（手动登记群号）
+  const targetBtn = it.status === "active" && Array.isArray(it.targets)
+    ? '<button class="nch-del" data-act="nchAddGroup" data-ctype="' + esc(it.channel_type) + '">添加群</button>'
     : "";
   return `
     <div class="nch-card">
       <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}${kindsSummary}${digestSummary}</div>
       ${tag}
-      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${bindGroupBtn}${prefsBtn}${digestBtn}
+      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${targetBtn}${prefsBtn}${digestBtn}
       <button class="nch-del" data-act="nchDelete" data-ctype="${esc(it.channel_type)}">解绑</button></div>
     </div>`;
 }
@@ -1608,6 +1630,47 @@ async function nchBindCode(ctype) {
   const r = await api.notifyChannelBindCode(ctype);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "获取失败，请稍后再试"); return; }
   if (r.data?.bind_code) renderNchBindCode(r.data.bind_code);
+}
+
+/* Qmsg 手动群目标视图：列出已登记群号 + 添加/移除（群通知需 Qmsg 控制台绑群 + 群主开主动消息） */
+function renderNchTargets(ctype) {
+  const it = nchItems.find((x) => x.channel_type === ctype && x.status === "active");
+  const body = getModal().querySelector("#nchBody");
+  if (!body || !it) return;
+  const targets = Array.isArray(it.targets) ? it.targets : [];
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">Qmsg酱 · 已登记群 ${targets.length} 个${targets.length ? "" : "（当前仅发送平台默认目标）"}。群通知需先把 Qmsg 机器人拉进群，并让<b>群主</b>在群设置开启「机器人主动在群聊内发言」，否则群消息发送失败。</p>
+    <p class="hint" style="margin:0 0 8px">添加步骤：Qmsg 控制台添加并绑定该群 → 回到这里登记群号（平台限流：同 Key 每 5 秒 1 次，多群通知自动间隔发送）。</p>
+    <div class="nch-list">
+      ${targets.map((g) => `
+      <div class="nch-card"><div class="nch-meta"><div class="t">群 ${esc(g)}</div></div>
+      <button class="nch-del" data-act="nchTargetsDel" data-ctype="${esc(ctype)}" data-group="${esc(g)}">移除</button></div>`).join("") || '<div class="nch-empty">还没有登记群</div>'}
+    </div>
+    <div class="fg" style="margin-top:10px">
+      <label>添加群号</label>
+      <input class="inp" id="nchGroupNo" inputmode="numeric" maxlength="11" placeholder="QQ 群号（5~11 位数字）">
+    </div>
+    <div class="actions">
+      <button class="btn ghost" data-act="nchBack">返回</button>
+      <button class="btn primary" data-act="nchTargetsAdd" data-ctype="${esc(ctype)}">添加</button>
+    </div>`;
+  mountIcons(body);
+}
+
+async function nchTargetsAdd(ctype) {
+  const inp = getModal().querySelector("#nchGroupNo");
+  const group = (inp?.value || "").trim();
+  if (!/^\d{5,11}$/.test(group)) { toast("请输入 5~11 位数字 QQ 群号"); return; }
+  await nchTargetsOp(ctype, "add", group);
+}
+
+async function nchTargetsOp(ctype, op, group) {
+  if (!ctype || !group) return;
+  const r = await api.notifyChannelTargets(ctype, op, group);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "操作失败，请稍后再试"); return; }
+  toast(op === "add" ? "群已登记" : "已移除");
+  await renderNchList(); // 刷新 nchItems（targets/target_hint 同步）
+  renderNchTargets(ctype);
 }
 
 async function nchVerify() {
