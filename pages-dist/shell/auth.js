@@ -1113,8 +1113,8 @@ const NCH_TYPES = [
     steps: [
       "登录 q.qq.com 创建机器人，在「开发设置」拿到 AppID 与 AppSecret",
       "回到本页填入 AppID / AppSecret 提交（本站会即时校验凭证），获得绑定码",
-      "再到平台「开发设置 → 回调配置」填入：https://api.ftac.dpdns.org/api/notify/qqbot/callback（⚠️ 必须先完成上一步，否则验证握手会失败；失败时重试一次）",
-      "同页「消息URL配置」添加域名：chinamnos.ftac.dpdns.org（不填则所有通知发送失败）",
+      "平台「开发设置 → 回调配置」：接入类型选 Webhook 模式，回调地址填 https://api.ftac.dpdns.org/api/notify/qqbot/callback（⚠️ 必须先完成第 2 步，否则验证握手会失败）",
+      "回调保存后，【接收事件配置】选择【全部接受】（不选则收不到群消息事件，绑定码无效）",
       "把机器人拉进目标群，群主在群设置开启「机器人主动在群聊内发言」，然后群内 @机器人 发送绑定码",
     ],
     fields: [
@@ -1597,7 +1597,7 @@ function renderNchBindCode(code) {
   body.innerHTML = `
     <p class="hint" style="margin-top:0">实例已登记。把机器人拉进目标群，然后在群内 <b>@机器人</b> 发送下面的绑定码（机器人会回复确认）：</p>
     <div style="display:flex;justify-content:center;padding:14px 0"><span style="font-size:32px;font-weight:800;letter-spacing:10px;font-family:ui-monospace,monospace">${esc(code)}</span></div>
-    <p class="hint" style="margin:0 0 6px">· 绑定码 24 小时内有效，发送成功立即消费（一个码绑一个群）；<br>· 同一机器人可绑多个群：生效后回渠道列表点「添加群」再取新码；<br>· 需群主在群设置开启「机器人主动在群聊内发言」，否则主动通知发送失败；<br>· 消息含站点网址：需在 q.qq.com 后台「开发设置 → 消息URL配置」登记 chinamnos.ftac.dpdns.org。</p>
+    <p class="hint" style="margin:0 0 6px">· 绑定码 24 小时内有效，发送成功立即消费（一个码绑一个群）；<br>· 同一机器人可绑多个群：生效后回渠道列表点「添加群」再取新码；<br>· 需群主在群设置开启「机器人主动在群聊内发言」，否则主动通知发送失败；<br>· 平台「回调配置」需为 Webhook 模式且【接收事件配置】选【全部接受】，否则收不到绑定事件。</p>
     <div class="actions"><button class="btn primary" data-act="nchBack">完成</button></div>`;
   mountIcons(body);
 }
