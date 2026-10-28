@@ -315,8 +315,15 @@ QMSG_MSG_LIMIT = 1800  # UTF-8 字节上限（旧版），新版实测确认后�
 
 def _plainify(s):
     """plain 渠道净化：验证码/即时消息正文可能含 markdown 标记（**code**、[站点](url)），
-    Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读（与 Worker 侧 plainify 行为一致）。"""
-    s = re.sub(r"\[([^\]\s]+)\]\(([^)\s]+)\)", r"\1: \2", s)
+    Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读（与 Worker 侧 plainify 行为一致）。
+    链接文字与网址相同（纯域名链接）时只保留网址，避免"域名: 网址"重复显示。"""
+    def _link(m):
+        text, url = m.group(1), m.group(2)
+        bare = re.sub(r"^https?://", "", url).rstrip("/")
+        if text.rstrip("/") == bare:
+            return url
+        return "%s: %s" % (text, url)
+    s = re.sub(r"\[([^\]\s]+)\]\(([^)\s]+)\)", _link, s)
     return re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
 
 

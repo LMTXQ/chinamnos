@@ -178,10 +178,14 @@ const QMSG_SEND_PATH = '/v3/jsend/';
 const QMSG_MSG_LIMIT = 1800; // UTF-8 字节上限（旧版），新版实测确认后调整
 
 /* plain 渠道净化：绑定验证码/即时消息正文可能含 markdown 标记（**验证码**、[站点](url)），
-   Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读。 */
+   Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读。
+   链接文字与网址相同（纯域名链接）时只保留网址，避免"域名: 网址"重复显示。 */
 function plainify(s: string): string {
   return s
-    .replace(/\[([^\]\s]+)\]\(([^)\s]+)\)/g, '$1: $2')
+    .replace(/\[([^\]\s]+)\]\(([^)\s]+)\)/g, (_m, text: string, url: string) => {
+      const bare = url.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      return text.replace(/\/+$/, '') === bare ? url : `${text}: ${url}`;
+    })
     .replace(/\*\*([^*]+)\*\*/g, '$1');
 }
 
