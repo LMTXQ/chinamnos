@@ -1091,7 +1091,15 @@ const NCH_TYPES = [
   },
   { type: "feishu", label: "飞书机器人", desc: "群机器人 Webhook + 加签密钥", soon: true },
   { type: "pushplus", label: "PushPlus", desc: "微信推送，填个人 token", soon: true },
-  { type: "qmsg", label: "Qmsg酱", desc: "QQ 推送，填 key + QQ 号", soon: true },
+  {
+    type: "qmsg",
+    label: "Qmsg酱",
+    desc: "在 Qmsg 平台获取 Key，并在 Qmsg 平台内绑定推送目标（QQ 号/群）。验证码与后续通知经 Qmsg 中转发往 QQ。",
+    ready: true,
+    fields: [
+      { key: "key", label: "Qmsg Key", placeholder: "Qmsg 平台个人中心获取" },
+    ],
+  },
   { type: "email", label: "邮件", desc: "一键绑定你的注册邮箱。到期提醒、采集播报等批量通知将发送到该邮箱；私信与审核类通知本就会发送到你的邮箱，不受此绑定影响。", ready: true, fields: [] },
 ];
 let nchAddState = null; // 待验证绑定 { type, cred }（重新发送验证码用）
@@ -1511,7 +1519,7 @@ function renderNchVerify() {
   const body = getModal().querySelector("#nchBody");
   if (!body) return;
   body.innerHTML = `
-    <p class="hint" style="margin-top:0">验证码已发送到你填写的群机器人，请在对应企业微信群中查看（10 分钟内有效）。</p>
+    <p class="hint" style="margin-top:0">验证码已发送到你绑定的通知渠道，请在对应 App（企业微信 / 钉钉 / QQ）中查看（10 分钟内有效）。</p>
     <div class="fg">
       <label>6 位验证码</label>
       <input class="inp" id="nchCode" type="text" inputmode="numeric" maxlength="6" placeholder="群里收到的 6 位数字">

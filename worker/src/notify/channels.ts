@@ -169,8 +169,68 @@ const email: ChannelDef = {
   },
 };
 
-/* 注册表：dingtalk / wecom / email 已上线；feishu/pushplus/qmsg 按同结构即插即用 */
-export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email };
+/* ── Qmsg酱（QQ 推送，第三方中转）──
+   在 Qmsg 平台获取 Key，推送目标（QQ 号/群）在 Qmsg 平台侧绑定，本站只存 Key。
+   仅 plain 文本（Qmsg 不支持 markdown 透传）。域名/截断上限以实测为准：
+   新版文档出现 api.atku.cn、旧版 qmsg.zendee.cn——实测后只改下面常量（cred.domain 可覆盖域名）。 */
+const QMSG_DEFAULT_DOMAIN = 'https://qmsg.zendee.cn';
+const QMSG_SEND_PATH = '/v3/jsend/';
+const QMSG_MSG_LIMIT = 1800; // UTF-8 字节上限（旧版），新版实测确认后调整
+
+/* plain 渠道净化：绑定验证码/即时消息正文可能含 markdown 标记（**验证码**、[站点](url)），
+   Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读。 */
+function plainify(s: string): string {
+  return s
+    .replace(/\[([^\]\s]+)\]\(([^)\s]+)\)/g, '$1: $2')
+    .replace(/\*\*([^*]+)\*\*/g, '$1');
+}
+
+const qmsg: ChannelDef = {
+  type: 'qmsg',
+  label: 'Qmsg酱',
+  desc: '在 Qmsg 平台获取 Key，并在 Qmsg 平台内绑定推送目标（QQ 号/群）。验证码与后续通知经 Qmsg 中转发往 QQ。',
+  fields: [
+    { key: 'key', label: 'Qmsg Key', placeholder: 'Qmsg 平台个人中心获取' },
+  ],
+  validate(raw) {
+    const v = typeof raw.key === 'string' ? raw.key.trim() : '';
+    if (!/^[0-9a-zA-Z_-]{6,}$/.test(v)) {
+      return { ok: false, error: 'Qmsg Key 格式不正确，请在 Qmsg 平台个人中心复制完整 Key' };
+    }
+    // 域名覆盖为预留能力（绑定表单暂不展示该字段）：cred.domain 存在时校验为 https 完整域名
+    const d = typeof raw.domain === 'string' ? raw.domain.trim().replace(/\/+$/, '') : '';
+    if (d && !/^https:\/\/[^\s/]+$/.test(d)) {
+      return { ok: false, error: '自定义域名格式不正确：应为 https:// 开头的完整域名' };
+    }
+    // 显式构造 cred（避免可选属性 union 推断无法赋给 ChannelCred）
+    const cred: ChannelCred = { key: v };
+    if (d) cred.domain = d;
+    return { ok: true, cred };
+  },
+  hint(cred) {
+    return `Qmsg酱 · key 尾号 ${(cred.key || '').slice(-4) || '****'}`;
+  },
+  async send(cred, title, body) {
+    const text = truncBytes(plainify(`${title}\n\n${body}`), QMSG_MSG_LIMIT);
+    let res: Response;
+    try {
+      res = await fetch(`${cred.domain || QMSG_DEFAULT_DOMAIN}${QMSG_SEND_PATH}${encodeURIComponent(cred.key)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msg: text }),
+      });
+    } catch (e) {
+      return { ok: false, error: `网络错误: ${String(e)}` };
+    }
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { success?: boolean; reason?: string; message?: string };
+    if (data.success !== true) return { ok: false, error: data.reason || data.message || 'Qmsg 返回失败' };
+    return { ok: true };
+  },
+};
+
+/* 注册表：dingtalk / wecom / email / qmsg 已上线；feishu/pushplus 按同结构即插即用 */
+export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email, qmsg };
 
 export function getChannel(type: string): ChannelDef | undefined {
   return CHANNELS[type];

@@ -16,6 +16,9 @@
 当前已注册适配器（新渠道上线时在 ADAPTERS 注册一个函数即可，与 Worker 渠道注册表同构）：
   dingtalk  cred: {webhook, secret?}   secret = SEC 开头加签密钥（可选）
   wecom     cred: {webhook}
+  email     cred: {email}              实际收件人优先取行内 email_target
+  qmsg      cred: {key, domain?}       仅 plain（Qmsg 不支持 markdown）；域名/上限以实测为准，
+                                        常量 QMSG_DEFAULT_DOMAIN / QMSG_MSG_LIMIT，cred.domain 可覆盖
 
 payload 行结构（Worker 写入，契约固定）：
   {nid, uid, kind, title, body, channel_type, cred}
@@ -39,6 +42,7 @@ payload 行结构（Worker 写入，契约固定）：
 import glob
 import json
 import os
+import re
 import sys
 import time
 import hmac
@@ -303,12 +307,46 @@ def send_email(cred, title, body, row=None):
     return False, "全部尝试失败（%d 箱）：%s" % (len(tried), last_err)
 
 
+# ───────────────────────── Qmsg酱（QQ 推送，第三方中转） ─────────────────────────
+QMSG_DEFAULT_DOMAIN = "https://qmsg.zendee.cn"  # 新版文档出现 api.atku.cn，以实测为准；cred.domain 可覆盖
+QMSG_SEND_PATH = "/v3/jsend/"
+QMSG_MSG_LIMIT = 1800  # UTF-8 字节上限（旧版），新版实测确认后调整
+
+
+def _plainify(s):
+    """plain 渠道净化：验证码/即时消息正文可能含 markdown 标记（**code**、[站点](url)），
+    Qmsg 不渲染 markdown，发前去除标记保证 QQ 端可读（与 Worker 侧 plainify 行为一致）。"""
+    s = re.sub(r"\[([^\]\s]+)\]\(([^)\s]+)\)", r"\1: \2", s)
+    return re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
+
+
+def send_qmsg(cred, title, body, row=None):
+    """Qmsg酱：仅 plain 文本（Qmsg 不支持 markdown 透传），推送目标在 Qmsg 平台侧绑定，
+    API 默认发往平台绑定目标（v1 不存 targets）。plain 版式（digest）与 batch 行均不带
+    标题行，统一在此补标题（对齐邮件 plain 行为）；key 错误时返回失败串不抛异常。"""
+    key = cred.get("key", "")
+    if not key:
+        return False, "缺少 qmsg key"
+    _, text_body = pick_body(row, "plain")
+    text = _trunc_bytes(_plainify("%s\n\n%s" % (title, text_body)), QMSG_MSG_LIMIT)
+    url = "%s%s%s" % ((cred.get("domain") or QMSG_DEFAULT_DOMAIN).rstrip("/"), QMSG_SEND_PATH, key)
+    try:
+        res = _post(url, {"msg": text})
+        ok = res.get("success") is True
+        return ok, "success=%s %s" % (res.get("success"), res.get("reason") or res.get("message") or "")
+    except urllib.error.HTTPError as e:
+        return False, "HTTP %s %s" % (e.code, e.read().decode("utf-8", "ignore")[:150])
+    except Exception as e:
+        return False, str(e)
+
+
 # 适配器注册表（与 Worker 渠道注册表同构；新渠道上线时在此注册）
 # 约定：adapter(cred, title, body, row) —— row 为完整 payload 行（邮件适配器用 email_target）
 ADAPTERS = {
     "dingtalk": send_dingtalk,
     "wecom": send_wecom,
     "email": send_email,
+    "qmsg": send_qmsg,
 }
 
 
