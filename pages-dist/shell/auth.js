@@ -1112,9 +1112,9 @@ const NCH_TYPES = [
     ready: true,
     steps: [
       "登录 q.qq.com 创建机器人，在「开发设置」拿到 AppID 与 AppSecret",
-      "同页「回调配置」填入：https://api.ftac.dpdns.org/api/notify/qqbot/callback（不填则收不到群消息，绑定码无效）",
+      "回到本页填入 AppID / AppSecret 提交（本站会即时校验凭证），获得绑定码",
+      "再到平台「开发设置 → 回调配置」填入：https://api.ftac.dpdns.org/api/notify/qqbot/callback（⚠️ 必须先完成上一步，否则验证握手会失败；失败时重试一次）",
       "同页「消息URL配置」添加域名：chinamnos.ftac.dpdns.org（不填则所有通知发送失败）",
-      "回到本页填入 AppID / AppSecret 提交，获得绑定码",
       "把机器人拉进目标群，群主在群设置开启「机器人主动在群聊内发言」，然后群内 @机器人 发送绑定码",
     ],
     fields: [

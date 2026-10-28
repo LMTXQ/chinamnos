@@ -98,33 +98,62 @@ export async function qqbotSendGroup(
   return { ok: false, error: 'unreachable' };
 }
 
-/* ── Ed25519 回调验签（官方规则：AppSecret 派生密钥，无需额外配置密钥对） ── */
+/* ── Ed25519 回调验签（官方规则：AppSecret 派生密钥，无需额外配置密钥对） ──
+   ⚠️ WebCrypto 的 raw 导入只认 Ed25519 公钥——私钥必须包成 PKCS8 DER（16 字节固定前缀 + seed）；
+   验签公钥经 exportKey('jwk') 的 x 参数取回（实测 Node/workerd 同构）。
+   ⚠️ 官方文档 sign.html 的 DEMO 输出数值不自洽（与标准 Ed25519 数学矛盾，公钥仅差 2 字节），
+   以标准算法为准（平台服务端为标准库实现）。 */
+
+// Ed25519 PKCS8 v1 前缀（RFC 8410）：302e020100300506032b657004220420 + seed
+const ED25519_PKCS8_PREFIX = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
+// SPKI DER 公钥前缀长度（302a300506032b6570032100）——本项目未用 spki 导出，jwk.x 代替
+const ED25519_SEED_LEN = 32;
 
 function ed25519SeedBytes(secret: string): Uint8Array {
   const raw = new TextEncoder().encode(secret);
   if (!raw.length) throw new Error('empty secret');
   let seed = raw;
-  while (seed.length < 32) {
+  while (seed.length < ED25519_SEED_LEN) {
     const doubled = new Uint8Array(seed.length * 2);
     doubled.set(seed, 0);
     doubled.set(seed, seed.length);
     seed = doubled;
   }
-  return seed.slice(0, 32);
+  return seed.slice(0, ED25519_SEED_LEN);
+}
+
+function ed25519Pkcs8(secret: string): Uint8Array {
+  const seed = ed25519SeedBytes(secret);
+  const der = new Uint8Array(ED25519_PKCS8_PREFIX.length + seed.length);
+  der.set(ED25519_PKCS8_PREFIX, 0);
+  der.set(seed, ED25519_PKCS8_PREFIX.length);
+  return der;
 }
 
 function bytesToHex(b: Uint8Array): string {
   return [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
+async function ed25519PrivateKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey('pkcs8', ed25519Pkcs8(secret), { name: 'Ed25519' }, true, ['sign']);
+}
+
+/** 由私钥取 raw 公钥（pkcs8 导入 → jwk.x），供验签用 */
+async function ed25519PublicKeyRaw(secret: string): Promise<Uint8Array> {
+  const priv = await ed25519PrivateKey(secret);
+  const jwk = await crypto.subtle.exportKey('jwk', priv) as { x?: string };
+  if (!jwk.x) throw new Error('jwk 导出缺少 x');
+  return Uint8Array.from(atob(jwk.x.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+}
+
 /** URL 验证握手(op 13)：对 `event_ts + plain_token` 签名，返回 hex 签名 */
 export async function qqbotSignValidation(secret: string, eventTs: string, plainToken: string): Promise<string> {
-  const key = await crypto.subtle.importKey('raw', ed25519SeedBytes(secret), { name: 'Ed25519' }, false, ['sign']);
+  const key = await ed25519PrivateKey(secret);
   const sig = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(eventTs + plainToken));
   return bytesToHex(new Uint8Array(sig));
 }
 
-/** 事件验签：verify(seed公钥, timestamp + rawBody, hex(X-Signature-Ed25519)) */
+/** 事件验签：verify(seed派生公钥, timestamp + rawBody, hex(X-Signature-Ed25519)) */
 export async function qqbotVerifyEvent(
   secret: string,
   timestamp: string,
@@ -136,7 +165,8 @@ export async function qqbotVerifyEvent(
   if (sig.length !== 64 || (sig[63] & 0xe0) !== 0) return false;
   let pub: CryptoKey;
   try {
-    pub = await crypto.subtle.importKey('raw', ed25519SeedBytes(secret), { name: 'Ed25519' }, false, ['verify']);
+    const pubRaw = await ed25519PublicKeyRaw(secret);
+    pub = await crypto.subtle.importKey('raw', pubRaw, { name: 'Ed25519' }, false, ['verify']);
   } catch {
     return false;
   }
