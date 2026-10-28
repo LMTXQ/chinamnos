@@ -6,6 +6,7 @@ import { ulid, randomDigits, sha256Hex } from '../common/crypto';
 import { NOTIFY_KINDS } from '../common/notifications';
 import { getSetting } from '../common/settings';
 import { getChannel, sealCred, openCred } from '../notify/channels';
+import { getAppAccessToken } from '../notify/qqbot';
 
 // 站点名称（验证码/站外推送消息标识来源，防钓鱼仿冒）：读管理后台 site_name 设置
 // （F8 接线：getSetting 带 30 秒缓存，后台改完约 30 秒内生效），未配置回退默认值。
@@ -280,6 +281,16 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
   // 邮件类渠道（skipVerify）绑定即生效；QQ 机器人（bindByCallback）不外发验证码——
   // 生成 24h 绑定码随响应返回（前端展示，群内 @机器人 消费），其余渠道走验证码流程
   const activated = !!def.skipVerify;
+
+  // QQ 机器人绑定时即时校验凭证：AppID/Secret 换一次 token，填错当场报错（否则要到回调阶段才暴露）
+  if (def.bindByCallback) {
+    try {
+      await getAppAccessToken(v.cred.appid as string, v.cred.secret as string);
+    } catch (e) {
+      return fail(ERR.VALIDATION_ERROR, `凭证校验失败（AppID/Secret 与开放平台不一致或平台无响应）：${String(e).slice(0, 120)}`, 400);
+    }
+  }
+
   const code = activated ? '' : randomDigits(6);
   const now = Date.now();
   const credEnc = await sealCred(env, v.cred);

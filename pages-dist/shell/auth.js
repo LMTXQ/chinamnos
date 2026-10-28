@@ -1108,8 +1108,15 @@ const NCH_TYPES = [
   {
     type: "qqbot",
     label: "QQ官方机器人",
-    desc: "在 QQ 开放平台创建机器人，填入 AppID / AppSecret 绑定实例；再把机器人拉进群，在群内 @机器人 发送绑定码完成加群。通知直连官方接口发到群，需群主在群设置开启「机器人主动在群聊内发言」；消息含站点网址需在平台后台「开发设置 → 消息URL配置」登记域名。",
+    desc: "使用你自己在 QQ 开放平台创建的机器人，通知直连官方接口发到群。",
     ready: true,
+    steps: [
+      "登录 q.qq.com 创建机器人，在「开发设置」拿到 AppID 与 AppSecret",
+      "同页「回调配置」填入：https://api.ftac.dpdns.org/api/notify/qqbot/callback（不填则收不到群消息，绑定码无效）",
+      "同页「消息URL配置」添加域名：chinamnos.ftac.dpdns.org（不填则所有通知发送失败）",
+      "回到本页填入 AppID / AppSecret 提交，获得绑定码",
+      "把机器人拉进目标群，群主在群设置开启「机器人主动在群聊内发言」，然后群内 @机器人 发送绑定码",
+    ],
     fields: [
       { key: "appid", label: "AppID", placeholder: "QQ 开放平台机器人的数字 AppID" },
       { key: "secret", label: "AppSecret", placeholder: "QQ 开放平台生成的密钥字符串" },
@@ -1521,6 +1528,11 @@ function renderNchForm(type) {
   const btnText = t.fields.length ? "发送验证码" : "一键绑定"; // 无字段渠道（邮件）：绑定即生效
   body.innerHTML = `
     <p class="hint" style="margin-top:0">${esc(t.desc)}</p>
+    ${Array.isArray(t.steps) && t.steps.length ? `
+    <div style="border:1px dashed var(--line,#d0d3da);border-radius:8px;padding:10px 12px;margin:0 0 10px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px">绑定步骤（第 2/3 步在你的机器人后台完成，缺一不可）：</div>
+      <ol class="hint" style="margin:0;padding-left:18px;line-height:1.8">${t.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
+    </div>` : ""}
     ${t.fields.map((f) => `
     <div class="fg">
       <label>${esc(f.label)}</label>
