@@ -33,3 +33,5 @@ worker/wrangler.toml
 .edgeone/*
 .tef_dist/*
   
+# 根目录方案/指南 md 文档不入 git（站长规则 2026-10-29）
+/*.md
