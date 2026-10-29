@@ -5077,7 +5077,10 @@ const annState = {
   scope: "home", // home=本省·全国 | national=全国 | all=全部（渲染时按运营商从 localStorage 恢复）
 };
 const ANN_SAN_TAGS = new Set(["p", "br", "div", "span", "a", "img", "strong", "b", "em", "i", "u", "ul", "ol", "li", "table", "tr", "td", "th", "tbody", "thead", "h1", "h2", "h3", "h4", "blockquote"]);
-const ANN_SAN_STYLE = new Set(["color", "background-color", "text-align", "vertical-align"]);
+// 需求号：ANN-INDENT-1
+// 需求内容：修复采集公告正文段落缩进丢失
+// 改动说明：sanitize style 白名单增加 text-indent（值已由采集端 _ann_strip_style 校验，此处按属性名放行）
+const ANN_SAN_STYLE = new Set(["color", "background-color", "text-align", "vertical-align", "text-indent"]);
 const ANN_SCOPE_KEY = () => "chinamnos_an_scope_" + currentCarrier;
 const ANN_READ_KEY = () => "chinamnos_an_read_" + currentCarrier;
 

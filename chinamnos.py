@@ -7368,6 +7368,10 @@ def _ann_http_post(url, payload, headers=None, timeout=20, retries=2, is_json=Fa
 
 def _ann_strip_style(html):
     """去 mso-*/font-* 内联样式，保留 color/background/排版值"""
+    # 需求号：ANN-INDENT-1
+    # 需求内容：修复采集公告正文段落缩进丢失
+    # 改动说明：style 白名单增加 text-indent——运营商 CMS 段落缩进主流写法为 <p style="text-indent:2em">，
+    # 此前被剥离导致前端全部顶格；值限定常规长度形态（数字+可选单位），怪值仍丢弃
     def _fix(m):
         keep = []
         for kv in re.findall(r'([\w-]+)\s*:\s*([^;]+);?', m.group(1)):
@@ -7375,6 +7379,8 @@ def _ann_strip_style(html):
             if not k or not v:
                 continue
             if k in ("color", "vertical-align", "text-align", "background-color"):
+                keep.append("%s:%s" % (k, v))
+            elif k == "text-indent" and re.fullmatch(r'[\d.]+\s*(em|pt|px|%|rem|in|cm)?', v):
                 keep.append("%s:%s" % (k, v))
             elif k.startswith("background") and len(v) > 4:
                 keep.append("%s:%s" % (k, v))
