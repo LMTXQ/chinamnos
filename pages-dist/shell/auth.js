@@ -82,6 +82,8 @@ function renderTurnstile(containerId) {
 /* 变量对齐 shell/theme.css 设计系统：--acc/--acc-deep/--surface/--surface-2/--line/--txt/--sub/--red */
 const AUTH_CSS = `
 #nchBody{max-height:min(72vh,640px);overflow-y:auto}
+/*需求号：NCH-PERF-1 需求内容：通知配置弹窗卡顿优化 改动说明：请求期间弹窗整体降透明度并禁用指针事件，替代静默吞点击，用户立即可见"处理中"*/
+#nchBody.nch-busy{opacity:.55;pointer-events:none;transition:opacity .15s}
 #nchBody .nch-chip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)}
 #nchBody .nch-chip{display:flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;cursor:pointer;user-select:none;font-size:12.5px;color:var(--txt);transition:border-color .15s,color .15s,background .15s}
 #nchBody .nch-chip:hover{border-color:var(--acc)}
@@ -823,7 +825,15 @@ let authBusy = false; // 登录弹窗异步操作互斥（含回车提交路径�
 async function authGuarded(btn, fn) {
   if (authBusy) return;
   authBusy = true;
-  try { await withPending(btn, fn); } finally { authBusy = false; }
+  // 需求号：NCH-PERF-1
+  // 需求内容：通知配置弹窗卡顿优化
+  // 改动说明：nch 弹窗内发起的请求期间给弹窗加 busy 态（降透明度+禁指针），锁定期间其他点击不再静默无反馈
+  const nchBody = btn && typeof btn.closest === "function" ? btn.closest("#nchBody") : null;
+  if (nchBody) nchBody.classList.add("nch-busy");
+  try { await withPending(btn, fn); } finally {
+    authBusy = false;
+    if (nchBody) nchBody.classList.remove("nch-busy"); // 若视图已重绘，旧引用移除无害
+  }
 }
 
 function onModalClick(e) {
@@ -1208,26 +1218,15 @@ function nchTypeLabel(type) {
   return t ? t.label : type;
 }
 
-async function renderNchList() {
+/* 需求号：NCH-PERF-1
+   需求内容：通知配置弹窗卡顿优化
+   改动说明：列表渲染与数据拉取拆分——renderNchListBody 纯渲染（用内存缓存）；refreshNchList 并行拉取两个接口
+   更新缓存（原串行 await 两次跨洋往返），回来时仅在用户仍停留列表视图（特征：存在「账号全局播报范围」卡片）才重绘，
+   避免顶掉正在编辑的子视图；renderNchList 有缓存先立即渲染再后台静默校正，无缓存才显示加载占位 */
+function renderNchListBody() {
   const body = getModal().querySelector("#nchBody");
   if (!body) return;
-  const r = await api.notifyChannels();
-  if (!r.ok) {
-    // 401 单列：最常见原因是本地登录态失效，直接给出可操作提示而非笼统报错
-    const msg = r.code === 40100
-      ? "登录状态已失效，请退出后重新登录"
-      : (typeof r.error === "string" ? r.error : "加载失败，请稍后重试");
-    body.innerHTML = `<p class="hint">${esc(msg)}</p>`;
-    return;
-  }
-  const items = Array.isArray(r.data?.items) ? r.data.items : [];
-  // 按 NCH_TYPES 固定顺序展示（接口默认按绑定时间倒序，与添加页顺序不一致）
-  const typeOrder = new Map(NCH_TYPES.map((t, i) => [t.type, i]));
-  items.sort((a, b) => (typeOrder.get(a.channel_type) ?? 99) - (typeOrder.get(b.channel_type) ?? 99));
-  nchItems = items;
-  // 账号全局播报范围（拉取失败静默降级：摘要显示"未设置"，不影响渠道操作）
-  const gr = await api.digestGlobal();
-  nchGlobalPref = gr.ok ? (gr.data ?? null) : null; // { provinces, kinds }
+  const items = nchItems;
   body.innerHTML = `
     <p class="hint" style="margin-top:0">绑定后，站内通知会同步推送到你的渠道；每个渠道还可订阅「采集播报」（关注范围的资费变更摘要），范围可选跟随账号全局或独立配置。</p>
     <div class="nch-list">
@@ -1245,6 +1244,48 @@ async function renderNchList() {
       ${items.length < 3 ? '<button class="btn primary" data-act="nchAdd"><i data-icon="plus"></i>添加渠道</button>' : '<p class="hint" style="text-align:center">最多绑定 3 个渠道实例</p>'}
     </div>`;
   mountIcons(body);
+}
+
+let nchListRefreshing = false; // 防并发重拉（快速连点返回等场景）
+async function refreshNchList() {
+  if (nchListRefreshing) return null;
+  nchListRefreshing = true;
+  try {
+    // 账号全局播报范围拉取失败静默降级：保留旧值，摘要显示不受影响，不阻塞渠道列表
+    const [r, gr] = await Promise.all([api.notifyChannels(), api.digestGlobal()]);
+    if (r.ok) {
+      const items = Array.isArray(r.data?.items) ? r.data.items : [];
+      // 按 NCH_TYPES 固定顺序展示（接口默认按绑定时间倒序，与添加页顺序不一致）
+      const typeOrder = new Map(NCH_TYPES.map((t, i) => [t.type, i]));
+      items.sort((a, b) => (typeOrder.get(a.channel_type) ?? 99) - (typeOrder.get(b.channel_type) ?? 99));
+      nchItems = items;
+      if (gr.ok) nchGlobalPref = gr.data ?? null; // { provinces, kinds }
+      const body = getModal().querySelector("#nchBody");
+      if (body && body.querySelector('[data-act="nchDigestGlobal"]')) renderNchListBody();
+    }
+    return r;
+  } finally { nchListRefreshing = false; }
+}
+
+async function renderNchList() {
+  const body = getModal().querySelector("#nchBody");
+  if (!body) return;
+  if (nchItems.length) {
+    renderNchListBody(); // 缓存优先：点击返回立即出画面
+    refreshNchList();    // 后台静默校正（不 await，回来时自行判断是否重绘）
+    return;
+  }
+  body.innerHTML = '<p class="hint">加载中…</p>';
+  const r = await refreshNchList();
+  if (r && !r.ok) {
+    // 401 单列：最常见原因是本地登录态失效，直接给出可操作提示而非笼统报错
+    const msg = r.code === 40100
+      ? "登录状态已失效，请退出后重新登录"
+      : (typeof r.error === "string" ? r.error : "加载失败，请稍后重试");
+    body.innerHTML = `<p class="hint">${esc(msg)}</p>`;
+    return;
+  }
+  if (getModal().querySelector("#nchBody")) renderNchListBody();
 }
 
 function nchCard(it) {
@@ -1341,6 +1382,9 @@ async function nchPrefsSave(id, type) {
     : [];
   const r = await api.notifyChannelPrefs(type, kinds, mode, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
+  // NCH-PERF-1：保存参数即最终状态，本地更新该行后缓存渲染列表，不再全量重拉（省 2 次跨洋往返）
+  const it = nchItems.find((x) => x.id === id);
+  if (it) { it.kinds_mode = mode; it.kinds = mode === "custom" ? kinds : null; }
   toast("接收偏好已保存");
   await renderNchList();
 }
@@ -1555,6 +1599,14 @@ async function nchDigestSave(id, type) {
   }
   const r = await api.notifyDigestPrefs(type, { enabled, mode, provinces, announce_push: nchProvEditor.announce }, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
+  // NCH-PERF-1：本地更新该行播报字段（follow 模式不覆盖自有 provinces，切回独立时原配置仍在）
+  const it = nchItems.find((x) => x.id === id);
+  if (it) {
+    it.collect_report = enabled;
+    it.digest_mode = mode;
+    if (mode === "custom") it.provinces = provinces;
+    it.announce_push = nchProvEditor.announce;
+  }
   toast("采集播报偏好已保存");
   await renderNchList();
 }
@@ -1760,16 +1812,22 @@ async function nchTargetsVerify(id, ctype, group) {
   const r = await api.notifyChannelTargets(ctype, "verify", group, code, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "验证失败，请稍后再试"); return; }
   toast("群已添加");
-  await renderNchList();
+  // NCH-PERF-1：接口返回最新 targets，直接本地更新并重渲染群视图（原为先全量重拉列表再渲染，串行 2 次往返）
+  const it = nchItems.find((x) => x.id === id);
+  if (it) it.targets = Array.isArray(r.data?.targets) ? r.data.targets : [...(Array.isArray(it.targets) ? it.targets : []), group];
   renderNchTargets(id, ctype);
+  refreshNchList(); // 后台静默校正缓存，不阻塞当前视图
 }
 
 async function nchTargetsRemove(id, ctype, group) {
   const r = await api.notifyChannelTargets(ctype, "remove", group, undefined, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "操作失败，请稍后再试"); return; }
   toast("已移除");
-  await renderNchList();
+  // NCH-PERF-1：同上，本地更新后原地重渲染
+  const it = nchItems.find((x) => x.id === id);
+  if (it) it.targets = Array.isArray(r.data?.targets) ? r.data.targets : (Array.isArray(it.targets) ? it.targets.filter((g) => g !== group) : []);
   renderNchTargets(id, ctype);
+  refreshNchList();
 }
 
 async function nchVerify() {
@@ -1795,6 +1853,8 @@ async function nchDelete(id, ctype) {
   if (!id && !ctype) return;
   const r = await api.notifyChannelDelete(ctype, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "解绑失败，请稍后再试"); return; }
+  // NCH-PERF-1：本地剔除该行立即渲染，后台刷新兜底并发解绑的竞态
+  nchItems = id ? nchItems.filter((x) => x.id !== id) : nchItems.filter((x) => x.channel_type !== ctype);
   toast("已解绑");
   await renderNchList();
 }
