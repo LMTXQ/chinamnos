@@ -84,6 +84,8 @@ const AUTH_CSS = `
 #nchBody{max-height:min(72vh,640px);overflow-y:auto}
 /*需求号：NCH-PERF-1 需求内容：通知配置弹窗卡顿优化 改动说明：请求期间弹窗整体降透明度并禁用指针事件，替代静默吞点击，用户立即可见"处理中"*/
 #nchBody.nch-busy{opacity:.55;pointer-events:none;transition:opacity .15s}
+/*需求号：NCH-PERF-1 需求内容：通知配置弹窗卡顿优化 改动说明：nch-del 小按钮不在 theme.css 的 .btn.is-pending 转圈规则内，点击后仅置灰无视觉反馈，补 pending 态样式*/
+#nchBody .nch-del.is-pending{opacity:.45;cursor:wait;text-decoration:none}
 #nchBody .nch-chip-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:color-mix(in oklab,var(--surface-2) 55%,transparent)}
 #nchBody .nch-chip{display:flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;cursor:pointer;user-select:none;font-size:12.5px;color:var(--txt);transition:border-color .15s,color .15s,background .15s}
 #nchBody .nch-chip:hover{border-color:var(--acc)}
@@ -863,9 +865,10 @@ function onModalClick(e) {
   if (act === "nchResend") { authGuarded(el, nchResend); return; }
   if (act === "nchDelete") {
     // withPending 调用 fn() 不带实参，id/ctype 必须在此闭包捕获
+    // NCH-PERF-1：改走 authGuarded（此前直接用 withPending，绕过弹窗 busy 遮罩与全局锁，请求期间其他按钮仍可点）
     const id = el.dataset.id || "";
     const ctype = el.dataset.ctype || "";
-    withPending(el, () => nchDelete(id, ctype));
+    authGuarded(el, () => nchDelete(id, ctype));
     return;
   }
   if (act === "nchAddGroup") {
