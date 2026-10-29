@@ -14,7 +14,14 @@ export type ChannelCred = Record<string, string>;
 export interface ChannelField {
   key: string;
   label: string;
-  placeholder: string;
+  // 需求号：NCH-WEBHOOK-1 需求内容：新增通用 Webhook 通知渠道 改动说明：placeholder 改可选——select 控件无占位符概念，前端渲染已兜底空串
+  placeholder?: string;
+  // 需求号：NCH-WEBHOOK-1
+  // 需求内容：新增通用 Webhook 通知渠道
+  // 改动说明：表单控件类型扩展——缺省单行 input，select 下拉（options 为 [值,文案] 对）、textarea 多行；
+  // 前端渲染分支与值收集（data-nchf + .value）天然兼容，绑定收集逻辑零改动
+  type?: 'select' | 'textarea';
+  options?: [string, string][];
 }
 
 export interface ChannelDef {
@@ -519,8 +526,145 @@ const pushplus: ChannelDef = {
   },
 };
 
-/* 注册表：dingtalk / wecom / email / qmsg / qqbot / feishu / bark / pushplus 已上线 */
-export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email, qmsg, qqbot, feishu, bark, pushplus };
+/* ── 通用 Webhook（用户自建接收端）──
+   需求号：NCH-WEBHOOK-1 需求内容：新增通用 Webhook 通知渠道 改动说明：新增本渠道定义与发送逻辑
+   cred: {url, format, template?, headers?}。format: plain=text/plain（plainify 净化）| md=text/markdown 原样 |
+   custom=按用户模板渲染（application/json），占位符 {{title}}/{{content}}（原文）/ {{content_json}}（JSON 转义文本，
+   无外引号，需嵌在用户已写的引号内）。headers 每行 "Key: Value"，显式 Content-Type 覆盖默认值。
+   成功判定 HTTP 2xx（自建接收端响应结构无法通用解析）；绑定验证码 POST 到该地址由用户在接收端查看。
+   安全：URL 仅允许 http/https（Workers 边缘环境无内网可达性，SSRF 风险低）；凭证 AES-GCM 加密存储，
+   hint 只显示 host + 路径尾 4 字符。多实例（不同接收端各绑一行）由增量 3 的行级绑定天然支持。 */
+const WEBHOOK_TIMEOUT_MS = 8000;
+const WEBHOOK_BODY_MAX_BYTES = 16384;
+const WEBHOOK_HEADERS_MAX = 10;
+const WEBHOOK_HEADER_KEY_MAX = 64;
+const WEBHOOK_HEADER_VALUE_MAX = 512;
+const WEBHOOK_TEMPLATE_MAX_LEN = 4096;
+const WEBHOOK_URL_MAX_LEN = 2048;
+const WEBHOOK_FORBIDDEN_HEADERS = new Set(['host', 'content-length']); // fetch 层受限/不可自算
+
+const WEBHOOK_FORMATS = new Set(['plain', 'md', 'custom']);
+
+/* 解析用户自定义请求头文本：每行 "Key: Value"，空行跳过；非法（无冒号/键字符集/超限）返回 null。
+   返回 null 时 validate 直接拒绝；send 阶段理论不会再遇到（validate 已把关），失败则忽略自定义头。 */
+function parseWebhookHeaders(raw: string): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    const i = t.indexOf(':');
+    if (i <= 0) return null;
+    const k = t.slice(0, i).trim();
+    const v = t.slice(i + 1).trim();
+    if (!/^[A-Za-z0-9-]+$/.test(k) || !v) return null;
+    if (k.length > WEBHOOK_HEADER_KEY_MAX || v.length > WEBHOOK_HEADER_VALUE_MAX) return null;
+    if (WEBHOOK_FORBIDDEN_HEADERS.has(k.toLowerCase())) return null;
+    out[k] = v;
+  }
+  return out;
+}
+
+/* 模板替换：全部用函数回调，避免 content 含 "$&" 等替换特殊字符被误展开 */
+function renderWebhookTemplate(tpl: string, title: string, content: string): string {
+  return tpl
+    .replace(/\{\{content_json\}\}/g, () => JSON.stringify(content).slice(1, -1))
+    .replace(/\{\{content\}\}/g, () => content)
+    .replace(/\{\{title\}\}/g, () => title);
+}
+
+const webhook: ChannelDef = {
+  type: 'webhook',
+  label: '自定义 Webhook',
+  desc: '把通知 POST 到你自己的 HTTP 接口（自建服务、ntfy、Home Assistant 等）。URL 自填，消息体裁可选纯文本 / Markdown / 自定义 JSON 模板，支持自定义请求头。验证码会 POST 到该地址，请在接收端查看。',
+  fields: [
+    { key: 'url', label: 'Webhook URL', placeholder: 'https://example.com/hook?token=…（完整 http/https 地址，参数拼在 URL 里）' },
+    { key: 'format', label: '消息体裁', type: 'select', options: [['plain', '纯文本（text/plain）'], ['md', 'Markdown（text/markdown）'], ['custom', '自定义 JSON 模板']] },
+    { key: 'template', label: '自定义模板（体裁选「自定义」时填写）', type: 'textarea', placeholder: '{"title":"{{title}}","content":"{{content_json}}"}' },
+    { key: 'headers', label: '自定义请求头（可选，每行一条 Key: Value）', type: 'textarea', placeholder: 'Authorization: Bearer xxx' },
+  ],
+  validate(raw) {
+    const url = typeof raw.url === 'string' ? raw.url.trim() : '';
+    if (!url || url.length > WEBHOOK_URL_MAX_LEN) return { ok: false, error: '请填写完整的 Webhook URL' };
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { ok: false, error: 'URL 格式不正确，请填 http/https 开头的完整地址' };
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false, error: '仅支持 http/https 协议' };
+    }
+    const format = typeof raw.format === 'string' ? raw.format.trim() : '';
+    if (!WEBHOOK_FORMATS.has(format)) return { ok: false, error: '请选择消息体裁' };
+    const template = typeof raw.template === 'string' ? raw.template.trim() : '';
+    if (format === 'custom') {
+      if (!template) return { ok: false, error: '自定义体裁必须填写模板' };
+      if (template.length > WEBHOOK_TEMPLATE_MAX_LEN) return { ok: false, error: `模板过长（上限 ${WEBHOOK_TEMPLATE_MAX_LEN} 字符）` };
+      if (!/\{\{(content|content_json)\}\}/.test(template)) {
+        return { ok: false, error: '模板必须包含 {{content}} 或 {{content_json}} 占位符，否则消息无内容' };
+      }
+    }
+    const headersRaw = typeof raw.headers === 'string' ? raw.headers.trim() : '';
+    if (headersRaw) {
+      if (headersRaw.split(/\r?\n/).filter((l) => l.trim()).length > WEBHOOK_HEADERS_MAX) {
+        return { ok: false, error: `自定义请求头最多 ${WEBHOOK_HEADERS_MAX} 条` };
+      }
+      if (!parseWebhookHeaders(headersRaw)) {
+        return { ok: false, error: '请求头格式不正确：每行一条 "Key: Value"（键仅字母数字与连字符）' };
+      }
+    }
+    const cred: ChannelCred = { url, format };
+    if (template) cred.template = template;
+    if (headersRaw) cred.headers = headersRaw;
+    return { ok: true, cred };
+  },
+  hint(cred) {
+    try {
+      const u = new URL(cred.url);
+      const tail = u.pathname.replace(/\/+$/, '').slice(-4) || '****';
+      return `Webhook · ${u.host}/…${tail}`;
+    } catch {
+      return 'Webhook · 自定义地址';
+    }
+  },
+  async send(cred, title, body) {
+    const format = cred.format || 'plain';
+    let payload: string;
+    let contentType: string;
+    if (format === 'custom') {
+      payload = renderWebhookTemplate(cred.template || '', title, body);
+      contentType = 'application/json';
+    } else if (format === 'md') {
+      payload = `## ${title}\n${body}`;
+      contentType = 'text/markdown; charset=utf-8';
+    } else {
+      payload = `${title}\n${plainify(body)}`;
+      contentType = 'text/plain; charset=utf-8';
+    }
+    payload = truncBytes(payload, WEBHOOK_BODY_MAX_BYTES);
+    const headers: Record<string, string> = { 'Content-Type': contentType };
+    if (cred.headers) {
+      const custom = parseWebhookHeaders(cred.headers);
+      if (custom) Object.assign(headers, custom); // 用户显式头（含 Content-Type）覆盖默认
+    }
+    let res: Response;
+    try {
+      res = await fetch(cred.url, {
+        method: 'POST',
+        headers,
+        body: payload,
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+      });
+    } catch (e) {
+      return { ok: false, error: `网络错误: ${String(e)}` };
+    }
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true }; // 2xx 即成功：自建接收端响应结构无法通用解析，响应体忽略
+  },
+};
+
+/* 注册表：dingtalk / wecom / email / qmsg / qqbot / feishu / bark / pushplus / webhook 已上线 */
+export const CHANNELS: Record<string, ChannelDef> = { dingtalk, wecom, email, qmsg, qqbot, feishu, bark, pushplus, webhook };
 
 export function getChannel(type: string): ChannelDef | undefined {
   return CHANNELS[type];

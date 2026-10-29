@@ -28,6 +28,9 @@
   bark      cred: {key, server?}       Bark iOS 推送；POST /push JSON，server=自建 bark-server（可选）
   pushplus  cred: {token}              微信公众号推送；template=markdown 官方支持，响应 code=200 仅代表
                                         受理（异步），900=超量 903=token 无效 905=未实名
+  webhook   cred: {url, format,        通用 Webhook（用户自建接收端）；POST 用户 URL，format=plain/md/custom
+            template?, headers?}       （custom 按模板渲染 {{title}}/{{content}}/{{content_json}}），请求头可选，
+                                        HTTP 2xx 即成功（自建端响应结构不解析），与 Worker 端 channels.ts 对齐
 
 payload 行结构（Worker 写入，契约固定）：
   {nid, uid, kind, title, body, channel_type, cred}
@@ -601,6 +604,75 @@ def send_pushplus(cred, title, body, row=None):
         return False, str(e)[:100]
 
 
+# ───────────────────────── 通用 Webhook（用户自建接收端） ─────────────────────────
+# 需求号：NCH-WEBHOOK-1
+# 需求内容：新增通用 Webhook 通知渠道
+# 改动说明：新增青龙端适配器（发送逻辑/常量与 Worker channels.ts webhook 渠道对齐）并注册 ADAPTERS
+WEBHOOK_TIMEOUT_S = 8
+WEBHOOK_BODY_MAX_BYTES = 16384
+WEBHOOK_HEADER_VALUE_MAX = 512
+WEBHOOK_FORBIDDEN_HEADERS = ("host", "content-length")  # fetch/HTTP 层受限头，不发送
+
+
+def _parse_webhook_headers(raw):
+    """每行 "Key: Value" → dict；空行跳过，非法行（无冒号/键字符集/超限/受限头）忽略该行。
+    绑定时 Worker 端 validate 已做严格校验（非法直接拒绝绑定），此处容错跳过即可。"""
+    out = {}
+    for line in str(raw or "").splitlines():
+        t = line.strip()
+        if not t or ":" not in t:
+            continue
+        k, v = t.split(":", 1)
+        k, v = k.strip(), v.strip()
+        if not k or not v or len(v) > WEBHOOK_HEADER_VALUE_MAX:
+            continue
+        if k.lower() in WEBHOOK_FORBIDDEN_HEADERS or not re.fullmatch(r"[A-Za-z0-9-]+", k):
+            continue
+        out[k] = v
+    return out
+
+
+def _render_webhook_template(tpl, title, content):
+    """占位符替换：{{content_json}} 为 JSON 转义文本（无外引号，嵌在用户写的引号内），
+    替换顺序 content_json → content → title，与 Worker 端一致。"""
+    out = tpl.replace("{{content_json}}", json.dumps(content, ensure_ascii=False)[1:-1])
+    out = out.replace("{{content}}", content)
+    return out.replace("{{title}}", title)
+
+
+def send_webhook(cred, title, body, row=None):
+    """通用 Webhook：POST 用户自填 URL。format=plain（text/plain，plain 净化）/ md（text/markdown，
+    markdown 版式原文）/ custom（application/json，按用户模板渲染，用户显式 Content-Type 可覆盖）。
+    成功判定 HTTP 2xx（urlopen 对非 2xx 抛 HTTPError），响应体忽略（自建端结构无法通用解析）。"""
+    url = cred.get("url", "")
+    if not url:
+        return False, "缺少 Webhook URL"
+    fmt = cred.get("format") or "plain"
+    if fmt == "custom":
+        payload = _render_webhook_template(cred.get("template") or "", title,
+                                           pick_body(row, "markdown", "plain")[1])
+        content_type = "application/json"
+    elif fmt == "md":
+        _, md_body = pick_body(row, "markdown", "plain")
+        payload = "## %s\n%s" % (title, md_body)
+        content_type = "text/markdown; charset=utf-8"
+    else:
+        _, text_body = pick_body(row, "plain")
+        payload = "%s\n%s" % (title, _plainify(text_body))
+        content_type = "text/plain; charset=utf-8"
+    headers = {"Content-Type": content_type}
+    headers.update(_parse_webhook_headers(cred.get("headers")))  # 用户显式头覆盖默认
+    data = _trunc_bytes(payload, WEBHOOK_BODY_MAX_BYTES).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=WEBHOOK_TIMEOUT_S):
+            return True, "sent"
+    except urllib.error.HTTPError as e:
+        return False, "HTTP %s %s" % (e.code, e.read().decode("utf-8", "ignore")[:100])
+    except Exception as e:
+        return False, str(e)[:100]
+
+
 # 适配器注册表（与 Worker 渠道注册表同构；新渠道上线时在此注册）
 # 约定：adapter(cred, title, body, row) —— row 为完整 payload 行（邮件适配器用 email_target）
 ADAPTERS = {
@@ -612,6 +684,7 @@ ADAPTERS = {
     "feishu": send_feishu,
     "bark": send_bark,
     "pushplus": send_pushplus,
+    "webhook": send_webhook,
 }
 
 

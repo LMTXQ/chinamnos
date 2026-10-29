@@ -1211,6 +1211,26 @@ const NCH_TYPES = [
       { key: "server", label: "服务器地址（可选）", placeholder: "留空使用官方 api.day.app；自建填 https:// 完整域名" },
     ],
   },
+  // 需求号：NCH-WEBHOOK-1
+  // 需求内容：新增通用 Webhook 通知渠道
+  // 改动说明：NCH_TYPES 登记条目——URL/体裁/模板/请求头四字段；select 与 textarea 为本渠道新增控件类型
+  {
+    type: "webhook",
+    label: "自定义 Webhook",
+    desc: "把通知 POST 到你自己的 HTTP 接口（自建服务、ntfy、Home Assistant 等）。URL 自填，消息体裁可选纯文本 / Markdown / 自定义 JSON 模板，支持自定义请求头。验证码会 POST 到该地址，请在接收端查看。",
+    ready: true,
+    steps: [
+      "准备一个能接收 POST 请求的 HTTP 接口（自建服务、ntfy、Home Assistant 自动化等均可）",
+      "填入 URL 与消息体裁提交；验证码会 POST 到该地址（自定义体裁按模板渲染），在接收端查看后回填",
+      "自定义模板占位符：{{title}}、{{content}}（原文）、{{content_json}}（JSON 转义文本，需嵌在你写的引号内）",
+    ],
+    fields: [
+      { key: "url", label: "Webhook URL", placeholder: "https://example.com/hook?token=…（完整 http/https 地址，参数拼在 URL 里）" },
+      { key: "format", label: "消息体裁", type: "select", options: [["plain", "纯文本（text/plain）"], ["md", "Markdown（text/markdown）"], ["custom", "自定义 JSON 模板"]] },
+      { key: "template", label: "自定义模板（体裁选「自定义」时填写）", type: "textarea", placeholder: '{"title":"{{title}}","content":"{{content_json}}"}' },
+      { key: "headers", label: "自定义请求头（可选，每行一条 Key: Value）", type: "textarea", placeholder: "Authorization: Bearer xxx" },
+    ],
+  },
   { type: "email", label: "邮件", desc: "一键绑定你的注册邮箱。到期提醒、采集播报等批量通知将发送到该邮箱；私信与审核类通知本就会发送到你的邮箱，不受此绑定影响。", ready: true, fields: [] },
 ];
 let nchAddState = null; // 待验证绑定 { type, cred }（重新发送验证码用）
@@ -1682,7 +1702,16 @@ function renderNchForm(type) {
       <div style="font-size:13px;font-weight:700;margin-bottom:6px">绑定步骤（第 2/3 步在你的机器人后台完成，缺一不可）：</div>
       <ol class="hint" style="margin:0;padding-left:18px;line-height:1.8">${t.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
     </div>` : ""}
-    ${t.fields.map((f) => `
+    <!-- 需求号：NCH-WEBHOOK-1 需求内容：新增通用 Webhook 通知渠道 改动说明：字段渲染按控件类型分流（select/textarea/缺省 input），值收集逻辑 data-nchf+value 零改动 -->
+    ${t.fields.map((f) => f.type === "select" ? `
+    <div class="fg">
+      <label>${esc(f.label)}</label>
+      <select class="inp" data-nchf="${esc(f.key)}">${(f.options || []).map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select>
+    </div>` : f.type === "textarea" ? `
+    <div class="fg">
+      <label>${esc(f.label)}</label>
+      <textarea class="inp" data-nchf="${esc(f.key)}" rows="3" placeholder="${esc(f.placeholder || "")}"></textarea>
+    </div>` : `
     <div class="fg">
       <label>${esc(f.label)}</label>
       <input class="inp" data-nchf="${esc(f.key)}" placeholder="${esc(f.placeholder || "")}">
