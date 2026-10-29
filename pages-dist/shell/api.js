@@ -167,14 +167,15 @@ export const api = {
   async notifyChannelCreate(channelType, cred) {
     return this.request("/api/me/notify-channels", { method: "POST", body: { channel_type: channelType, cred } });
   },
-  async notifyChannelVerify(code) {
-    return this.request("/api/me/notify-channels/verify", { method: "POST", body: { code } });
+  /* id = 绑定行 id（增量 3 多实例；不传则服务端回退按渠道类型，单实例语义） */
+  async notifyChannelVerify(code, id) {
+    return this.request("/api/me/notify-channels/verify", { method: "POST", body: { code, id } });
   },
-  async notifyChannelPrefs(channelType, kinds, kindsMode) {
-    return this.request("/api/me/notify-channels/prefs", { method: "POST", body: { channel_type: channelType, kinds, kinds_mode: kindsMode } });
+  async notifyChannelPrefs(channelType, kinds, kindsMode, id) {
+    return this.request("/api/me/notify-channels/prefs", { method: "POST", body: { channel_type: channelType, kinds, kinds_mode: kindsMode, id } });
   },
-  async notifyDigestPrefs(channelType, opts) {
-    return this.request("/api/me/notify-channels/digest-prefs", { method: "POST", body: { channel_type: channelType, ...opts } });
+  async notifyDigestPrefs(channelType, opts, id) {
+    return this.request("/api/me/notify-channels/digest-prefs", { method: "POST", body: { channel_type: channelType, ...opts, id } });
   },
   async digestGlobal() {
     return this.request("/api/me/digest-prefs");
@@ -182,14 +183,14 @@ export const api = {
   async digestGlobalSave(provinces, kinds, announcePush) {
     return this.request("/api/me/digest-prefs", { method: "PUT", body: { provinces, kinds, announce_push: announcePush } });
   },
-  async notifyChannelDelete(channelType) {
-    return this.request("/api/me/notify-channels/delete", { method: "POST", body: { channel_type: channelType } });
+  async notifyChannelDelete(channelType, id) {
+    return this.request("/api/me/notify-channels/delete", { method: "POST", body: { channel_type: channelType, id } });
   },
-  async notifyChannelBindCode(channelType) {
-    return this.request("/api/me/notify-channels/bindcode", { method: "POST", body: { channel_type: channelType } });
+  async notifyChannelBindCode(channelType, id) {
+    return this.request("/api/me/notify-channels/bindcode", { method: "POST", body: { channel_type: channelType, id } });
   },
-  async notifyChannelTargets(channelType, op, group, code) {
-    return this.request("/api/me/notify-channels/targets", { method: "POST", body: { channel_type: channelType, op, group, code } });
+  async notifyChannelTargets(channelType, op, group, code, id) {
+    return this.request("/api/me/notify-channels/targets", { method: "POST", body: { channel_type: channelType, op, group, code, id } });
   },
 
   /** 修改登录邮箱（k=当前密码派生密钥；两步：request 发验证码 → confirm 落库；成功后邮件通知渠道自动解绑） */

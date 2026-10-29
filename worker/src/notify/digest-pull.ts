@@ -44,12 +44,12 @@ export async function handleDigestSubscribers(request: Request, env: Env): Promi
   }
 
   const rows = await env.DB.prepare(
-    `SELECT c.user_id, c.channel_type, c.cred_enc, c.provinces_json, c.digest_mode, c.announce_push AS c_announce, g.pref_json AS g_pref, g.announce_push AS g_announce
+    `SELECT c.id, c.user_id, c.channel_type, c.cred_enc, c.provinces_json, c.digest_mode, c.announce_push AS c_announce, g.pref_json AS g_pref, g.announce_push AS g_announce
      FROM user_notify_channels c
      LEFT JOIN user_digest_prefs g ON g.user_id = c.user_id
      WHERE c.status = 'active' AND c.collect_report = 1
      ORDER BY c.user_id, c.channel_type`,
-  ).all<{ user_id: string; channel_type: string; cred_enc: string; provinces_json: string | null; digest_mode: string; c_announce: number | null; g_pref: string | null; g_announce: number }>();
+  ).all<{ id: string; user_id: string; channel_type: string; cred_enc: string; provinces_json: string | null; digest_mode: string; c_announce: number | null; g_pref: string | null; g_announce: number }>();
 
   const subscribers: Array<Record<string, unknown>> = [];
   for (const r of rows.results || []) {
@@ -64,6 +64,8 @@ export async function handleDigestSubscribers(request: Request, env: Env): Promi
         ? r.g_announce === 1
         : r.c_announce === 1;
       const sub: Record<string, unknown> = {
+        // 增量 3：多实例按绑定行 id 区分订户（青龙侧防重发键同步带上 nid）
+        nid: r.id,
         uid: r.user_id,
         channel_type: r.channel_type,
         cred,

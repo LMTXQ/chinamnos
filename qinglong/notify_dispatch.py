@@ -1085,8 +1085,10 @@ def process_digest_files(processed, failed, workers=8):
             if not msg:
                 continue
             title, formats = msg
+            # 增量 3：同渠道多实例按绑定行 nid 区分（缺省回退 channel，旧 Worker 行为不变）
+            nid_key = str(sub.get("nid") or "") or channel
             row = {
-                "nid": "collector_digest:%s:%s:%s" % (uid, round_at, channel),
+                "nid": "collector_digest:%s:%s:%s" % (uid, round_at, nid_key),
                 "uid": uid, "kind": "collector_digest",
                 "title": title, "body": formats.get("plain", ""), "channel_type": channel,
             }

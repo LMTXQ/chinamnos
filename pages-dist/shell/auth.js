@@ -852,46 +852,49 @@ function onModalClick(e) {
   if (act === "nchVerify") { authGuarded(el, nchVerify); return; }
   if (act === "nchResend") { authGuarded(el, nchResend); return; }
   if (act === "nchDelete") {
-    // withPending 调用 fn() 不带实参，ctype 必须在此闭包捕获
+    // withPending 调用 fn() 不带实参，id/ctype 必须在此闭包捕获
+    const id = el.dataset.id || "";
     const ctype = el.dataset.ctype || "";
-    withPending(el, () => nchDelete(ctype));
+    withPending(el, () => nchDelete(id, ctype));
     return;
   }
   if (act === "nchAddGroup") {
     // 按渠道 targetsMode 分流：callback = QQ 机器人取绑定码；manual = Qmsg 手动登记群号
+    const id = el.dataset.id || "";
     const ctype = el.dataset.ctype || "";
     const tmode = (NCH_TYPES.find((x) => x.type === ctype) || {}).targetsMode;
-    if (tmode === "manual") { renderNchTargets(ctype); return; }
-    authGuarded(el, () => nchBindCode(ctype));
+    if (tmode === "manual") { renderNchTargets(id, ctype); return; }
+    authGuarded(el, () => nchBindCode(id, ctype));
     return;
   }
   if (act === "nchTargetsAdd") {
-    const ctype = el.dataset.ctype || "";
-    authGuarded(el, () => nchTargetsAdd(ctype));
+    const e2 = el;
+    authGuarded(el, () => nchTargetsAdd(e2.dataset.id || "", e2.dataset.ctype || ""));
     return;
   }
   if (act === "nchTargetsResend") {
-    const el2 = el;
-    authGuarded(el, () => nchTargetsResend(el2.dataset.ctype || "", el2.dataset.group || ""));
+    const e2 = el;
+    authGuarded(el, () => nchTargetsResend(e2.dataset.id || "", e2.dataset.ctype || "", e2.dataset.group || ""));
     return;
   }
   if (act === "nchTargetsVerify") {
-    const el2 = el;
-    authGuarded(el, () => nchTargetsVerify(el2.dataset.ctype || "", el2.dataset.group || ""));
+    const e2 = el;
+    authGuarded(el, () => nchTargetsVerify(e2.dataset.id || "", e2.dataset.ctype || "", e2.dataset.group || ""));
     return;
   }
   if (act === "nchTargetsDel") {
-    const el2 = el;
-    authGuarded(el, () => nchTargetsRemove(el2.dataset.ctype || "", el2.dataset.group || ""));
+    const e2 = el;
+    authGuarded(el, () => nchTargetsRemove(e2.dataset.id || "", e2.dataset.ctype || "", e2.dataset.group || ""));
     return;
   }
-  if (act === "nchPrefs") { renderNchPrefs(el.dataset.ctype || ""); return; }
+  if (act === "nchPrefs") { renderNchPrefs(el.dataset.id || "", el.dataset.ctype || ""); return; }
   if (act === "nchPrefsSave") {
+    const pid = el.dataset.id || "";
     const ptype = el.dataset.ctype || "";
-    authGuarded(el, () => nchPrefsSave(ptype));
+    authGuarded(el, () => nchPrefsSave(pid, ptype));
     return;
   }
-  if (act === "nchDigest") { renderNchDigest(el.dataset.ctype || ""); return; }
+  if (act === "nchDigest") { renderNchDigest(el.dataset.id || "", el.dataset.ctype || ""); return; }
   if (act === "nchDigestGlobal") { renderNchDigestGlobal(); return; }
   if (act === "nchDigestGlobalSave") { authGuarded(el, nchDigestGlobalSave); return; }
   if (act === "nchKindsGlobal") { renderNchKindsGlobal(); return; }
@@ -937,8 +940,9 @@ function onModalClick(e) {
     return;
   }
   if (act === "nchDigestSave") {
+    const did = el.dataset.id || "";
     const dtype = el.dataset.ctype || "";
-    authGuarded(el, () => nchDigestSave(dtype));
+    authGuarded(el, () => nchDigestSave(did, dtype));
     return;
   }
   if (act === "authChangeEmail") { Auth.openChangeEmail(); return; }
@@ -1238,7 +1242,7 @@ async function renderNchList() {
       ${items.length ? items.map(nchCard).join("") : '<div class="nch-empty">还没有绑定任何通知渠道</div>'}
     </div>
     <div class="actions">
-      ${items.length < 3 ? '<button class="btn primary" data-act="nchAdd"><i data-icon="plus"></i>添加渠道</button>' : '<p class="hint" style="text-align:center">最多绑定 3 个通知渠道</p>'}
+      ${items.length < 3 ? '<button class="btn primary" data-act="nchAdd"><i data-icon="plus"></i>添加渠道</button>' : '<p class="hint" style="text-align:center">最多绑定 3 个渠道实例</p>'}
     </div>`;
   mountIcons(body);
 }
@@ -1261,34 +1265,36 @@ function nchCard(it) {
   const kindsSummary = it.status === "active"
     ? `<div class="h">接收类型：${it.kinds_mode === "custom" ? `独立 · ${it.kinds ? `${it.kinds.length} 类` : "全部"}` : "跟随账号全局"}</div>`
     : "";
+  /* 增量 3：全部按绑定行 id 寻址（同渠道多实例各管各的），data-ctype 仅用于文案与分流 */
+  const idAttr = `data-id="${esc(it.id)}" data-ctype="${esc(it.channel_type)}"`;
   const prefsBtn = it.status === "active"
-    ? '<button class="nch-del" data-act="nchPrefs" data-ctype="' + esc(it.channel_type) + '">接收类型</button>'
+    ? `<button class="nch-del" data-act="nchPrefs" ${idAttr}>接收类型</button>`
     : "";
   const digestBtn = it.status === "active"
-    ? '<button class="nch-del" data-act="nchDigest" data-ctype="' + esc(it.channel_type) + '">采集播报</button>'
+    ? `<button class="nch-del" data-act="nchDigest" ${idAttr}>采集播报</button>`
     : "";
   // 群目标渠道：QQ 机器人（生效实例取新绑定码）/ Qmsg（手动登记群号）
   const targetBtn = it.status === "active" && Array.isArray(it.targets)
-    ? '<button class="nch-del" data-act="nchAddGroup" data-ctype="' + esc(it.channel_type) + '">添加群</button>'
+    ? `<button class="nch-del" data-act="nchAddGroup" ${idAttr}>群设置</button>`
     : "";
   return `
     <div class="nch-card">
       <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}${kindsSummary}${digestSummary}</div>
       ${tag}
       <div style="display:flex;flex-direction:column;gap:6px;flex:none">${targetBtn}${prefsBtn}${digestBtn}
-      <button class="nch-del" data-act="nchDelete" data-ctype="${esc(it.channel_type)}">解绑</button></div>
+      <button class="nch-del" data-act="nchDelete" ${idAttr}>解绑</button></div>
     </div>`;
 }
 
 /* ── 接收类型（15 类事件偏好，方案追加）：跟随账号全局 / 独立配置 ── */
-let nchKindsEditor = null; // { type, mode }
+let nchKindsEditor = null; // { id, type, mode }
 
-function renderNchPrefs(type) {
-  const it = nchItems.find((x) => x.channel_type === type && x.status === "active");
+function renderNchPrefs(id, type) {
+  const it = nchItems.find((x) => x.id === id && x.status === "active");
   const body = getModal().querySelector("#nchBody");
   if (!body || !it) return;
   const mode = it.kinds_mode === "custom" ? "custom" : "follow";
-  nchKindsEditor = { type, mode };
+  nchKindsEditor = { id, type, mode };
   body.innerHTML = `
     <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 勾选该渠道要接收的事件类型。仅在站长放开对应消息类型时生效；全部取消勾选 = 该渠道静音（不解绑）。保存即时生效。</p>
     <p class="hint" style="margin:0 0 6px">事件偏好来源：</p>
@@ -1299,7 +1305,7 @@ function renderNchPrefs(type) {
     <div id="nchKindsScopeBody"></div>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
-      <button class="btn primary" data-act="nchPrefsSave" data-ctype="${esc(type)}">保存偏好</button>
+      <button class="btn primary" data-act="nchPrefsSave" data-id="${esc(id)}" data-ctype="${esc(type)}">保存偏好</button>
     </div>`;
   mountIcons(body);
   renderNchKindsScopeBody();
@@ -1308,7 +1314,7 @@ function renderNchPrefs(type) {
 function renderNchKindsScopeBody() {
   const body = getModal().querySelector("#nchKindsScopeBody");
   if (!body || !nchKindsEditor) return;
-  const it = nchItems.find((x) => x.channel_type === nchKindsEditor.type && x.status === "active");
+  const it = nchItems.find((x) => x.id === nchKindsEditor.id && x.status === "active");
   if (nchKindsEditor.mode === "follow") {
     const gk = nchGlobalPref?.kinds;
     body.innerHTML = `
@@ -1327,13 +1333,13 @@ function renderNchKindsScopeBody() {
     </div>`;
 }
 
-async function nchPrefsSave(type) {
+async function nchPrefsSave(id, type) {
   if (!type || !nchKindsEditor) return;
   const mode = nchKindsEditor.mode;
   const kinds = mode === "custom"
     ? [...getModal().querySelectorAll('#nchKindsBox input[type="checkbox"]:checked')].map((x) => x.dataset.kind)
     : [];
-  const r = await api.notifyChannelPrefs(type, kinds, mode);
+  const r = await api.notifyChannelPrefs(type, kinds, mode, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   toast("接收偏好已保存");
   await renderNchList();
@@ -1355,7 +1361,7 @@ function nchDigestSummaryText(p) {
 
 const NCH_DIGEST_CARRIERS = [["cmcc", "移动"], ["cucc", "联通"], ["ctcc", "电信"], ["cbn", "广电"]];
 let nchGlobalPref = null; // 账号全局偏好 { provinces, kinds }（null 字段 = 未设置 = 全收）
-let nchProvEditor = null; // 省份编辑器状态 { scope: 'channel'|'global', type?, carriers: {cmcc:Set,...}, active }
+let nchProvEditor = null; // 省份编辑器状态 { scope: 'channel'|'global', id?, type?, carriers: {cmcc:Set,...}, active }
 
 function nchDigestLoadPref(raw) {
   const allCodes = PROVINCES.map((p) => p.code);
@@ -1405,14 +1411,14 @@ function nchProvEditorTabs() {
 }
 
 /* 渠道级订阅视图：范围来源（跟随账号全局 / 独立配置）+ 开关；独立配置时展示省份编辑器 */
-function renderNchDigest(type) {
-  const it = nchItems.find((x) => x.channel_type === type && x.status === "active");
+function renderNchDigest(id, type) {
+  const it = nchItems.find((x) => x.id === id && x.status === "active");
   const body = getModal().querySelector("#nchBody");
   if (!body || !it) return;
   const enabled = it.collect_report === true;
   const mode = it.digest_mode === "custom" ? "custom" : "follow";
   // 载入范围：独立配置用渠道自有省份；跟随全局时预载全局范围（切换到独立的起始值）
-  nchProvEditor = { scope: "channel", mode, type, announce: it.announce_push === 1 ? 1 : it.announce_push === 0 ? 0 : null, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : nchGlobalPref?.provinces), active: "cmcc" };
+  nchProvEditor = { scope: "channel", mode, id, type, announce: it.announce_push === 1 ? 1 : it.announce_push === 0 ? 0 : null, carriers: nchDigestLoadPref(mode === "custom" ? it.provinces : nchGlobalPref?.provinces), active: "cmcc" };
   body.innerHTML = `
     ${NCH_PROV_EDITOR_STYLE}
     <p class="hint" style="margin-top:0">${esc(nchTypeLabel(type))} · 订阅「采集播报」：每轮采集结束后推送关注范围的资费变更摘要（新增 / 修改 / 下架计数，含当日累计）。随采集轮次推送（当前约每 6 小时一轮），仅当关注范围内有变化时才会推送。保存即时生效。</p>
@@ -1434,7 +1440,7 @@ function renderNchDigest(type) {
     <div id="nchDigestScopeBody"></div>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
-      <button class="btn primary" data-act="nchDigestSave" data-ctype="${esc(type)}">保存</button>
+      <button class="btn primary" data-act="nchDigestSave" data-id="${esc(id)}" data-ctype="${esc(type)}">保存</button>
     </div>`;
   mountIcons(body);
   renderNchDigestScopeBody();
@@ -1536,7 +1542,7 @@ async function nchKindsGlobalSave() {
   renderNchKindsGlobal();
 }
 
-async function nchDigestSave(type) {
+async function nchDigestSave(id, type) {
   if (!type || !nchProvEditor) return;
   const enabled = getModal().querySelector("#nchDigestEnabled")?.checked === true;
   const mode = nchProvEditor.mode;
@@ -1547,7 +1553,7 @@ async function nchDigestSave(type) {
       if (codes.length) provinces[c] = codes;
     }
   }
-  const r = await api.notifyDigestPrefs(type, { enabled, mode, provinces, announce_push: nchProvEditor.announce });
+  const r = await api.notifyDigestPrefs(type, { enabled, mode, provinces, announce_push: nchProvEditor.announce }, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "保存失败，请稍后再试"); return; }
   toast("采集播报偏好已保存");
   await renderNchList();
@@ -1556,11 +1562,15 @@ async function nchDigestSave(type) {
 function renderNchSelect() {
   const body = getModal().querySelector("#nchBody");
   if (!body) return;
-  // 已生效渠道不可再走绑定（更换需先解绑）；待验证渠道允许重填（顶替原 pending）
-  const activeTypes = new Set(nchItems.filter((x) => x.status === "active").map((x) => x.channel_type));
+  // 增量 3：同类型可再添加多个实例（如多个 QQ 群机器人 / 多个 Qmsg Key）；
+  // 例外 email 凭证即账号邮箱，只能一个；已生效数量仅用于文案提示
+  const activeCounts = new Map();
+  for (const x of nchItems) {
+    if (x.status === "active") activeCounts.set(x.channel_type, (activeCounts.get(x.channel_type) || 0) + 1);
+  }
   const pendingTypes = new Set(nchItems.filter((x) => x.status === "pending").map((x) => x.channel_type));
   body.innerHTML = `
-    <p class="hint" style="margin-top:0">选择要添加的通知渠道（最多绑定 3 个）：</p>
+    <p class="hint" style="margin-top:0">选择要添加的通知渠道（最多绑定 3 个渠道实例，同类型可多个）：</p>
     <div class="nch-risk" style="border:1px dashed var(--line,#d0d3da);border-radius:8px;padding:8px 10px;margin:0 0 10px;font-size:12px;line-height:1.7;opacity:.85">
       <b>风险说明：</b>绑定后，你的渠道凭证（如 Webhook 地址、加签密钥）将以 AES-GCM 加密存储于站点数据库，仅用于发送绑定验证码和你勾选的站点通知；任何页面与日志仅显示脱敏尾号，不回显完整凭证，也不会提供给任何第三方。如不接受上述存储与使用方式，请勿绑定。
     </div>
@@ -1571,16 +1581,19 @@ function renderNchSelect() {
           <div class="nch-meta"><div class="t">${esc(t.label)}</div><div class="h">${esc(t.desc)}</div></div>
           <span class="nch-soon">即将上线</span>
         </div>`;
-        if (activeTypes.has(t.type)) return `
+        const cnt = activeCounts.get(t.type) || 0;
+        // email 单绑定（服务端同口径拦截）；其余渠道已生效时仍可再添加实例
+        if (cnt && t.type === "email") return `
         <div class="nch-card soon">
           <div class="nch-meta"><div class="t">${esc(t.label)}</div><div class="h">${esc(t.desc)}</div></div>
           <span class="nch-tag ok">已绑定</span>
         </div>`;
         const pend = pendingTypes.has(t.type);
+        const tagTxt = pend ? "待验证 · 点击重填" : cnt ? `已绑定 ${cnt} 个 · 再添加` : "可选";
         return `
         <div class="nch-card pick" data-act="nchPick" data-ctype="${esc(t.type)}">
           <div class="nch-meta"><div class="t">${esc(t.label)}</div><div class="h">${esc(t.desc)}</div></div>
-          <span class="nch-tag${pend ? " pending" : " ok"}">${pend ? "待验证 · 点击重填" : "可选"}</span>
+          <span class="nch-tag${pend ? " pending" : " ok"}">${esc(tagTxt)}</span>
         </div>`;
       }).join("")}
     </div>
@@ -1641,6 +1654,8 @@ async function nchSubmit() {
   }
   const r = await api.notifyChannelCreate(t.type, cred);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "发送失败，请稍后再试"); return; }
+  // 增量 3：同渠道重复凭证只做软提示，不拦绑定（尾号碰撞可能）
+  if (r.data?.duplicate_hint) toast("提示：该凭证与已有绑定相同，若非有意多实例可先解绑旧实例");
   // 无字段渠道（邮件）绑定即生效：跳过验证码视图直接回列表
   if (r.data?.activated) {
     nchAddState = null;
@@ -1654,7 +1669,8 @@ async function nchSubmit() {
     renderNchBindCode(r.data.bind_code);
     return;
   }
-  nchAddState = { type: t.type, cred };
+  // 增量 3：记住本次创建的行 id，验证码回填按行激活（多实例并存不串行）
+  nchAddState = { id: r.data?.id, type: t.type, cred };
   renderNchVerify();
 }
 
@@ -1665,23 +1681,23 @@ function renderNchBindCode(code) {
   body.innerHTML = `
     <p class="hint" style="margin-top:0">实例已登记。把机器人拉进目标群，然后在群内 <b>@机器人</b> 发送下面的绑定码（机器人会回复确认）：</p>
     <div style="display:flex;justify-content:center;padding:14px 0"><span style="font-size:32px;font-weight:800;letter-spacing:10px;font-family:ui-monospace,monospace">${esc(code)}</span></div>
-    <p class="hint" style="margin:0 0 6px">· 绑定码 24 小时内有效，发送成功立即消费（一个码绑一个群）；<br>· 同一机器人可绑多个群：生效后回渠道列表点「添加群」再取新码；<br>· 需群主在群设置开启「机器人主动在群聊内发言」，否则主动通知发送失败；<br>· 平台「回调配置」需为 Webhook 模式且【接收事件配置】选【全部接受】，否则收不到绑定事件。</p>
+    <p class="hint" style="margin:0 0 6px">· 绑定码 24 小时内有效，发送成功立即消费（一个码绑一个群，可重复取码绑更多群）；<br>· 同一实例可绑多个群：随时回渠道列表点「群设置」再取新码；<br>· 需群主在群设置开启「机器人主动在群聊内发言」，否则主动通知发送失败；<br>· 平台「回调配置」需为 Webhook 模式且【接收事件配置】选【全部接受】，否则收不到绑定事件。</p>
     <div class="actions"><button class="btn primary" data-act="nchBack">完成</button></div>`;
   mountIcons(body);
 }
 
-/* 「添加群」：为已生效 QQ 机器人实例取新绑定码 */
-async function nchBindCode(ctype) {
-  if (!ctype) return;
-  const r = await api.notifyChannelBindCode(ctype);
+/* 「添加群」：为已生效 QQ 机器人实例取新绑定码（按行 id 定位，多实例各取各的码） */
+async function nchBindCode(id, ctype) {
+  if (!id) return;
+  const r = await api.notifyChannelBindCode(ctype, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "获取失败，请稍后再试"); return; }
   if (r.data?.bind_code) renderNchBindCode(r.data.bind_code);
 }
 
 /* Qmsg 手动群目标视图：两段式（输入群号发验证码 → 群内收码回填确认），对齐企微/钉钉绑定流。
    前置：Qmsg 控制台已绑群（验证码发不出去=未绑定）；群通知需群主开「机器人主动在群聊内发言」。 */
-function renderNchTargets(ctype) {
-  const it = nchItems.find((x) => x.channel_type === ctype && x.status === "active");
+function renderNchTargets(id, ctype) {
+  const it = nchItems.find((x) => x.id === id && x.status === "active");
   const body = getModal().querySelector("#nchBody");
   if (!body || !it) return;
   const targets = Array.isArray(it.targets) ? it.targets : [];
@@ -1691,7 +1707,7 @@ function renderNchTargets(ctype) {
     <div class="nch-list">
       ${targets.map((g) => `
       <div class="nch-card"><div class="nch-meta"><div class="t">群 ${esc(g)}</div></div>
-      <button class="nch-del" data-act="nchTargetsDel" data-ctype="${esc(ctype)}" data-group="${esc(g)}">移除</button></div>`).join("") || '<div class="nch-empty">还没有登记群</div>'}
+      <button class="nch-del" data-act="nchTargetsDel" data-id="${esc(id)}" data-ctype="${esc(ctype)}" data-group="${esc(g)}">移除</button></div>`).join("") || '<div class="nch-empty">还没有登记群</div>'}
     </div>
     <div class="fg" style="margin-top:10px">
       <label>添加群号</label>
@@ -1699,13 +1715,13 @@ function renderNchTargets(ctype) {
     </div>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
-      <button class="btn primary" data-act="nchTargetsAdd" data-ctype="${esc(ctype)}">发送验证码</button>
+      <button class="btn primary" data-act="nchTargetsAdd" data-id="${esc(id)}" data-ctype="${esc(ctype)}">发送验证码</button>
     </div>`;
   mountIcons(body);
 }
 
 /* 回填视图：验证码已发到群，群内查看后回填确认 */
-function renderNchTargetVerify(ctype, group) {
+function renderNchTargetVerify(id, ctype, group) {
   const body = getModal().querySelector("#nchBody");
   if (!body) return;
   body.innerHTML = `
@@ -1715,52 +1731,53 @@ function renderNchTargetVerify(ctype, group) {
       <input class="inp" id="nchTargetCode" inputmode="numeric" maxlength="6" placeholder="群里收到的 6 位数字">
     </div>
     <div class="actions">
-      <button class="btn ghost" data-act="nchTargetsResend" data-ctype="${esc(ctype)}" data-group="${esc(group)}">重新发送</button>
-      <button class="btn primary" data-act="nchTargetsVerify" data-ctype="${esc(ctype)}" data-group="${esc(group)}">确认添加</button>
+      <button class="btn ghost" data-act="nchTargetsResend" data-id="${esc(id)}" data-ctype="${esc(ctype)}" data-group="${esc(group)}">重新发送</button>
+      <button class="btn primary" data-act="nchTargetsVerify" data-id="${esc(id)}" data-ctype="${esc(ctype)}" data-group="${esc(group)}">确认添加</button>
     </div>`;
   mountIcons(body);
 }
 
-async function nchTargetsAdd(ctype) {
+async function nchTargetsAdd(id, ctype) {
   const inp = getModal().querySelector("#nchGroupNo");
   const group = (inp?.value || "").trim();
   if (!/^\d{5,11}$/.test(group)) { toast("请输入 5~11 位数字 QQ 群号"); return; }
-  const r = await api.notifyChannelTargets(ctype, "add", group);
+  const r = await api.notifyChannelTargets(ctype, "add", group, undefined, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "发送失败，请稍后再试"); return; }
   toast("验证码已发送到群");
-  renderNchTargetVerify(ctype, group);
+  renderNchTargetVerify(id, ctype, group);
 }
 
-async function nchTargetsResend(ctype, group) {
-  const r = await api.notifyChannelTargets(ctype, "add", group);
+async function nchTargetsResend(id, ctype, group) {
+  const r = await api.notifyChannelTargets(ctype, "add", group, undefined, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "发送失败，请稍后再试"); return; }
   toast("验证码已重新发送");
 }
 
-async function nchTargetsVerify(ctype, group) {
+async function nchTargetsVerify(id, ctype, group) {
   const inp = getModal().querySelector("#nchTargetCode");
   const code = (inp?.value || "").trim();
   if (!/^\d{6}$/.test(code)) { toast("请输入 6 位数字验证码"); return; }
-  const r = await api.notifyChannelTargets(ctype, "verify", group, code);
+  const r = await api.notifyChannelTargets(ctype, "verify", group, code, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "验证失败，请稍后再试"); return; }
   toast("群已添加");
   await renderNchList();
-  renderNchTargets(ctype);
+  renderNchTargets(id, ctype);
 }
 
-async function nchTargetsRemove(ctype, group) {
-  const r = await api.notifyChannelTargets(ctype, "remove", group);
+async function nchTargetsRemove(id, ctype, group) {
+  const r = await api.notifyChannelTargets(ctype, "remove", group, undefined, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "操作失败，请稍后再试"); return; }
   toast("已移除");
   await renderNchList();
-  renderNchTargets(ctype);
+  renderNchTargets(id, ctype);
 }
 
 async function nchVerify() {
   const inp = getModal().querySelector("#nchCode");
   const code = (inp?.value || "").trim();
   if (!/^\d{6}$/.test(code)) { toast("请输入 6 位数字验证码"); return; }
-  const r = await api.notifyChannelVerify(code);
+  // 增量 3：带行 id 定位待验证行（多实例并存时不再靠"最新一条"猜）
+  const r = await api.notifyChannelVerify(code, nchAddState?.id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "验证失败，请稍后再试"); return; }
   nchAddState = null;
   toast("通知渠道绑定成功");
@@ -1774,9 +1791,9 @@ async function nchResend() {
   toast("验证码已重新发送");
 }
 
-async function nchDelete(ctype) {
-  if (!ctype) return;
-  const r = await api.notifyChannelDelete(ctype);
+async function nchDelete(id, ctype) {
+  if (!id && !ctype) return;
+  const r = await api.notifyChannelDelete(ctype, id);
   if (!r.ok) { toast(typeof r.error === "string" ? r.error : "解绑失败，请稍后再试"); return; }
   toast("已解绑");
   await renderNchList();

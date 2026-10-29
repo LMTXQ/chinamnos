@@ -20,7 +20,10 @@ export async function getSiteName(env: Env): Promise<string> {
 /* ── 用户通知渠道绑定（站外通知推送方案 · 小方案 A）──
    绑定流：发起（校验凭证 → 直发验证码 → pending）→ 回填激活 → 解绑。
    凭证 AES-GCM 加密落库，任何响应/日志只出 target_hint 脱敏串。
-   同类型重复绑定顶替旧记录（保留原行 id 与 collect_report）；总数上限 3。 */
+   同类型多实例（增量 3，2026-10-29）：0044 已拆除 (user_id, channel_type) 唯一索引——
+   同渠道可并存多个生效实例；同渠道同凭证的「待验证行」就地重填（不占新名额）；
+   重复凭证仅软提示不硬拦；email 凭证即账号邮箱，保留单绑定。
+   端点寻址：优先按绑定行 id，未传 id 回退按渠道类型（旧前端兼容，单实例语义）。 */
 
 const CODE_TTL = 10 * 60 * 1000;
 const BIND_CODE_TTL = 24 * 3600 * 1000; // QQ 机器人绑定码（群内发码消费）有效期
@@ -95,12 +98,18 @@ export async function handleNotifyChannelPrefs(request: Request, env: Env): Prom
   const type = typeof body.channel_type === 'string' ? body.channel_type : '';
   if (!type) return fail(ERR.VALIDATION_ERROR, '缺少渠道类型', 400, { field: 'channel_type' });
   const kindsMode = body.kinds_mode === 'custom' ? 'custom' : 'follow';
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
 
-  const r = await env.DB.prepare(
-    'UPDATE user_notify_channels SET kinds_json = ?1, kinds_mode = ?2 WHERE user_id = ?3 AND channel_type = ?4',
-  ).bind(JSON.stringify(kinds), kindsMode, g.viewer.id, type).run();
+  // 增量 3：多实例按行 id 寻址；未传 id 保留旧的按渠道类型语义
+  const r = id
+    ? await env.DB.prepare(
+      'UPDATE user_notify_channels SET kinds_json = ?1, kinds_mode = ?2 WHERE id = ?3 AND user_id = ?4',
+    ).bind(JSON.stringify(kinds), kindsMode, id, g.viewer.id).run()
+    : await env.DB.prepare(
+      'UPDATE user_notify_channels SET kinds_json = ?1, kinds_mode = ?2 WHERE user_id = ?3 AND channel_type = ?4',
+    ).bind(JSON.stringify(kinds), kindsMode, g.viewer.id, type).run();
   if (!r.meta.changes) return fail(ERR.NOT_FOUND, '未找到该渠道绑定', 404, { field: 'channel_type' });
-  return ok({ channel_type: type, kinds, kinds_mode: kindsMode });
+  return ok({ id, channel_type: type, kinds, kinds_mode: kindsMode });
 }
 
 // GET /api/me/digest-prefs —— 账号全局播报范围 + 事件偏好 + 公告开关（0041/0042/0043；null = 未设置 = 全收/关）
@@ -206,11 +215,18 @@ export async function handleNotifyChannelDigestPrefs(request: Request, env: Env)
   try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
   const type = typeof body.channel_type === 'string' ? body.channel_type : '';
   if (!type || !getChannel(type)) return fail(ERR.VALIDATION_ERROR, '该渠道类型暂不支持', 400, { field: 'channel_type' });
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
 
-  const row = await env.DB.prepare(
-    `SELECT collect_report, digest_mode, provinces_json, announce_push FROM user_notify_channels
+  // 增量 3：多实例按行 id 寻址；未传 id 保留旧的按渠道类型语义
+  const row = id
+    ? await env.DB.prepare(
+      `SELECT id, collect_report, digest_mode, provinces_json, announce_push FROM user_notify_channels
+     WHERE id = ?1 AND user_id = ?2 AND status = 'active'`,
+    ).bind(id, g.viewer.id).first<{ id: string; collect_report: number; digest_mode: string; provinces_json: string | null; announce_push: number | null }>()
+    : await env.DB.prepare(
+      `SELECT id, collect_report, digest_mode, provinces_json, announce_push FROM user_notify_channels
      WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active'`,
-  ).bind(g.viewer.id, type).first<{ collect_report: number; digest_mode: string; provinces_json: string | null; announce_push: number | null }>();
+    ).bind(g.viewer.id, type).first<{ id: string; collect_report: number; digest_mode: string; provinces_json: string | null; announce_push: number | null }>();
   if (!row) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定', 404, { field: 'channel_type' });
 
   const mode = typeof body.mode === 'string' && (body.mode === 'custom' || body.mode === 'follow') ? body.mode : row.digest_mode;
@@ -229,8 +245,8 @@ export async function handleNotifyChannelDigestPrefs(request: Request, env: Env)
   await env.DB.prepare(
     `UPDATE user_notify_channels
      SET collect_report = ?1, digest_mode = ?2, provinces_json = ?3, announce_push = ?4
-     WHERE user_id = ?5 AND channel_type = ?6 AND status = 'active'`,
-  ).bind(nextEnabled, mode, provincesJson, nextAnnounce, g.viewer.id, type).run();
+     WHERE id = ?5 AND user_id = ?6`,
+  ).bind(nextEnabled, mode, provincesJson, nextAnnounce, row.id, g.viewer.id).run();
 
   let provincesOut: unknown = [];
   if (provincesJson) { try { provincesOut = JSON.parse(provincesJson); } catch { provincesOut = []; } }
@@ -263,9 +279,8 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
   const v = def.validate(raw, g.viewer.email);
   if (!v.ok) return fail(ERR.VALIDATION_ERROR, v.error, 400, { field: 'cred' });
 
-  // 绑定数上限（顶替同类型不占新名额）；已生效渠道禁止重复绑定（更换需先解绑）。
   // F12：名额只统计「生效中 + 验证期内的待验证」——过期 pending 是死数据，先清掉再计数，
-  // 防止后续扩渠道（飞书/PushPlus 等验证码渠道上线）后死行占满名额
+  // 防止死行占满名额。增量 3：同类型多实例按总行数计名额（2 qmsg + 1 qqbot = 3 用满即止）。
   await env.DB.prepare(
     `DELETE FROM user_notify_channels
      WHERE user_id = ?1 AND status = 'pending' AND verify_expires_at IS NOT NULL AND verify_expires_at < ?2`,
@@ -273,14 +288,29 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
   const total = await env.DB.prepare(
     'SELECT COUNT(*) AS c FROM user_notify_channels WHERE user_id = ?1',
   ).bind(g.viewer.id).first<{ c: number }>();
-  const existing = await env.DB.prepare(
-    'SELECT id, status FROM user_notify_channels WHERE user_id = ?1 AND channel_type = ?2',
-  ).bind(g.viewer.id, type).first<{ id: string; status: string }>();
-  if (existing?.status === 'active') {
-    return fail(ERR.VALIDATION_ERROR, '该渠道已绑定，请先解绑后再更换', 400);
+
+  const hint = def.hint(v.cred);
+
+  // email 特例：凭证即账号邮箱，多实例无意义 → 保留单绑定（原靠唯一索引拦截，拆索引后须业务层兜住）
+  if (type === 'email') {
+    const act = await env.DB.prepare(
+      `SELECT id FROM user_notify_channels WHERE user_id = ?1 AND channel_type = 'email' AND status = 'active'`,
+    ).bind(g.viewer.id).first<{ id: string }>();
+    if (act) return fail(ERR.VALIDATION_ERROR, '邮件渠道已绑定，如需更换请先解绑（或直接修改登录邮箱）', 400);
   }
-  if (!existing && (total?.c ?? 0) >= MAX_BINDINGS) {
-    return fail(ERR.VALIDATION_ERROR, `最多绑定 ${MAX_BINDINGS} 个通知渠道`, 400);
+
+  // 同渠道同凭证的「待验证行」就地重填（重发验证码 / 改错重填不占新名额、不遗留死行）
+  const reuse = await env.DB.prepare(
+    `SELECT id FROM user_notify_channels
+     WHERE user_id = ?1 AND channel_type = ?2 AND status = 'pending' AND target_hint = ?3`,
+  ).bind(g.viewer.id, type, hint).first<{ id: string }>();
+  // 重复凭证软提示（尾号碰撞可能，不硬拦——增量 3 决策）
+  const dup = await env.DB.prepare(
+    `SELECT id FROM user_notify_channels
+     WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active' AND target_hint = ?3`,
+  ).bind(g.viewer.id, type, hint).first<{ id: string }>();
+  if (!reuse && (total?.c ?? 0) >= MAX_BINDINGS) {
+    return fail(ERR.VALIDATION_ERROR, `最多绑定 ${MAX_BINDINGS} 个渠道实例`, 400);
   }
 
   // 邮件类渠道（skipVerify）绑定即生效；QQ 机器人（bindByCallback）不外发验证码——
@@ -301,27 +331,31 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
   const credEnc = await sealCred(env, v.cred);
   const codeHash = activated ? null : await sha256Hex(code);
   const expires = activated ? null : (def.bindByCallback ? now + BIND_CODE_TTL : now + CODE_TTL);
-  // 同类型顶替：ON CONFLICT 保留原 id / created_at / collect_report，重置状态
-  await env.DB.prepare(
-    `INSERT INTO user_notify_channels
-       (id, user_id, channel_type, cred_enc, target_hint, status, verify_code_hash, verify_expires_at, collect_report, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)
-     ON CONFLICT(user_id, channel_type) DO UPDATE SET
-       cred_enc = excluded.cred_enc,
-       target_hint = excluded.target_hint,
-       status = excluded.status,
-       verify_code_hash = excluded.verify_code_hash,
-       verify_expires_at = excluded.verify_expires_at`,
-  ).bind(
-    existing?.id || ulid(), g.viewer.id, type, credEnc, def.hint(v.cred),
-    activated ? 'active' : 'pending', codeHash, expires, now,
-  ).run();
+  // 增量 3：改纯 INSERT（唯一索引已拆，同类型多实例并存）；
+  // 同名待验证行（reuse）就地更新，保留原 id / created_at，不占新名额
+  const rowId = reuse?.id || ulid();
+  if (reuse) {
+    await env.DB.prepare(
+      `UPDATE user_notify_channels
+       SET cred_enc = ?1, target_hint = ?2, status = ?3, verify_code_hash = ?4, verify_expires_at = ?5
+       WHERE id = ?6 AND user_id = ?7`,
+    ).bind(credEnc, hint, activated ? 'active' : 'pending', codeHash, expires, rowId, g.viewer.id).run();
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO user_notify_channels
+         (id, user_id, channel_type, cred_enc, target_hint, status, verify_code_hash, verify_expires_at, collect_report, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)`,
+    ).bind(
+      rowId, g.viewer.id, type, credEnc, hint,
+      activated ? 'active' : 'pending', codeHash, expires, now,
+    ).run();
+  }
 
-  if (activated) return ok({ activated: true, channel_type: type });
+  if (activated) return ok({ id: rowId, activated: true, channel_type: type, duplicate_hint: !!dup });
 
   // QQ 机器人（bindByCallback）：不外发，绑定码随响应返回由前端展示，群内发码后由回调激活/追加
   if (def.bindByCallback) {
-    return ok({ bind_code: code, channel_type: type, expires_in_hours: 24 });
+    return ok({ id: rowId, bind_code: code, channel_type: type, expires_in_hours: 24, duplicate_hint: !!dup });
   }
 
   // 验证码真实外发（失败保留 pending，用户可重发；每次重发重新计码）
@@ -334,12 +368,12 @@ export async function handleNotifyChannelCreate(request: Request, env: Env): Pro
     `站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n绑定验证码：**${code}**（10 分钟内有效）\n\n若非你本人在 ${siteName} 站点操作，请忽略本消息。`,
   );
   if (!r.ok) return fail(ERR.INTERNAL_ERROR, `验证码发送失败：${r.error || '渠道无响应'}`, 502);
-  return ok({ sent: true, channel_type: type });
+  return ok({ id: rowId, sent: true, channel_type: type, duplicate_hint: !!dup });
 }
 
-// POST /api/me/notify-channels/bindcode  body: { channel_type }
+// POST /api/me/notify-channels/bindcode  body: { id?, channel_type }
 //   QQ 机器人「添加群」：为已生效实例生成新绑定码（24h、消费即失效），随响应返回由前端展示。
-//   行级 id 寻址就绪：单实例期按 (user_id, channel_type) 定行，增量 3 多实例后改按行 id 传入即可。
+//   行寻址：优先按绑定行 id（增量 3 多实例），未传 id 回退按 (user_id, channel_type)。
 export async function handleNotifyChannelBindCode(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
@@ -354,9 +388,14 @@ export async function handleNotifyChannelBindCode(request: Request, env: Env): P
   const rl = await hitLimit(env, `nch:create:${g.viewer.id}`, 5, 3600);
   if (rl.limited) return fail(ERR.RATE_LIMITED, '操作过于频繁，请 1 小时后再试', 429);
 
-  const row = await env.DB.prepare(
-    `SELECT id FROM user_notify_channels WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active'`,
-  ).bind(g.viewer.id, type).first<{ id: string }>();
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  const row = id
+    ? await env.DB.prepare(
+      `SELECT id FROM user_notify_channels WHERE id = ?1 AND user_id = ?2 AND status = 'active'`,
+    ).bind(id, g.viewer.id).first<{ id: string }>()
+    : await env.DB.prepare(
+      `SELECT id FROM user_notify_channels WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active'`,
+    ).bind(g.viewer.id, type).first<{ id: string }>();
   if (!row) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定，请先完成实例绑定', 404, { field: 'channel_type' });
 
   const code = randomDigits(6);
@@ -366,13 +405,13 @@ export async function handleNotifyChannelBindCode(request: Request, env: Env): P
   return ok({ bind_code: code, channel_type: type, expires_in_hours: 24 });
 }
 
-// POST /api/me/notify-channels/targets  body: { channel_type, op: 'add'|'verify'|'remove', group, code? }
+// POST /api/me/notify-channels/targets  body: { id?, channel_type, op: 'add'|'verify'|'remove', group, code? }
 //   Qmsg 群目标管理（对齐企微/钉钉验证码流）：
 //   add    = 发起：经 Qmsg 向该群发送 6 位验证码（群未在 Qmsg 控制台绑定时发送失败——前置条件天然校验），
 //            待验证群号存 cred.pending_group，码哈希存行 verify_code_hash（10 分钟 TTL，CODE_TTL）；
 //   verify = 回填：校验 pending_group 与码 → 群号正式入 targets（一次性消费）→ 清 pending；
 //   remove = 移除已登记群。
-//   同一时间仅一个待验证群（新 add 覆盖旧的）；行级 id 寻址就绪（增量 3 改传行 id）。
+//   同一时间仅一个待验证群（新 add 覆盖旧的）；行寻址优先 id，未传回退 channel_type（增量 3）。
 export async function handleNotifyChannelTargets(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
@@ -390,10 +429,16 @@ export async function handleNotifyChannelTargets(request: Request, env: Env): Pr
   const rl = await hitLimit(env, `nch:create:${g.viewer.id}`, 5, 3600);
   if (rl.limited) return fail(ERR.RATE_LIMITED, '操作过于频繁，请 1 小时后再试', 429);
 
-  const row = await env.DB.prepare(
-    `SELECT id, cred_enc, verify_code_hash, verify_expires_at FROM user_notify_channels
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  const row = id
+    ? await env.DB.prepare(
+      `SELECT id, cred_enc, verify_code_hash, verify_expires_at FROM user_notify_channels
+     WHERE id = ?1 AND user_id = ?2 AND status = 'active'`,
+    ).bind(id, g.viewer.id).first<{ id: string; cred_enc: string; verify_code_hash: string | null; verify_expires_at: number | null }>()
+    : await env.DB.prepare(
+      `SELECT id, cred_enc, verify_code_hash, verify_expires_at FROM user_notify_channels
      WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active'`,
-  ).bind(g.viewer.id, type).first<{ id: string; cred_enc: string; verify_code_hash: string | null; verify_expires_at: number | null }>();
+    ).bind(g.viewer.id, type).first<{ id: string; cred_enc: string; verify_code_hash: string | null; verify_expires_at: number | null }>();
   if (!row) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定', 404, { field: 'channel_type' });
 
   const cred = await openCred(env, row.cred_enc);
@@ -461,10 +506,17 @@ export async function handleNotifyChannelVerify(request: Request, env: Env): Pro
   const rl = await hitLimit(env, `nch:verify:${g.viewer.id}`, 10, 3600);
   if (rl.limited) return fail(ERR.RATE_LIMITED, '尝试次数过多，请 1 小时后再试', 429);
 
-  const row = await env.DB.prepare(
-    `SELECT id, channel_type, verify_code_hash, verify_expires_at FROM user_notify_channels
+  // 增量 3：多实例待验证行并存——优先按行 id 定位（前端创建后即持有 id），未传 id 回退最新一条
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  const row = id
+    ? await env.DB.prepare(
+      `SELECT id, channel_type, verify_code_hash, verify_expires_at FROM user_notify_channels
+     WHERE id = ?1 AND user_id = ?2 AND status = 'pending'`,
+    ).bind(id, g.viewer.id).first<{ id: string; channel_type: string; verify_code_hash: string | null; verify_expires_at: number | null }>()
+    : await env.DB.prepare(
+      `SELECT id, channel_type, verify_code_hash, verify_expires_at FROM user_notify_channels
      WHERE user_id = ?1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
-  ).bind(g.viewer.id).first<{ id: string; channel_type: string; verify_code_hash: string | null; verify_expires_at: number | null }>();
+    ).bind(g.viewer.id).first<{ id: string; channel_type: string; verify_code_hash: string | null; verify_expires_at: number | null }>();
   if (!row || !row.verify_code_hash) return fail(ERR.VALIDATION_ERROR, '没有待验证的绑定，请先发送验证码', 400, { field: 'code' });
   if ((row.verify_expires_at ?? 0) < Date.now()) return fail(ERR.VALIDATION_ERROR, '验证码已过期，请重新发送', 400, { field: 'code' });
   if ((await sha256Hex(code)) !== row.verify_code_hash) {
@@ -475,11 +527,11 @@ export async function handleNotifyChannelVerify(request: Request, env: Env): Pro
     `UPDATE user_notify_channels SET status = 'active', verify_code_hash = NULL, verify_expires_at = NULL
      WHERE id = ?1 AND user_id = ?2`,
   ).bind(row.id, g.viewer.id).run();
-  return ok({ channel_type: row.channel_type, active: true });
+  return ok({ id: row.id, channel_type: row.channel_type, active: true });
 }
 
-// POST /api/me/notify-channels/delete  body: { channel_type }
-//   解绑（WHERE user_id 双保险防越权）
+// POST /api/me/notify-channels/delete  body: { id?, channel_type }
+//   解绑（WHERE user_id 双保险防越权）；增量 3：优先按行 id 删单实例，未传 id 回退按类型删（旧语义）
 export async function handleNotifyChannelDelete(request: Request, env: Env): Promise<Response> {
   const g = await guard(request, env, 'user');
   if (g instanceof Response) return g;
@@ -487,11 +539,18 @@ export async function handleNotifyChannelDelete(request: Request, env: Env): Pro
   let body: Record<string, unknown> = {};
   try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
   const type = typeof body.channel_type === 'string' ? body.channel_type : '';
-  if (!type) return fail(ERR.VALIDATION_ERROR, '缺少渠道类型', 400, { field: 'channel_type' });
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  if (!type && !id) return fail(ERR.VALIDATION_ERROR, '缺少渠道类型', 400, { field: 'channel_type' });
 
-  await env.DB.prepare(
-    'DELETE FROM user_notify_channels WHERE user_id = ?1 AND channel_type = ?2',
-  ).bind(g.viewer.id, type).run();
+  if (id) {
+    await env.DB.prepare(
+      'DELETE FROM user_notify_channels WHERE id = ?1 AND user_id = ?2',
+    ).bind(id, g.viewer.id).run();
+  } else {
+    await env.DB.prepare(
+      'DELETE FROM user_notify_channels WHERE user_id = ?1 AND channel_type = ?2',
+    ).bind(g.viewer.id, type).run();
+  }
   return ok({ deleted: true });
 }
 

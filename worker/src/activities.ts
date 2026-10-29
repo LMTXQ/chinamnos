@@ -881,7 +881,7 @@ export async function runActivitiesCron(env: Env): Promise<{ rows: number; ql: s
         const bindings = await loadActiveBindings(env, r.submitted_by);
         for (const b of bindings) {
           if (b.kinds && !b.kinds.includes('act_expired')) continue; // 渠道级偏好过滤
-          const nid = `act_expired:${r.id}:${b.channel_type}`;        // 确定性去重键：重跑不重发
+          const nid = `act_expired:${r.id}:${b.id}`;                   // 确定性去重键：重跑不重发（增量 3 按绑定行 id，多实例不互吞）
           if (b.channel_type === 'email') {
             rows.push({ nid, uid: r.submitted_by, kind: 'act_expired', title: pushTitle, body: content, channel_type: 'email', email_target: b.cred.email });
           } else {

@@ -116,7 +116,7 @@ export async function runCardhubCron(env: Env): Promise<{ rows: number; ql: stri
         const bindings = await loadActiveBindings(env, row.user_id);
         for (const b of bindings) {
           if (b.kinds && !b.kinds.includes('post_expiring')) continue; // 渠道级偏好过滤
-          const nid = `post_expiring:${row.id}:${b.channel_type}`;     // 确定性去重键：重跑不重发
+          const nid = `post_expiring:${row.id}:${b.id}`;               // 确定性去重键：重跑不重发（增量 3 按绑定行 id，多实例不互吞）
           const content =
             `站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n` +
             `正文：帖子「${row.title}」将在 3 天后到期自动下架\n` +
@@ -137,7 +137,7 @@ export async function runCardhubCron(env: Env): Promise<{ rows: number; ql: stri
         const bindings = await loadActiveBindings(env, row.user_id);
         for (const b of bindings) {
           if (b.kinds && !b.kinds.includes('post_expired')) continue; // 渠道级偏好过滤
-          const nid = `post_expired:${row.id}:${b.channel_type}`;      // 确定性去重键：重跑不重发
+          const nid = `post_expired:${row.id}:${b.id}`;                // 确定性去重键：重跑不重发（增量 3 按绑定行 id，多实例不互吞）
           const content =
             `站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n` +
             `正文：你的帖子「${row.title}」已到期下架\n` +
