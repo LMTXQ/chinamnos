@@ -860,6 +860,10 @@ function onModalClick(e) {
     return;
   }
   if (act === "nchBack") { renderNchList(); return; }
+  // 需求号：NCH-PERF-1
+  // 需求内容：通知配置弹窗卡顿优化
+  // 改动说明：初次加载失败后的重试入口（配合 api.request 超时兜底，失败不再无限挂起）
+  if (act === "nchRetry") { authGuarded(el, renderNchList); return; }
   if (act === "nchSubmit") { authGuarded(el, nchSubmit); return; }
   if (act === "nchVerify") { authGuarded(el, nchVerify); return; }
   if (act === "nchResend") { authGuarded(el, nchResend); return; }
@@ -1278,14 +1282,23 @@ async function renderNchList() {
     refreshNchList();    // 后台静默校正（不 await，回来时自行判断是否重绘）
     return;
   }
-  body.innerHTML = '<p class="hint">加载中…</p>';
+  body.innerHTML = `
+    <p class="hint" style="margin-top:0">绑定后，站内通知会同步推送到你的渠道；每个渠道还可订阅「采集播报」（关注范围的资费变更摘要），范围可选跟随账号全局或独立配置。</p>
+    <div class="nch-list">
+      <div class="nch-card"><div class="nch-meta"><div class="t">账号全局播报范围</div><div class="h">加载中…</div></div></div>
+      <div class="nch-card"><div class="nch-meta"><div class="t">账号全局接收类型</div><div class="h">加载中…</div></div></div>
+      <div class="nch-card"><div class="nch-meta"><div class="t">渠道绑定</div><div class="h">正在加载渠道列表…</div></div></div>
+    </div>`;
+  // NCH-PERF-1：骨架占位（此前是一句"加载中…"白板，链路抖动时干等十几秒无结构反馈）
   const r = await refreshNchList();
   if (r && !r.ok) {
     // 401 单列：最常见原因是本地登录态失效，直接给出可操作提示而非笼统报错
     const msg = r.code === 40100
       ? "登录状态已失效，请退出后重新登录"
       : (typeof r.error === "string" ? r.error : "加载失败，请稍后重试");
-    body.innerHTML = `<p class="hint">${esc(msg)}</p>`;
+    body.innerHTML = `
+      <p class="hint">${esc(msg)}</p>
+      ${r.code === 40100 ? "" : '<div class="actions"><button class="btn primary" data-act="nchRetry">重试</button></div>'}`;
     return;
   }
   if (getModal().querySelector("#nchBody")) renderNchListBody();

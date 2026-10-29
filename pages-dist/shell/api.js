@@ -101,13 +101,23 @@ export const api = {
     if (token) headers["Authorization"] = "Bearer " + token;
     const init = { method: opts.method || "GET", headers };
     if (opts.body) init.body = JSON.stringify(opts.body);
+    // 需求号：NCH-PERF-1
+    // 需求内容：通知配置弹窗卡顿优化
+    // 改动说明：fetch 增加 AbortController 超时兜底（默认 15s）——实测本地到 API 链路抖动可达 16~30s+，
+    // 此前无超时会无限挂起（弹窗"加载中…"卡死无反馈）；超时返回明确错误供上层提示重试
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), opts.timeout || 15000);
     try {
+      init.signal = ctrl.signal;
       const resp = await fetch(url, init);
       const json = await resp.json();
       if (json.code === 0) return { ok: true, data: json.data };
       return { ok: false, error: json.message, code: json.code, data: json.data };
     } catch (e) {
+      if (e && e.name === "AbortError") return { ok: false, error: "请求超时，网络波动较大，请重试" };
       return { ok: false, error: (e && e.message) || "网络错误" };
+    } finally {
+      clearTimeout(timer);
     }
   },
 
