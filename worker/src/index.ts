@@ -18,7 +18,7 @@ import { handleResetPassword } from './auth/reset-password';
 import { handleLogout } from './auth/logout';
 import { handleMe } from './auth/me';
 import { handleNickname } from './auth/nickname';
-import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete, handleNotifyChannelDigestPrefs, handleNotifyChannelBindCode, handleNotifyChannelTargets, handleDigestGlobalGet, handleDigestGlobalSet } from './auth/notify-channels';
+import { handleNotifyChannelsList, handleNotifyChannelCreate, handleNotifyChannelPrefs, handleNotifyChannelVerify, handleNotifyChannelDelete, handleNotifyChannelDigestPrefs, handleNotifyChannelBindCode, handleNotifyChannelTargets, handleNotifyChannelTest, handleDigestGlobalGet, handleDigestGlobalSet } from './auth/notify-channels';
 import { handleDigestSubscribers } from './notify/digest-pull';
 import { handleQqBotCallback } from './notify/qqbot-callback';
 import { handleSetProfile, handlePublicProfile, handleAvatar, handleSetMyAvatar } from './auth/profile';
@@ -182,6 +182,11 @@ export default {
         resp = await handleNotifyChannelBindCode(request, env); // QQ 机器人「添加群」：为生效实例生成新绑定码
       } else if (p === '/api/me/notify-channels/targets' && m === 'POST') {
         resp = await handleNotifyChannelTargets(request, env); // Qmsg 手动群目标增删
+      } else if (p === '/api/me/notify-channels/test' && m === 'POST') {
+        // 需求号：NCH-TEST-1
+        // 需求内容：已绑定渠道的「测试」按钮
+        // 改动说明：新增测试发送路由（真实投递一条测试消息，确认绑定可用）
+        resp = await handleNotifyChannelTest(request, env);
       } else if (p === '/api/notify/qqbot/callback' && m === 'POST') {
         resp = await handleQqBotCallback(request, env); // QQ 平台回调（公开路由，内部 Ed25519 验签）
       } else if (p === '/api/me/digest-prefs' && m === 'GET') {

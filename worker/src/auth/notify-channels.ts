@@ -7,6 +7,10 @@ import { NOTIFY_KINDS } from '../common/notifications';
 import { getSetting } from '../common/settings';
 import { getChannel, sealCred, openCred, plainify, qmsgSendRaw } from '../notify/channels';
 import { getAppAccessToken } from '../notify/qqbot';
+// 需求号：NCH-TEST-1
+// 需求内容：已绑定渠道的「测试」按钮
+// 改动说明：测试消息发送需要真实投递，邮件渠道复用既有 Resend 适配器（其 send 为批量分支占位恒成功）
+import { resendSend } from '../mail/resend';
 
 // 站点名称（验证码/站外推送消息标识来源，防钓鱼仿冒）：读管理后台 site_name 设置
 // （F8 接线：getSetting 带 30 秒缓存，后台改完约 30 秒内生效），未配置回退默认值。
@@ -552,6 +556,65 @@ export async function handleNotifyChannelDelete(request: Request, env: Env): Pro
     ).bind(g.viewer.id, type).run();
   }
   return ok({ deleted: true });
+}
+
+// 需求号：NCH-TEST-1
+// 需求内容：已绑定渠道的「测试」按钮
+// 改动说明：新增测试发送端点——向已生效实例真实投递一条测试消息，用户据此确认绑定是否真的可用；
+//           只读绑定行、不改任何订阅状态（频控与发起绑定同口径，避免被当作免费推送通道）
+// POST /api/me/notify-channels/test  body: { id?, channel_type }
+export async function handleNotifyChannelTest(request: Request, env: Env): Promise<Response> {
+  const g = await guard(request, env, 'user');
+  if (g instanceof Response) return g;
+
+  let body: Record<string, unknown> = {};
+  try { body = (await request.json()) as Record<string, unknown>; } catch { /* 空 body */ }
+  const type = typeof body.channel_type === 'string' ? body.channel_type : '';
+  const id = typeof body.id === 'string' ? body.id.trim() : '';
+  if (!type && !id) return fail(ERR.VALIDATION_ERROR, '缺少渠道类型', 400, { field: 'channel_type' });
+
+  // 频控：测试为真实外发（多群渠道还会串行间隔），每用户 10 次/小时
+  const rl = await hitLimit(env, `nch:test:${g.viewer.id}`, 10, 3600);
+  if (rl.limited) return fail(ERR.RATE_LIMITED, '测试过于频繁，请 1 小时后再试', 429);
+
+  // 增量 3：优先按行 id 定位实例；未传 id 回退按渠道类型（旧前端兼容）
+  const row = id
+    ? await env.DB.prepare(
+      `SELECT id, channel_type, cred_enc, target_hint FROM user_notify_channels
+       WHERE id = ?1 AND user_id = ?2 AND status = 'active'`,
+    ).bind(id, g.viewer.id).first<{ id: string; channel_type: string; cred_enc: string; target_hint: string }>()
+    : await env.DB.prepare(
+      `SELECT id, channel_type, cred_enc, target_hint FROM user_notify_channels
+       WHERE user_id = ?1 AND channel_type = ?2 AND status = 'active'`,
+    ).bind(g.viewer.id, type).first<{ id: string; channel_type: string; cred_enc: string; target_hint: string }>();
+  if (!row) return fail(ERR.NOT_FOUND, '未找到该渠道的有效绑定', 404, { field: 'channel_type' });
+
+  const def = getChannel(row.channel_type);
+  if (!def) return fail(ERR.VALIDATION_ERROR, '该渠道类型暂不支持', 400, { field: 'channel_type' });
+
+  let cred: Record<string, string>;
+  try { cred = await openCred(env, row.cred_enc); } catch {
+    return fail(ERR.INTERNAL_ERROR, '凭证解密失败，请解绑后重新绑定', 500);
+  }
+
+  const site = env.PUBLIC_BASE_URL || 'https://chinamnos.ftac.dpdns.org';
+  const siteName = await getSiteName(env);
+  const title = `【${siteName}】通知渠道测试`;
+  const content =
+    `站点：[${site.replace(/^https:\/\//, '')}](${site})\n\n` +
+    `这是一条测试消息：收到即表示该渠道可正常接收 ${siteName} 的站外通知。\n\n` +
+    `若非你本人操作，请前往站点解绑该渠道。`;
+
+  // 邮件渠道特例：ChannelDef.send 是批量分支占位（恒返回成功），测试改走 Resend 真发，避免假成功
+  if (row.channel_type === 'email') {
+    const m = await resendSend(env, { to: cred.email || g.viewer.email, subject: title, text: plainify(content) });
+    if (!m.ok) return fail(ERR.INTERNAL_ERROR, `测试邮件发送失败：${m.error || '邮件服务无响应'}`, 502);
+    return ok({ sent: true, channel_type: row.channel_type, hint: row.target_hint });
+  }
+
+  const r = await def.send(cred, title, content);
+  if (!r.ok) return fail(ERR.INTERNAL_ERROR, `测试消息发送失败：${r.error || '渠道无响应'}`, 502);
+  return ok({ sent: true, channel_type: row.channel_type, hint: row.target_hint });
 }
 
 /* 供后续推送分支（方案 B/C/D）使用：取用户全部 active 绑定并解密凭证。

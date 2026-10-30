@@ -202,6 +202,12 @@ export const api = {
   async notifyChannelTargets(channelType, op, group, code, id) {
     return this.request("/api/me/notify-channels/targets", { method: "POST", body: { channel_type: channelType, op, group, code, id } });
   },
+  // 需求号：NCH-TEST-1
+  // 需求内容：已绑定渠道的「测试」按钮
+  // 改动说明：新增测试发送接口封装；多群渠道串行发送（Qmsg 5s/群）耗时较长，单独放宽超时到 30s
+  async notifyChannelTest(channelType, id) {
+    return this.request("/api/me/notify-channels/test", { method: "POST", body: { channel_type: channelType, id }, timeout: 30000 });
+  },
 
   /** 修改登录邮箱（k=当前密码派生密钥；两步：request 发验证码 → confirm 落库；成功后邮件通知渠道自动解绑） */
   async myKdfParams() {

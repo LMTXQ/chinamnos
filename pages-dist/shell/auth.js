@@ -91,6 +91,11 @@ const AUTH_CSS = `
 #nchBody .nch-chip:hover{border-color:var(--acc)}
 #nchBody .nch-chip:has(input:checked){border-color:var(--acc);color:var(--acc);background:color-mix(in oklab,var(--acc) 8%,transparent)}
 #nchBody .nch-chip input{accent-color:var(--acc);margin:0;flex:none}
+/*需求号：NCH-ANN-TIP-1 需求内容：公告新增推送说明改为悬浮提示 改动说明：复用 admin/config 页已存在的 ? 圆点提示样式；气泡单独提为 fixed 层，避免被弹窗滚动容器 overflow 裁切*/
+#nchBody .nch-tip{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--line);color:var(--sub);font-size:10px;font-weight:800;cursor:help;vertical-align:middle;margin-left:5px;flex:none;background:var(--surface);transition:border-color .2s,color .2s}
+#nchBody .nch-tip:hover{border-color:var(--acc);color:var(--acc)}
+#nchTipPop{position:fixed;left:0;top:0;z-index:10100;width:max-content;max-width:262px;padding:7px 10px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);color:var(--txt);font-size:11.5px;line-height:1.6;text-align:left;white-space:normal;box-shadow:0 8px 24px rgba(0,0,0,.22);opacity:0;visibility:hidden;transition:opacity .14s;pointer-events:none}
+#nchTipPop.on{opacity:1;visibility:visible}
 .auth-chip{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 5px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);cursor:pointer;transition:border-color .15s,box-shadow .15s;user-select:none}
 .auth-chip:hover{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in oklab,var(--acc) 14%,transparent)}
 .auth-chip svg{width:14px;height:14px;color:var(--sub);flex-shrink:0}
@@ -904,6 +909,15 @@ function onModalClick(e) {
     authGuarded(el, () => nchTargetsRemove(e2.dataset.id || "", e2.dataset.ctype || "", e2.dataset.group || ""));
     return;
   }
+  if (act === "nchTest") {
+    // 需求号：NCH-TEST-1
+    // 需求内容：已绑定渠道的「测试」按钮
+    // 改动说明：点击测试走全局锁 + 按钮 pending 态，避免重复点击造成多次外发
+    const id = el.dataset.id || "";
+    const ctype = el.dataset.ctype || "";
+    authGuarded(el, () => nchTest(id, ctype));
+    return;
+  }
   if (act === "nchPrefs") { renderNchPrefs(el.dataset.id || "", el.dataset.ctype || ""); return; }
   if (act === "nchPrefsSave") {
     const pid = el.dataset.id || "";
@@ -916,6 +930,19 @@ function onModalClick(e) {
   if (act === "nchDigestGlobalSave") { authGuarded(el, nchDigestGlobalSave); return; }
   if (act === "nchKindsGlobal") { renderNchKindsGlobal(); return; }
   if (act === "nchKindsGlobalSave") { authGuarded(el, nchKindsGlobalSave); return; }
+  if (act === "nchKindsAll") {
+    // 需求号：NCH-KINDS-ALL-1
+    // 需求内容：接收类型支持全选/取消全选
+    // 改动说明：未全选时点击=全选，已全选时点击=取消全选；纯前端勾选，保存时沿用原有落库逻辑
+    const boxId = el.dataset.box || "";
+    const box = boxId ? getModal().querySelector("#" + boxId) : null;
+    if (!box) return;
+    const cbs = [...box.querySelectorAll('input[type="checkbox"]')];
+    const allChecked = cbs.length > 0 && cbs.every((x) => x.checked);
+    cbs.forEach((x) => { x.checked = !allChecked; });
+    syncKindsAllLabel(boxId);
+    return;
+  }
   if (act === "nchKindsScope") {
     if (nchKindsEditor) nchKindsEditor.mode = el.dataset.scope === "custom" ? "custom" : "follow";
     getModal().querySelectorAll('#nchBody .seg-btn[data-scope]').forEach((b) => {
@@ -969,7 +996,48 @@ function onModalClick(e) {
   if (act === "chgConfirm") { authGuarded(el, chgConfirm); return; }
 }
 
+// 需求号：NCH-ANN-TIP-1
+// 需求内容：公告新增推送说明改为悬浮提示
+// 改动说明：气泡从 ::after 伪元素改为挂在 body 的 fixed 层（#nchTipPop），按图标 rect 定位，
+//          彻底摆脱弹窗滚动容器的 overflow 裁切；上方空间不足时自动翻到下方，并水平避让视口边缘
+let nchTipEl = null;
+function nchTipShow(src) {
+  const text = src?.dataset?.tip;
+  if (!text) return;
+  if (!nchTipEl || !nchTipEl.isConnected) {
+    nchTipEl = document.createElement("div");
+    nchTipEl.id = "nchTipPop";
+    document.body.appendChild(nchTipEl);
+  }
+  nchTipEl.textContent = text;
+  nchTipEl.classList.add("on");
+  const r = src.getBoundingClientRect();
+  const er = nchTipEl.getBoundingClientRect();
+  const gap = 7;
+  let top = r.top - er.height - gap;
+  if (top < 8) top = r.bottom + gap;
+  let left = r.left + r.width / 2 - er.width / 2;
+  left = Math.min(Math.max(8, left), window.innerWidth - er.width - 8);
+  nchTipEl.style.top = Math.round(top) + "px";
+  nchTipEl.style.left = Math.round(left) + "px";
+}
+function nchTipHide() { nchTipEl?.classList.remove("on"); }
+document.addEventListener("mouseover", (e) => {
+  const tip = e.target.closest?.(".nch-tip");
+  if (tip) nchTipShow(tip);
+});
+document.addEventListener("mouseout", (e) => {
+  if (e.target.closest?.(".nch-tip")) nchTipHide();
+});
+// 弹窗滚动/窗口缩放后图标位置已变，直接收起，下次悬浮重新定位
+document.addEventListener("scroll", nchTipHide, true);
+window.addEventListener("resize", nchTipHide);
+
 document.addEventListener("click", (e) => {
+  // 需求号：NCH-ANN-TIP-1
+  // 需求内容：公告新增推送说明改为悬浮提示
+  // 改动说明：说明图标位于 label 内，吞掉点击避免误触发所在行的勾选框
+  if (e.target.closest(".nch-tip")) { e.preventDefault(); return; }
   const chip = e.target.closest(".auth-chip");
   if (chip) { openDrop(chip); return; }
   const loginBtn = e.target.closest("#authLoginBtn");
@@ -1354,17 +1422,41 @@ function nchCard(it) {
   const targetBtn = it.status === "active" && Array.isArray(it.targets)
     ? `<button class="nch-del" data-act="nchAddGroup" ${idAttr}>群设置</button>`
     : "";
+  // 需求号：NCH-TEST-1
+  // 需求内容：已绑定渠道的「测试」按钮
+  // 改动说明：已生效实例增加「测试」入口——真实投递一条测试消息，用户自测绑定是否真的可用
+  const testBtn = it.status === "active"
+    ? `<button class="nch-del" data-act="nchTest" ${idAttr}>测试</button>`
+    : "";
   return `
     <div class="nch-card">
       <div class="nch-meta"><div class="t">${esc(label)}</div><div class="h">${esc(it.target_hint || "")}</div>${kindSummary}${kindsSummary}${digestSummary}</div>
       ${tag}
-      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${targetBtn}${prefsBtn}${digestBtn}
+      <div style="display:flex;flex-direction:column;gap:6px;flex:none">${targetBtn}${prefsBtn}${digestBtn}${testBtn}
       <button class="nch-del" data-act="nchDelete" ${idAttr}>解绑</button></div>
     </div>`;
 }
 
 /* ── 接收类型（15 类事件偏好，方案追加）：跟随账号全局 / 独立配置 ── */
 let nchKindsEditor = null; // { id, type, mode }
+
+// 需求号：NCH-KINDS-ALL-1
+// 需求内容：接收类型支持全选/取消全选
+// 改动说明：全选按钮文案随勾选状态实时同步——全部勾选显示「取消全选」，否则显示「全选」
+function syncKindsAllLabel(boxId) {
+  const modal = getModal();
+  const btn = modal.querySelector(`[data-act="nchKindsAll"][data-box="${boxId}"]`);
+  const box = modal.querySelector("#" + boxId);
+  if (!btn || !box) return;
+  const cbs = [...box.querySelectorAll('input[type="checkbox"]')];
+  btn.textContent = cbs.length && cbs.every((x) => x.checked) ? "取消全选" : "全选";
+}
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (!t || t.type !== "checkbox") return;
+  const box = t.closest("#nchKindsBox, #nchGlobalKindsBox");
+  if (box) syncKindsAllLabel(box.id);
+});
 
 function renderNchPrefs(id, type) {
   const it = nchItems.find((x) => x.id === id && x.status === "active");
@@ -1404,10 +1496,17 @@ function renderNchKindsScopeBody() {
   // null = 未配置，展示为全选（即"跟随站点白名单默认全收"）
   const cur = Array.isArray(it?.kinds) ? it.kinds : NOTIFY_KINDS;
   body.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+      <button class="btn ghost sm" type="button" data-act="nchKindsAll" data-box="nchKindsBox">全选</button>
+    </div>
     <div id="nchKindsBox" class="nch-chip-grid">
       ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
       <label class="nch-chip"><input type="checkbox" data-kind="${esc(k)}" ${cur.includes(k) ? "checked" : ""}>${esc(label)}</label>`).join("")}
     </div>`;
+  // 需求号：NCH-KINDS-ALL-1
+  // 需求内容：接收类型支持全选/取消全选
+  // 改动说明：渲染后按当前勾选状态初始化按钮文案（全勾时显示「取消全选」）
+  syncKindsAllLabel("nchKindsBox");
 }
 
 async function nchPrefsSave(id, type) {
@@ -1506,7 +1605,7 @@ function renderNchDigest(id, type) {
       <input type="checkbox" id="nchDigestEnabled" ${enabled ? "checked" : ""}>
       <span>采集完成后推送播报</span>
     </label>
-    <p class="hint" style="margin:0 0 6px">公告新增：</p>
+    <p class="hint" style="margin:0 0 6px">公告新增推送<span class="nch-tip" data-tip="各运营商官网公告有新增时推送（不含正文，附站点链接与分享深链）。跟随账号全局 = 由上方账号级开关决定；仅「采集完成后推送播报」开启的渠道才会实际收到。">?</span></p>
     <div class="seg" style="margin-bottom:10px">
       <button type="button" class="seg-btn${nchProvEditor.announce === null ? " active" : ""}" data-act="nchAnnScope" data-v="follow">跟随账号全局</button>
       <button type="button" class="seg-btn${nchProvEditor.announce === 1 ? " active" : ""}" data-act="nchAnnScope" data-v="1">开启</button>
@@ -1570,7 +1669,7 @@ function renderNchDigestGlobal() {
     <p class="hint" style="margin:8px 2px 0">某运营商内不勾选任何省份 = 不接收该运营商的播报；全部不勾 = 未设置（各渠道跟随模式下收全部省份）。</p>
     <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin:10px 0 0;cursor:pointer">
       <input type="checkbox" id="nchGlobalAnnounce" ${nchGlobalPref?.announce_push === 1 ? "checked" : ""}>
-      <span>公告新增推送<span class="hint">各运营商官网公告有新增时推送（不含正文，附站点链接与分享深链）</span></span>
+      <span>公告新增推送<span class="nch-tip" data-tip="各运营商官网公告有新增时推送（不含正文，附站点链接与分享深链）">?</span></span>
     </label>
     <div class="actions">
       <button class="btn ghost" data-act="nchBack">返回</button>
@@ -1602,6 +1701,9 @@ function renderNchKindsGlobal() {
   const cur = new Set(nchGlobalPref?.kinds ?? NOTIFY_KINDS);
   body.innerHTML = `
     <p class="hint" style="margin-top:0">账号全局接收类型：勾选「跟随账号全局」的渠道要接收的站点事件类型（共 ${NOTIFY_KINDS.length} 类）。全部勾选/不设置 = 全部类型。保存即时生效。</p>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+      <button class="btn ghost sm" type="button" data-act="nchKindsAll" data-box="nchGlobalKindsBox">全选</button>
+    </div>
     <div id="nchGlobalKindsBox" class="nch-chip-grid">
       ${Object.entries(NOTIFY_KIND_LABELS).map(([k, label]) => `
       <label class="nch-chip"><input type="checkbox" data-kind="${esc(k)}" ${cur.has(k) ? "checked" : ""}>${esc(label)}</label>`).join("")}
@@ -1611,6 +1713,10 @@ function renderNchKindsGlobal() {
       <button class="btn primary" data-act="nchKindsGlobalSave">保存全局类型</button>
     </div>`;
   mountIcons(body);
+  // 需求号：NCH-KINDS-ALL-1
+  // 需求内容：接收类型支持全选/取消全选
+  // 改动说明：全局接收类型同样按当前勾选状态初始化全选按钮文案
+  syncKindsAllLabel("nchGlobalKindsBox");
 }
 
 async function nchKindsGlobalSave() {
@@ -1902,6 +2008,38 @@ async function nchDelete(id, ctype) {
   nchItems = id ? nchItems.filter((x) => x.id !== id) : nchItems.filter((x) => x.channel_type !== ctype);
   toast("已解绑");
   await renderNchList();
+}
+
+// 需求号：NCH-TEST-2
+// 需求内容：测试按钮前端限频，每个渠道 5 分钟内不可重复测试
+// 改动说明：冷却时间收敛为常量；纯前端拦截（localStorage 记录上次尝试时刻，刷新页面依然生效），不发请求以减轻 Worker 压力
+const NCH_TEST_COOLDOWN_MS = 5 * 60 * 1000;
+function nchTestLastAt(key) {
+  try { return Number(localStorage.getItem("nch_test_at:" + key)) || 0; } catch { return 0; }
+}
+function nchTestMark(key) {
+  try { localStorage.setItem("nch_test_at:" + key, String(Date.now())); } catch { /* 隐私模式忽略 */ }
+}
+
+// 需求号：NCH-TEST-1
+// 需求内容：已绑定渠道的「测试」按钮
+// 改动说明：真实发送一条测试消息，按服务端返回的失败原因原样提示（如 QQ 机器人未绑群、Webhook 非 2xx）
+async function nchTest(id, ctype) {
+  if (!id && !ctype) return;
+  const key = id || ("t:" + ctype);
+  // 需求号：NCH-TEST-2
+  // 需求内容：测试按钮前端限频，每个渠道 5 分钟内不可重复测试
+  // 改动说明：进入请求前先查冷却，未到期直接提示剩余秒数并返回（不消耗网络与 Worker 请求）
+  const elapsed = Date.now() - nchTestLastAt(key);
+  if (elapsed >= 0 && elapsed < NCH_TEST_COOLDOWN_MS) {
+    const left = Math.ceil((NCH_TEST_COOLDOWN_MS - elapsed) / 1000);
+    toast(`测试过于频繁，请 ${left >= 60 ? `${Math.ceil(left / 60)} 分钟` : `${left} 秒`}后再试`);
+    return;
+  }
+  nchTestMark(key); // 先记时再发请求：失败/超时同样计入冷却，防止连点堆请求
+  const r = await api.notifyChannelTest(ctype, id);
+  if (!r.ok) { toast(typeof r.error === "string" ? r.error : "测试发送失败，请稍后再试"); return; }
+  toast("测试消息已发送，请到该渠道查看是否收到");
 }
 
 /** 静默刷新本地用户缓存（5 分钟节流）：老登录缓存缺 id/contacts/bio 时自动补齐，
