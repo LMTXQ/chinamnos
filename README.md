@@ -30,7 +30,7 @@
 | **觅珍集库** | 链接收录（审核制）、活动攻略投稿（Markdown + 图床外链 + 活动二维码）、社群收录 |
 | **公告推广** | 全站公告、模块级弹窗（按资费/市集/工单/工具作用域投放）、强制同意门控 |
 | **用户体系** | 注册登录（密钥派生 + 会话签名）、Turnstile 人机校验、邮箱验证 / 密码找回 / 换绑（Resend） |
-| **通知系统** | 站内通知中心 + 站外推送（钉钉 / 企业微信 / 邮箱）、采集播报按省份订阅 |
+| **通知系统** | 站内通知中心 + 站外推送（企业微信 / 钉钉 / 邮件 / Qmsg / QQ 官方机器人 / 飞书 / Bark / PushPlus / 自定义 Webhook）、采集播报按省份订阅 |
 | **容灾部署** | Cloudflare Pages / EdgeOne Pages / GitHub Pages 多线路组合，前端自动跳线守卫 |
 | **边缘缓存** | 公开接口 Cache API 缓存 + 公共配置静态化，降低 Worker 配额消耗 |
 
@@ -49,7 +49,7 @@
 | 功能 | 入口 | 说明 |
 |---|---|---|
 | 查询资费 | [资费中心](https://chinamnos.ftac.dpdns.org/#/) | 按运营商 / 省份 / 套餐类型筛选，查看最新采集结果与历史变更对比 |
-| 订阅变更播报 | 登录后右上角用户菜单 →「通知配置」 | 绑定钉钉 / 企业微信 / 邮箱渠道，按运营商与省份设置关注范围，每轮采集结束后推送关注范围内的资费变更摘要 |
+| 订阅变更播报 | 登录后右上角用户菜单 →「通知配置」 | 绑定企业微信 / 钉钉 / 邮件 / Qmsg / QQ 官方机器人 / 飞书 / Bark / PushPlus / 自定义 Webhook 渠道，按运营商与省份设置关注范围，每轮采集结束后推送关注范围内的资费变更摘要 |
 | 号卡交易 | [跳蚤市集](https://chinamnos.ftac.dpdns.org/#/cardhub) | 浏览或发布求购 / 出让信息，站内沟通，担保人机制保障交易 |
 | 活动与攻略 | [觅珍集库](https://chinamnos.ftac.dpdns.org/#/tools) | 优质链接收录与活动攻略，支持 Markdown 投稿 |
 | 问题反馈与工单 | [工单中心](https://chinamnos.ftac.dpdns.org/#/ticket) | 反馈站内问题与建议，卡商担保人申请等事务通过工单跟进处理 |
@@ -105,7 +105,7 @@
 │   └── payload_sample.json    # 通知 payload 示例
 ├── worker/                    # Cloudflare Worker 后端
 │   ├── src/                   #   TypeScript 源码（auth/cardhub/tickets/activities/notify/mail/common…）
-│   ├── migrations/            #   D1 数据库迁移（0001→0043）
+│   ├── migrations/            #   D1 数据库迁移（0001→0044）
 │   └── wrangler.toml.example  # 部署配置模板（复制为 wrangler.toml 填写）
 ├── pages-dist/                # 前端（原生 JS，无构建）
 │   ├── shell/                 #   布局与公共层（api/auth/notice/notify/markdown/主题…）
@@ -128,15 +128,15 @@ flowchart LR
     D[采集端播报] -->|货单| E[coll_digest_*.json]
     E --> F[notify_dispatch.py]
     C --> F
-    F -->|按省份过滤| G[钉钉 / 企微 / SMTP]
+    F -->|按省份过滤| G[企微 / 钉钉 / 邮件 / Qmsg / QQ / 飞书 / Bark / PushPlus / Webhook]
 ```
 
 - **站内通知**：Worker 直写 D1，用户在前端通知中心查看（列表 / 已读 / 删除 / 清理已读）
-- **站外推送**（钉钉 webhook、企业微信 webhook、SMTP 邮箱池）：
+- **站外推送**（企业微信 / 钉钉 Webhook、SMTP 邮箱池、Qmsg、QQ 官方机器人、飞书、Bark、PushPlus、自定义 Webhook）：
   1. 用户在「通知配置」（登录后右上角用户菜单）绑定渠道并完成验证，可按通知类别与关注省份设置订阅偏好
   2. Worker 按统一消息模板组装信封，以 `batch_*.json` 文件落盘为队列（经青龙 OpenAPI 写入脚本目录，文件即队列）
   3. `notify_dispatch.py` 定时扫描队列：flock 防并发 → 按通知 ID 去重 → 逐行分发（行内重试）→ 消化后删除；失败行进入失败清单，脚本以非零码退出时由青龙自带失败通知兜底提醒站长
-- **采集播报**：采集端每轮把变更明细写成 `coll_digest_*.json` 货单（落在 `notification.digest_dir`）；分发脚本发现货单后调用 Worker 内部端点（`DIGEST_PULL_TOKEN` 鉴权）拉取订户名单，按每人关注省份抽取明细、组装「本轮明细 + 今日累计」消息发送，并以 `collector_digest:{uid}:{轮次}:{渠道}` 防重发
+- **采集播报**：采集端每轮把变更明细写成 `coll_digest_*.json` 货单（落在 `notification.digest_dir`）；分发脚本发现货单后调用 Worker 内部端点（`DIGEST_PULL_TOKEN` 鉴权）拉取订户名单，按每人关注省份抽取明细、组装「本轮明细 + 今日累计」消息发送，并以 `collector_digest:{uid}:{轮次}:{绑定行ID 或渠道类型}` 防重发
 
 ---
 
