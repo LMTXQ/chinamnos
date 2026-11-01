@@ -5684,7 +5684,7 @@ Shell.registerPage({
       <div class="panel" id="aboutTlPanel" hidden>
         <div class="about-text">
           <h3>${icon("clock", "title-ic")} 项目历程</h3>
-          <div class="tl" id="aboutTl"><div class="tl-track"></div></div>
+          <div id="aboutTl"><div class="tl-track"></div></div>
         </div>
       </div>
 

@@ -2855,14 +2855,18 @@
 /* ─────────────── 关于页 · 项目历程横向时间轴 ─────────────── */
 /* ≤5 节点：grid 1fr 均匀铺满容器；>5（.tl-many）：每列固定宽 + 横向滚动。
    连接线由每个节点绘制左右半段（首节点无左半、末节点无右半），节点数量变化时自动精确对齐。 */
-.tl { overflow-x: auto; padding: 4px 0 6px; }
+/* 需求号：CL-TL-1
+   需求内容：变更日志时间轴线被内容挡住
+   改动说明：横向时间轴容器选择器由通用 .tl 收敛为 #aboutTl，避免其 overflow-x:auto 与 padding 简写
+             反压变更日志的 .tl（padding-left 被清零 + 变成滚动容器），导致竖线与圆点节点被卡片覆盖/裁切 */
+#aboutTl { overflow-x: auto; padding: 4px 0 6px; }
 .tl-track {
   position: relative;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
 }
-.tl.tl-scroll .tl-track,
+#aboutTl.tl-scroll .tl-track,
 .tl-track.tl-many { grid-auto-columns: 200px; min-width: max-content; }
 .tl-node { position: relative; padding: 0 14px 8px; text-align: center; cursor: default; }
 .tl-node::before,
