@@ -74,6 +74,13 @@ try:
 except ImportError:
     fcntl = None  # Windows 本机调试无 flock，青龙（Linux）恒可用
 
+# QQTEXT-1 需求内容：仅 1428846389@qq.com 的 QQ 群采集播报改用全角文本表格，其余账号/渠道原样
+# QQTEXT-1 改动说明：新增独立模块 qq_text_render；整文件删除后此处自动降级，主流程不受影响
+try:
+    import qq_text_render
+except ImportError:
+    qq_text_render = None
+
 # payload 与状态文件均放在脚本同目录（Worker 经 OpenAPI scripts 接口写入的 batch_*.json
 # 会落在青龙 scripts 目录——即本脚本所在目录，扫本目录即可形成完整闭环）
 DATA_DIR = os.environ.get("NOTIFY_DATA_DIR") or os.path.dirname(os.path.abspath(__file__))
@@ -444,8 +451,10 @@ def send_qbot(cred, title, body, row=None):
         return False, "token 获取失败: %s" % str(e)[:120]
 
     # 组装两种版式：md 优先（digest 自带标题行；batch 行补标题、保留链接语法不 plainify），plain 兜底
-    fmt, text_body = pick_body(row, "markdown", "plain")
-    if fmt == "markdown":
+    # QQTEXT-1 需求内容：白名单账号的 QQ 群优先取 qq_text 全角表格版（无则回落 markdown）
+    # QQTEXT-1 改动说明：取用顺序前插一档；qq_text 与 markdown 同样自带标题行，拼接分支合并处理
+    fmt, text_body = pick_body(row, "qq_text", "markdown", "plain")
+    if fmt in ("markdown", "qq_text"):
         md_content = _trunc_bytes(text_body, QQBOT_MSG_LIMIT)
     else:
         md_content = _trunc_bytes("%s\n\n%s" % (title, text_body), QQBOT_MSG_LIMIT)
@@ -1112,8 +1121,13 @@ def build_digest_message(sub, digest, site=""):
     if sec is None:
         return None
     sec["title"] = title
-    return title, {"plain": _render_plain(sec), "markdown": _render_markdown(sec),
-                   "html": _render_html(sec)}
+    formats = {"plain": _render_plain(sec), "markdown": _render_markdown(sec),
+               "html": _render_html(sec)}
+    # QQTEXT-1 需求内容：白名单账号（1428846389@qq.com）额外追加 qq_text 全角表格版
+    # QQTEXT-1 改动说明：仅条件性新增 qq_text 一键；plain/markdown/html 的生成逻辑与内容完全不变
+    if qq_text_render:
+        qq_text_render.maybe_add_formats(formats, sub, sec)
+    return title, formats
 
 
 def process_digest_files(processed, failed, workers=8):
