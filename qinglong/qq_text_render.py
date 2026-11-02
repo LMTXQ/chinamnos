@@ -37,20 +37,22 @@ def _bar(label):
 
 
 def _stat_table(seg):
-    """单个运营商段 → 引用块表格（表头 + 各省行 + 合计行）。"""
+    """单个运营商段 → 引用块表格（表头 + 各省行 + 合计行）。
+    QQTEXT-1 改动说明：列宽改为「表头与数据的最长者」，去掉固定 4 格留白；
+    每行以 > 紧贴表头起排，表格更紧凑、更接近常规表格观感。"""
     rows = seg.get("rows") or []
     if not rows:
         return []
-    pw = max([4] + [len(str(r[0])) for r in rows])
-    nw = max([4] + [len(fw(x)) for r in rows for x in r[1:]])
-    lines = ["> " + FW_BAR.join([_cell("省份", pw), _cell("新增", nw, True),
+    pw = max([3] + [len(str(r[0])) for r in rows])      # 最小 3 格：两字省份也留出呼吸位
+    nw = max([3] + [len(fw(x)) for r in rows for x in r[1:]])  # 最小 3 格：单/双位数字更稳
+    lines = [">" + FW_BAR.join([_cell("省份", pw), _cell("新增", nw, True),
                                 _cell("修改", nw, True), _cell("下架", nw, True)])]
     for name, a, c, r in rows:
-        lines.append("> " + FW_BAR.join([_cell(str(name), pw), _cell(fw(a), nw, True),
-                                         _cell(fw(c), nw, True), _cell(fw(r), nw, True)]))
+        lines.append(">" + FW_BAR.join([_cell(str(name), pw), _cell(fw(a), nw, True),
+                                        _cell(fw(c), nw, True), _cell(fw(r), nw, True)]))
     ta, tc, tr = seg.get("totals") or (0, 0, 0)
-    lines.append("> " + FW_BAR.join([_cell("合计", pw), _cell(fw(ta), nw, True),
-                                     _cell(fw(tc), nw, True), _cell(fw(tr), nw, True)]))
+    lines.append(">" + FW_BAR.join([_cell("合计", pw), _cell(fw(ta), nw, True),
+                                    _cell(fw(tc), nw, True), _cell(fw(tr), nw, True)]))
     return lines
 
 

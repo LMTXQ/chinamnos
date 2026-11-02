@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
 #  chinamnos 更新执行器（青龙面板用）
-#  作用：从 GitHub 拉取最新 chinamnos.py 与 qinglong/notify_dispatch.py（采集播报分发脚本）
-#        到统一工作目录，校验通过后执行；notify_dispatch.py 下载失败仅告警，不阻塞采集
+#  作用：从 GitHub 拉取最新 chinamnos.py 与 qinglong/ 下的通知分发脚本
+#        （notify_dispatch.py + qq_text_render.py）到统一工作目录，校验通过后执行；
+#        通知分发脚本下载失败仅告警，不阻塞采集
 #  一次上传本文件到青龙后，无需再手动同步脚本
 #
 #  青龙任务命令示例（参数原样透传给 chinamnos.py）：
@@ -44,7 +45,7 @@ URL_BASES=(
   "https://gh-proxy.com/https://raw.githubusercontent.com/$REPO/$BRANCH"
 )
 
-NFILE="notify_dispatch.py"   # 采集播报分发脚本（仓库 qinglong/ 目录，与 chinamnos.py 同目录部署）
+NFILES=("notify_dispatch.py" "qq_text_render.py")   # 采集播报分发脚本 + 其同目录排版模块（仓库 qinglong/ 目录）
 
 fetch() { # $1=URL $2=输出文件
   if command -v curl >/dev/null 2>&1; then
@@ -82,26 +83,30 @@ if [ "${SKIP_UPDATE:-0}" != "1" ]; then
     fi
   fi
 
-  # ── notify_dispatch.py 同步（采集播报分发脚本；失败仅告警，不阻塞采集）──
+  # ── notify_dispatch.py 及其同目录模块同步（失败仅告警，不阻塞采集）──
+  # QQTEXT-1 需求内容：同步 qq_text_render.py（notify_dispatch 的同目录辅助模块），否则线上 import 失败、全角表格不生效
+  # QQTEXT-1 改动说明：单文件同步改为 NFILES 循环，逐个下载/语法校验/备份替换，任一失败只告警
   if [ -n "$ok" ]; then
-    NURL="$ok/qinglong/$NFILE"
-    echo "[更新] 尝试下载: $NURL"
-    if fetch "$NURL" "$NFILE.new" \
-       && $PY -m py_compile "$NFILE.new" 2>/dev/null; then
-      if [ -f "$NFILE" ] && cmp -s "$NFILE" "$NFILE.new"; then
-        rm -f "$NFILE.new"
-        echo "[更新] ✓ $NFILE 已是最新"
+    for NF in "${NFILES[@]}"; do
+      NURL="$ok/qinglong/$NF"
+      echo "[更新] 尝试下载: $NURL"
+      if fetch "$NURL" "$NF.new" \
+         && $PY -m py_compile "$NF.new" 2>/dev/null; then
+        if [ -f "$NF" ] && cmp -s "$NF" "$NF.new"; then
+          rm -f "$NF.new"
+          echo "[更新] ✓ $NF 已是最新"
+        else
+          [ -f "$NF" ] && cp -f "$NF" "$NF.bak"   # 保留上一版便于回滚
+          mv -f "$NF.new" "$NF"
+          echo "[更新] ✓ 已更新 $NF"
+        fi
       else
-        [ -f "$NFILE" ] && cp -f "$NFILE" "$NFILE.bak"   # 保留上一版便于回滚
-        mv -f "$NFILE.new" "$NFILE"
-        echo "[更新] ✓ 已更新 $NFILE"
+        rm -f "$NF.new"
+        echo "[更新] ⚠ $NF 下载/校验失败，沿用现有版本继续"
       fi
-    else
-      rm -f "$NFILE.new"
-      echo "[更新] ⚠ $NFILE 下载/校验失败，沿用现有版本继续"
-    fi
+    done
   else
-    echo "[更新] ⚠ chinamnos.py 未更新成功，跳过 $NFILE 同步"
+    echo "[更新] ⚠ chinamnos.py 未更新成功，跳过 ${NFILES[*]} 同步"
   fi
 else
   echo "[更新] SKIP_UPDATE=1，跳过更新"
