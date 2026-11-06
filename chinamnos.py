@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261107b"
+SCRIPT_VERSION = "20261107c"
 
 import os
 import sys
@@ -2195,8 +2195,10 @@ class CmccApi(_BaseCarrierApi):
                 if 'otherFees' in nm:
                     nm['otherFee'] = nm.pop('otherFees')
                 if 'others' in nm:
-                    if not _s(nm.get('otherDesc')):
-                        nm['otherDesc'] = nm['others']
+                    # 参考项目移动端以 others 为「其他说明」正文，优先于 otherDesc。
+                    _others = _s(nm.get('others'))
+                    if _others:
+                        nm['otherDesc'] = _others
                     del nm['others']
         return result
 
@@ -3213,12 +3215,14 @@ class CbnApi(_BaseCarrierApi):
                     'familyNet': _s(item.get('familyNetwork')),
                     # 广电上游 rights 属于「服务内容」（参考项目 serviceContent=rights），
                     # 不再同时映射到「权益」，否则同一段文本会在两个字段重复展示。
-                    # 参考项目字段语义实测：上游 rights/operatExplain 是「服务内容」，
-                    # otherContent/otherExplain 才是「其他说明」。原实现把两者装反，
-                    # 导致 其他服务内容 填成说明文本、其他说明 大面积为空。
-                    'otherContent': _s(item.get('rights')) or _s(item.get('operatExplain')),
-                    'otherDesc': ' | '.join(filter(None, [_s(item.get('otherContent')),
-                                                          _s(item.get('otherExplain'))])),
+                    # 参考项目字段语义实测：服务内容 = rights → tariffAttr → operatExplain
+                    # （「无」视为空），其他说明 = otherContent/otherExplain。原实现装反，
+                    # 导致其他服务内容填成说明文本、其他说明大面积为空。
+                    'otherContent': _pick_text(item.get('rights'),
+                                               item.get('tariffAttr'),
+                                               item.get('operatExplain')),
+                    'otherDesc': ' | '.join(filter(None, [_pick_text(item.get('otherContent')),
+                                                          _pick_text(item.get('otherExplain'))])),
                     'status': _s(item.get('stateFlag')),
                     'updateTime': _s(item.get('updateDate')),
                     'createTime': _s(item.get('createDate')),
@@ -3254,6 +3258,16 @@ def create_carrier_api(carrier_key, carrier_cfg):
 
 def _s(v):
     return '' if v is None else str(v).strip()
+
+
+def _pick_text(*vals):
+    """按顺序取第一个有效文本；把「无/None/null/空」视为无效。
+    与参考项目 pipeline 的 _pick 语义一致，避免把「无」写进服务内容。"""
+    for v in vals:
+        s = _s(v)
+        if s and s not in ('无', 'None', 'null'):
+            return s
+    return ''
 
 
 def _fmt_day(s):
