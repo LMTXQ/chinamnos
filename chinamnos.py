@@ -5636,7 +5636,9 @@ def build_change_summary(carrier_key, crawl_results, carrier_cfg):
 
 
 # ───────────────────────── 采集播报（ext_msg 通道，方案批次一） ─────────────────────────
-# 全量整理本轮变更 → digest 文件落盘 → 子进程叫醒 notify_dispatch.py。
+# 全量整理本轮变更 → digest 文件落盘 → 叫醒 notify_dispatch.py。
+# 叫醒方式：优先经面板 OpenAPI 拉起「站外通知分发」独立任务（与 Worker 侧 batch 分发同一条路），
+# 未配置凭证/触发失败时回退本地子进程。
 # 与 ql_panel 通知并行独立：ql_panel 摘要按站长关注省整理时过滤，本通道全量落盘、
 # 省份过滤在分发端按订阅用户执行。ext_msg 关闭时整段跳过（无文件、无调用）。
 
@@ -5670,6 +5672,44 @@ def digest_queue_dir(config):
     except Exception as e:
         logger.warning(f'[digest] queue 子目录创建失败({d}): {e}，回退工作目录根')
         return base
+
+
+def trigger_dispatch_task(config):
+    """经面板 OpenAPI 拉起「站外通知分发」独立任务（与 Worker 侧 batch 分发同一触发方式）。
+    成功返回 True；未配凭证 / 找不到任务 / 调用失败返回 False，由调用方回退本地子进程。"""
+    try:
+        nt = config.get('notification', {}) or {}
+        q = nt.get('ql_trigger') if isinstance(nt.get('ql_trigger'), dict) else {}
+        base = str(q.get('url') or os.environ.get('QL_URL') or 'http://localhost:5700').rstrip('/')
+        cid = str(q.get('client_id') or os.environ.get('QL_CLIENT_ID') or '').strip()
+        sec = str(q.get('client_secret') or os.environ.get('QL_CLIENT_SECRET') or '').strip()
+        if not cid or not sec:
+            return False
+        name = '站外通知分发'
+        tk = (requests.get(base + '/open/auth/token', timeout=15,
+                           params={'client_id': cid, 'client_secret': sec}).json()
+              .get('data') or {}).get('token')
+        if not tk:
+            logger.warning('[digest] 面板触发: 取 token 失败')
+            return False
+        hdrs = {'Authorization': 'Bearer ' + tk}
+        rows = ((requests.get(base + '/open/crons', timeout=15, headers=hdrs,
+                               params={'searchValue': name}).json().get('data') or {})
+                .get('data')) or []
+        hit = [x for x in rows if str(x.get('name') or '') == name] or rows
+        tid = int((hit[0].get('id') or 0)) if hit else 0
+        if not tid:
+            logger.warning(f'[digest] 面板触发: 未找到任务「{name}」')
+            return False
+        r = requests.put(base + '/open/crons/run', timeout=15, headers=hdrs, json=[tid]).json()
+        if r.get('code') != 200:
+            logger.warning(f'[digest] 面板触发任务 #{tid} 失败: {r.get("message") or r}')
+            return False
+        logger.info(f'[digest] 已请求面板拉起「{name}」任务 #{tid}（独立任务，日志见面板）')
+        return True
+    except Exception as e:
+        logger.warning(f'[digest] 面板触发失败({e})，回退本地子进程')
+        return False
 
 
 def _digest_counts(crawl_results):
@@ -5789,22 +5829,23 @@ def write_collector_digest(config, all_crawl_results, announce_new=None):
         logger.info(f'[digest] 采集播报已落盘: {os.path.basename(digest_path)}'
                     f'（资费变更 {len(round_counts)} 运营商 / 公告新增 {len(announce_new)} 运营商，目录: {qd}）')
 
-        # 叫醒分发脚本（文件即队列；flock 防重入，撞锁/失败退出码均忽略，文件留给下轮补扫）
-        # 子进程字节码缓存定向 temp/，避免 __pycache__ 散落在工作目录根
+        # 叫醒分发：优先经面板 OpenAPI 拉起「站外通知分发」独立任务（与 Worker batch 分发同一条路）；
+        # 未配凭证/触发失败时回退本地子进程（文件即队列；flock 防重入，撞锁/失败退出码均忽略，文件留给下轮补扫）
         dispatch = os.path.join(base, 'notify_dispatch.py')
-        if os.path.isfile(dispatch):
-            try:
-                _sub_env = dict(os.environ)
-                _sub_env['PYTHONPYCACHEPREFIX'] = os.path.join(base, 'temp', 'pycache')
-                os.makedirs(_sub_env['PYTHONPYCACHEPREFIX'], exist_ok=True)
-                r = subprocess.run([sys.executable, dispatch], cwd=os.path.dirname(dispatch),
-                                   timeout=1800, capture_output=True, text=True, env=_sub_env)
-                tail = (r.stdout or '').strip().splitlines()
-                logger.info(f'[digest] 分发脚本已执行（exit={r.returncode}）: {tail[-1] if tail else "(无输出)"}')
-            except Exception as e:
-                logger.warning(f'[digest] 叫醒分发失败(文件留存下轮补扫): {e}')
-        else:
-            logger.info(f'[digest] 分发脚本不存在({dispatch})，跳过叫醒')
+        if not trigger_dispatch_task(config):
+            if os.path.isfile(dispatch):
+                try:
+                    _sub_env = dict(os.environ)
+                    _sub_env['PYTHONPYCACHEPREFIX'] = os.path.join(base, 'temp', 'pycache')
+                    os.makedirs(_sub_env['PYTHONPYCACHEPREFIX'], exist_ok=True)
+                    r = subprocess.run([sys.executable, dispatch], cwd=os.path.dirname(dispatch),
+                                       timeout=1800, capture_output=True, text=True, env=_sub_env)
+                    tail = (r.stdout or '').strip().splitlines()
+                    logger.info(f'[digest] 分发脚本已执行（exit={r.returncode}）: {tail[-1] if tail else "(无输出)"}')
+                except Exception as e:
+                    logger.warning(f'[digest] 叫醒分发失败(文件留存下轮补扫): {e}')
+            else:
+                logger.info(f'[digest] 分发脚本不存在({dispatch})，跳过叫醒')
     except Exception as e:
         logger.warning(f'[digest] 采集播报整理失败(已忽略，不影响采集): {e}')
 
