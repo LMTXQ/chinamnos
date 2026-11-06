@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261107c"
+SCRIPT_VERSION = "20261107d"
 
 import os
 import sys
@@ -2703,11 +2703,14 @@ class CtccApi(_BaseCarrierApi):
             'sms': _s(x.get('sms')),
             'iptv': _s(x.get('iptv')),
             # wap 直连上游原始键为 bandwidth(无r)/otherFees(带s)，此处就地改名成
-            # _nm_to_fields 的标准键 brandwidth/otherFee（电信私有小写名不出本类）
+            # _nm_to_fields 的标准键 brandwidth（电信私有小写名不出本类）
             'brandwidth': _s(x.get('bandwidth')),
             'otherFee': _s(x.get('otherFees')),
-            'rights': _s(x.get('rights')),
-            'otherContent': _s(x.get('otherContent')),
+            # 电信上游 rights 是「服务内容」，otherContent 是「其他说明」（与浏览器模式
+            # lines 3034-3038 一致）。旧实现装反：服务内容进「权益」、说明进
+            # 「其他服务内容」，而参考项目 serviceContent=rights、otherNotes=otherContent。
+            'otherContent': _s(x.get('rights')),
+            'otherDesc': _s(x.get('otherContent')),
             'lable1Name': l1_name,
             'type1': _s(x.get('type1')),
             'type2': _s(x.get('type2')),
