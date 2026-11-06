@@ -12,7 +12,9 @@
 #     或等价的 QL_* 环境变量），本任务只做脚本同步，随后经面板 OpenAPI 触发
 #     「独立采集任务」运行 chinamnos.py——采集有自己的日志/耗时/运行状态，
 #     同步器自身秒级结束不占长任务线程。
-#     目标任务找不到时自动创建（永不匹配的 cron，仅 API 触发，不会自行定时跑）。
+#     目标任务找不到时自动创建（schedule 用「@once」＝面板唯一接受的非周期写法，
+#     不会自行定时运行，只由 API/手动触发；空 schedule 或 2 月 31 日之类会被
+#     面板以「无效的定时规则」拒绝）。
 #  B. 内联模式（兼容旧行为）：未配置上述凭证，或本次运行带了参数（--rebuild-stats 等
 #     手动特殊操作）→ 同步后在本任务内直接 exec 采集，参数原样透传。
 #
@@ -150,7 +152,6 @@ done
 if [ "$_HAS_FLAG" = 0 ]; then
   QL_URL="${QL_URL:-http://localhost:5700}" \
     CHINAMNOS_WORKDIR="$DIR_ABS" \
-    CHINAMNOS_PY="$PY" \
     $PY - <<'PYEOF'
 import json
 import os
@@ -159,7 +160,6 @@ import urllib.parse
 import urllib.request
 
 WORKDIR = os.environ.get("CHINAMNOS_WORKDIR", ".")
-PYBIN = os.environ.get("CHINAMNOS_PY", "python3")
 
 # 凭证/参数解析：TARIFF_CONFIG.notification.ql_trigger 优先，QL_* 环境变量兜底
 def _ql_cfg():
@@ -217,34 +217,51 @@ try:
     if not token:
         raise RuntimeError("auth/token 响应缺少 token")
 
+    # 任务表接口是 /open/crons（响应形状 {code:200, data:{data:[{id,name,command,...}]}}）；
+    # 该改版面板没有 /open/tasks* 路由（未知路径同样回 401，与「未带令牌」表现一致）。
+    # 关键：除取 token 外，每个请求都必须显式传 token=token，否则一律 401。
+    def _list_tasks():
+        # req() 已返回响应体的 data 字段（形状 {data:[...]}），这里只需再取一层
+        r = req("GET", "/open/crons",
+                qs="searchValue=%s" % urllib.parse.quote(TASK_NAME), token=token) or {}
+        return r.get("data") or []
+
     tid = 0
     if TASK_ID:
         tid = int(TASK_ID)
     else:
-        tasks = req("GET", "/open/tasks", qs="searchValue=%s" % urllib.parse.quote(TASK_NAME)) or []
         # 目标特征：命令含 chinamnos.py 且非本更新器（避免把同步任务自己再拉起来）
-        cands = [t for t in tasks
+        cands = [t for t in _list_tasks()
                  if "chinamnos.py" in str(t.get("command") or "")
                  and "chinamnos_updater" not in str(t.get("command") or "")]
         if cands:
-            tid = cands[0].get("id") or cands[0].get("_id")
+            tid = cands[0].get("id") or cands[0].get("_id") or 0
 
     if not tid and AUTOCREATE:
-        cmd = 'cd "%s" && %s chinamnos.py' % (WORKDIR, PYBIN)
-        new = req("POST", "/open/tasks",
-                  {"name": TASK_NAME, "command": cmd, "schedule": "0 0 31 2 *"})
-        tid = (new or {}).get("id") or (new or {}).get("_id")
-        print("[触发] 已自动创建独立采集任务 #%s（永不定时，仅 API 触发）：%s" % (tid, cmd))
+        # 面板执行器会改写命令里的裸 `cd`（实测 cd 后 pwd 变成 /ql），
+        # 所以不能用 `cd WORKDIR && python3 chinamnos.py`；改用面板原生 `task <脚本绝对路径>`。
+        cmd = 'task "%s/chinamnos.py"' % WORKDIR
+        new = req("POST", "/open/crons",
+                  {"name": TASK_NAME, "command": cmd, "schedule": "@once"},
+                  token=token) or {}
+        tid = new.get("id") or new.get("_id") or 0
+        if not tid:
+            # 创建接口若未回传 id，回查一次，避免绑定具体响应形状
+            hit = [t for t in _list_tasks() if str(t.get("name") or "") == TASK_NAME]
+            tid = (hit[0].get("id") or hit[0].get("_id") or 0) if hit else 0
+        if tid:
+            print("[触发] 已自动创建独立采集任务 #%s（永不定时，仅 API 触发）：%s" % (tid, cmd))
 
     if not tid:
         raise RuntimeError("未找到目标任务（task_name=%s）且 autocreate 未开启" % TASK_NAME)
 
-    req("PUT", "/open/tasks/run", [int(tid)])
+    req("PUT", "/open/crons/run", [int(tid)], token=token)
     print("[触发] ✓ 已请求面板运行采集任务 #%s，本同步任务结束" % tid)
 except Exception as e:
     print("[触发] ✗ 失败：%s" % str(e)[:200])
-    print("[触发] 提示：需在面板「设置→应用设置」创建应用并勾选「任务管理」权限；"
-          "也可配 task_id 直接指定目标任务。")
+    print("[触发] 提示：先核对 TARIFF_CONFIG.notification.ql_trigger 的 url/client_id/client_secret"
+          "（可直接 curl /open/auth/token 验证）；接口路径须为 /open/crons*，"
+          "应用需勾选「任务管理」权限。")
     sys.exit(1)
 PYEOF
   _trig=$?
