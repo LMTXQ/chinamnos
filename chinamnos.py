@@ -2188,11 +2188,16 @@ class CmccApi(_BaseCarrierApi):
         """移动上游键名对齐（仅限本类，不动公共转换层）：
         上游原始键 otherFees(带s) 与下游 _nm_to_fields 认的 otherFee 不一致，
         实测存量数据中 2641 条有值被整批丢弃，就地改名。
+        上游"其他说明"内容放在 others 键，下游只读 otherDesc，同步映射。
         （宽带键上游本就用 brandwidth，无需处理）"""
         for bean in ((result or {}).get('data') or {}).get('beans') or []:
             for nm in bean.get('nonModuleList') or []:
                 if 'otherFees' in nm:
                     nm['otherFee'] = nm.pop('otherFees')
+                if 'others' in nm:
+                    if not _s(nm.get('otherDesc')):
+                        nm['otherDesc'] = nm['others']
+                    del nm['others']
         return result
 
     def resolve_categories(self, prov_code, category_mode, fixed_categories,
@@ -3258,8 +3263,11 @@ def _nm_to_fields(nm, tariff_attr='1', t1='1', t2='1', carrier='cmcc'):
     f = {}
     _fees_raw = _s(nm.get('fees'))
     _unit_raw = _s(nm.get('feesUnit') or nm.get('priceUnit'))
+    # 仅标准计费周期（月/次/年/季/天/日/周）才补"元/"前缀；折扣类相对单位
+    # （如"倍套餐费"）原样拼接，否则会拼出"0.9元/倍套餐费"这类错误值。
     if _unit_raw and '元' not in _unit_raw:
-        _unit_raw = '元/' + _unit_raw
+        if any(_unit_raw.endswith(u) for u in ('月', '次', '年', '季', '天', '日', '周')):
+            _unit_raw = '元/' + _unit_raw
     f['资费标准'] = (_fees_raw + _unit_raw).strip()
     f['方案编号'] = _s(nm.get('reportNo')) or _s(nm.get('goodsid'))
     f['产品名称'] = _s(nm.get('name') or nm.get('tariffName') or nm.get('productName'))
