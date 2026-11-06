@@ -5741,7 +5741,9 @@ def write_collector_digest(config, all_crawl_results, announce_new=None):
             'round_at': int(now.timestamp() * 1000),
             'round': round_counts,
             'today': today_counts,
-            'announce': announce_new,
+            # 公告新增拍平为列表（条目自带 carrier/province 字段）——
+            # 分发端 notify_dispatch._digest_sections 按 isinstance(list) 解析，dict 会被整体丢弃
+            'announce': [it for items in announce_new.values() for it in items],
         }
         digest_path = os.path.join(d, 'coll_digest_%s_%s.json' % (date_str, now.strftime('%H%M%S')))
         _write_digest_json(digest_path, digest)
@@ -7297,6 +7299,19 @@ def _ann_retention(lim, carrier):
     except (TypeError, ValueError):
         return 90
 
+
+def _ann_prov_code(name):
+    """公告端中文省名（北京/湖南/内蒙古/深圳…）→ 项目省代码（PROVINCES.code，如 hun），
+    供采集播报按订户省份偏好过滤（订户 provinces 存省代码）。
+    全国性公告或未匹配值返回空串——分发端对空省份放行，行为安全。"""
+    t = re.sub(r"(省|市)$", "", str(name or "").strip())
+    if not t:
+        return ""
+    for p in PROVINCES:
+        if p["name"].startswith(t):
+            return p["code"]
+    return ""
+
 ANN_KEEP_TAGS_RE = (r"(?!/?(p|br|div|a|img|strong|b|em|i|u|ul|ol|li|table|tr|td|th|"
                     r"tbody|thead|h\d|blockquote)(\s|/|>))")
 
@@ -8255,7 +8270,7 @@ def fetch_announcements(config, storage, ran_carriers=None):
             announce_new[carrier] = [
                 {"carrier": carrier, "id": str(it.get("id") or ""),
                  "title": (it.get("title") or "")[:120], "date": it.get("date") or "",
-                 "province": it.get("province") or ""}
+                 "province": _ann_prov_code(it.get("province"))}
                 for it in trimmed
             ]
             extra = len(new_items) - len(trimmed)
