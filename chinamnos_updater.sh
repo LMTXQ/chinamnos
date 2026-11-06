@@ -48,6 +48,12 @@ if [ -n "$WORKDIR" ]; then
   fi
 fi
 
+# ── temp/ 临时产物子目录（随时可删）：.new 下载中文件、.bak 上一版备份、pycache 字节码缓存──
+# 工作目录根只留代码（+ queue/ 货单队列，由采集端/分发端维护）；PYTHONPYCACHEPREFIX 让
+# py_compile 校验与 python 执行的字节码统一写进 temp/pycache，杜绝 __pycache__ 散落根目录
+mkdir -p temp/pycache 2>/dev/null
+export PYTHONPYCACHEPREFIX="$PWD/temp/pycache"
+
 # 多源基址依次尝试：直连 → 两个常见加速镜像（文件路径拼在基址后）
 URL_BASES=(
   "https://raw.githubusercontent.com/$REPO/$BRANCH"
@@ -70,20 +76,20 @@ if [ "${SKIP_UPDATE:-0}" != "1" ]; then
   for b in "${URL_BASES[@]}"; do
     u="$b/$FILE"
     echo "[更新] 尝试下载: $u"
-    if fetch "$u" "$FILE.new" \
-       && grep -q "$MARKER" "$FILE.new" \
-       && $PY -m py_compile "$FILE.new" 2>/dev/null; then
+    if fetch "$u" "temp/$FILE.new" \
+       && grep -q "$MARKER" "temp/$FILE.new" \
+       && $PY -m py_compile "temp/$FILE.new" 2>/dev/null; then
       ok="$b"
       break
     fi
-    rm -f "$FILE.new"
+    rm -f "temp/$FILE.new"
     echo "[更新] 该源不可用，切换下一个"
   done
 
   if [ -n "$ok" ]; then
-    [ -f "$FILE" ] && cp -f "$FILE" "$FILE.bak"   # 保留上一版便于回滚
-    mv -f "$FILE.new" "$FILE"
-    echo "[更新] ✓ 已更新 $FILE（来源: $ok/$FILE，旧版备份为 $FILE.bak）"
+    [ -f "$FILE" ] && cp -f "$FILE" "temp/$FILE.bak"   # 保留上一版便于回滚
+    mv -f "temp/$FILE.new" "$FILE"
+    echo "[更新] ✓ 已更新 $FILE（来源: $ok/$FILE，旧版备份为 temp/$FILE.bak）"
   else
     if [ -f "$FILE" ]; then
       echo "[更新] ✗ 全部下载源失败，使用本地现有 $FILE 继续执行"
@@ -100,18 +106,18 @@ if [ "${SKIP_UPDATE:-0}" != "1" ]; then
     for NF in "${NFILES[@]}"; do
       NURL="$ok/qinglong/$NF"
       echo "[更新] 尝试下载: $NURL"
-      if fetch "$NURL" "$NF.new" \
-         && $PY -m py_compile "$NF.new" 2>/dev/null; then
-        if [ -f "$NF" ] && cmp -s "$NF" "$NF.new"; then
-          rm -f "$NF.new"
+      if fetch "$NURL" "temp/$NF.new" \
+         && $PY -m py_compile "temp/$NF.new" 2>/dev/null; then
+        if [ -f "$NF" ] && cmp -s "$NF" "temp/$NF.new"; then
+          rm -f "temp/$NF.new"
           echo "[更新] ✓ $NF 已是最新"
         else
-          [ -f "$NF" ] && cp -f "$NF" "$NF.bak"   # 保留上一版便于回滚
-          mv -f "$NF.new" "$NF"
+          [ -f "$NF" ] && cp -f "$NF" "temp/$NF.bak"   # 保留上一版便于回滚
+          mv -f "temp/$NF.new" "$NF"
           echo "[更新] ✓ 已更新 $NF"
         fi
       else
-        rm -f "$NF.new"
+        rm -f "temp/$NF.new"
         echo "[更新] ⚠ $NF 下载/校验失败，沿用现有版本继续"
       fi
     done

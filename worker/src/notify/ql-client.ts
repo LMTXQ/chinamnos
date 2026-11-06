@@ -8,8 +8,10 @@ import type { Env } from '../common/env';
      ③ 找任务：GET /open/crons?searchValue=<名称> → data.data[0].id（数字）
      ④ 触发：PUT /open/crons/run，body 为裸数字数组 [taskId]（不是 {id:[…]}！）
 
-   payload 文件落在青龙 scripts/chinamnos/ 目录（与 notify_dispatch.py 同目录），
-   文件即队列：notify_dispatch.py 扫描消化后删除，失败遗留自动补扫。 */
+   payload 文件落在青龙 scripts/{QL_PAYLOAD_PREFIX}/ 目录（默认 chinamnos/queue/，即
+   notify_dispatch.py 所在 digest_dir 的 queue/ 子目录——货单/队列统一收进 queue/，
+   工作目录根只留代码），文件即队列：notify_dispatch.py 扫描消化后删除，失败遗留自动补扫。
+   旧版 Worker 写 chinamnos/ 根的残留由分发端 _migrate_legacy_files 每轮搬入 queue/，不漏单。 */
 
 export interface PayloadRow {
   nid: string;            // 稳定去重键：`${kind}:${refId}:${channel_type}`
@@ -52,11 +54,12 @@ export async function qlDispatchPayload(env: Env, filename: string, rows: Payloa
     if (t.code !== 200 || !t.data?.token) throw new Error(`token 获取失败: ${JSON.stringify(t).slice(0, 120)}`);
     const H = { Authorization: `Bearer ${t.data.token}`, 'Content-Type': 'application/json' };
 
-    // ② 写 payload 文件（必须带 chinamnos/ 目录前缀：分发脚本只扫描 scripts/chinamnos/ 下的 batch_*.json，
-    //    裸文件名会落到 scripts/ 根目录成为孤儿——脚本永远扫不到，且不报任何错）
+    // ② 写 payload 文件（前缀必须与分发脚本所在 digest_dir 对应：默认 chinamnos/queue/，
+    //    即 notify_dispatch 的 DATA_DIR——裸文件名会落到 scripts/ 根目录成为孤儿，脚本扫不到且不报错）
+    const prefix = (env.QL_PAYLOAD_PREFIX || 'chinamnos/queue').replace(/^\/+|\/+$/g, '');
     const wRes = await fetch(`${base}/open/scripts`, {
       method: 'POST', headers: H,
-      body: JSON.stringify({ filename: `chinamnos/${filename}`, content: JSON.stringify(rows) }),
+      body: JSON.stringify({ filename: `${prefix}/${filename}`, content: JSON.stringify(rows) }),
     });
     const w = (await wRes.json()) as { code: number; message?: string };
     if (w.code !== 200) throw new Error(`payload 写入失败: ${JSON.stringify(w).slice(0, 120)}`);

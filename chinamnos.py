@@ -1368,7 +1368,7 @@ DEFAULT_CONFIG = {
             'ql_panel': True,
             'ext_msg': False,
         },
-        # 采集播报统一工作目录（digest 文件 / coll_today / notify_dispatch.py 同目录）
+        # 采集播报统一工作目录（根放代码；queue/ 放货单与分发状态，temp/ 放临时缓存）
         # 空 = 回退脚本自身所在目录；配置页「通知渠道」组「分发脚本目录」生成
         'digest_dir': '',
         # SMTP 发信邮箱池（配置页「SMTP 邮箱」页签生成）：本脚本不消费，
@@ -4046,7 +4046,8 @@ class StorageBackend:
         self._local_cache_enabled = bool(lc.get('enabled', False))
         path = (lc.get('path') or '').strip()
         if not path:
-            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_cache')
+            # 默认收进 temp/ 子目录（随时可删的缓存），工作目录根只留代码
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp', 'local_cache')
         self._local_cache_dir = os.path.abspath(path)
         mc = (config.get('storage') or {}).get('manifest_cache') or {}
         self._manifest_cache_enabled = bool(mc.get('enabled', True))
@@ -5655,6 +5656,22 @@ def resolve_digest_dir(config):
     return base
 
 
+def digest_queue_dir(config):
+    """货单/状态子目录 = 统一工作目录下 queue/：coll_digest_* 货单、coll_today 累计、
+    coll_suspect_empty 状态、batch_* 队列、分发去重/失败清单、锁文件全部收进这里，
+    工作目录根只留代码与 temp/ 缓存。
+    注意不用 data/ 命名——采集数据目录惯例已占用该名（storage path_prefix / 线上 data/{carrier}/）。
+    与 notify_dispatch.py 的 DATA_DIR 默认值保持同一推导（脚本所在目录 + /queue），两端天然一致。"""
+    base = resolve_digest_dir(config)
+    d = os.path.join(base, 'queue')
+    try:
+        os.makedirs(d, exist_ok=True)
+        return d
+    except Exception as e:
+        logger.warning(f'[digest] queue 子目录创建失败({d}): {e}，回退工作目录根')
+        return base
+
+
 def _digest_counts(crawl_results):
     """crawl_results → {省code: {name, added, changed, removed}}（仅含有变化的省，全量不过滤）"""
     name_to_code = {p['name']: p['code'] for p in PROVINCES}
@@ -5704,7 +5721,7 @@ _SUSPECT_EMPTY_LOCK = threading.Lock()
 
 def _load_suspect_empty_state(config):
     try:
-        path = os.path.join(resolve_digest_dir(config), 'coll_suspect_empty.json')
+        path = os.path.join(digest_queue_dir(config), 'coll_suspect_empty.json')
         with open(path, encoding='utf-8') as f:
             state = json.load(f)
         return state if isinstance(state, dict) else {}
@@ -5714,7 +5731,7 @@ def _load_suspect_empty_state(config):
 
 def _save_suspect_empty_state(config, state):
     try:
-        path = os.path.join(resolve_digest_dir(config), 'coll_suspect_empty.json')
+        path = os.path.join(digest_queue_dir(config), 'coll_suspect_empty.json')
         _write_digest_json(path, state)
     except Exception as e:
         logger.warning(f'[suspect-empty] 状态写盘失败(不影响采集主流程): {e}')
@@ -5729,7 +5746,7 @@ def write_collector_digest(config, all_crawl_results, announce_new=None):
             return
         if not isinstance(announce_new, dict):
             announce_new = {}
-        d = resolve_digest_dir(config)
+        base = resolve_digest_dir(config)
         now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
         date_str = now.strftime('%Y%m%d')
 
@@ -5743,9 +5760,11 @@ def write_collector_digest(config, all_crawl_results, announce_new=None):
             return
 
         # 当日累计：读旧状态合并（日期翻篇自动重置；旧文件损坏按无累计处理）
+        # 货单/状态统一放 queue/ 子目录（与 notify_dispatch 的 DATA_DIR 同推导，见 digest_queue_dir）
+        qd = digest_queue_dir(config)
         today_counts = {}
         try:
-            with open(os.path.join(d, 'coll_today.json'), encoding='utf-8') as f:
+            with open(os.path.join(qd, 'coll_today.json'), encoding='utf-8') as f:
                 prev = json.load(f)
             if prev.get('date') == date_str and isinstance(prev.get('carriers'), dict):
                 today_counts = prev['carriers']
@@ -5753,7 +5772,7 @@ def write_collector_digest(config, all_crawl_results, announce_new=None):
             pass
         for carrier_key, counts in round_counts.items():
             _merge_digest_counts(today_counts.setdefault(carrier_key, {}), counts)
-        _write_digest_json(os.path.join(d, 'coll_today.json'),
+        _write_digest_json(os.path.join(qd, 'coll_today.json'),
                            {'date': date_str, 'carriers': today_counts})
 
         digest = {
@@ -5765,17 +5784,21 @@ def write_collector_digest(config, all_crawl_results, announce_new=None):
             # 分发端 notify_dispatch._digest_sections 按 isinstance(list) 解析，dict 会被整体丢弃
             'announce': [it for items in announce_new.values() for it in items],
         }
-        digest_path = os.path.join(d, 'coll_digest_%s_%s.json' % (date_str, now.strftime('%H%M%S')))
+        digest_path = os.path.join(qd, 'coll_digest_%s_%s.json' % (date_str, now.strftime('%H%M%S')))
         _write_digest_json(digest_path, digest)
         logger.info(f'[digest] 采集播报已落盘: {os.path.basename(digest_path)}'
-                    f'（资费变更 {len(round_counts)} 运营商 / 公告新增 {len(announce_new)} 运营商，目录: {d}）')
+                    f'（资费变更 {len(round_counts)} 运营商 / 公告新增 {len(announce_new)} 运营商，目录: {qd}）')
 
         # 叫醒分发脚本（文件即队列；flock 防重入，撞锁/失败退出码均忽略，文件留给下轮补扫）
-        dispatch = os.path.join(d, 'notify_dispatch.py')
+        # 子进程字节码缓存定向 temp/，避免 __pycache__ 散落在工作目录根
+        dispatch = os.path.join(base, 'notify_dispatch.py')
         if os.path.isfile(dispatch):
             try:
-                r = subprocess.run([sys.executable, dispatch], cwd=d, timeout=1800,
-                                   capture_output=True, text=True)
+                _sub_env = dict(os.environ)
+                _sub_env['PYTHONPYCACHEPREFIX'] = os.path.join(base, 'temp', 'pycache')
+                os.makedirs(_sub_env['PYTHONPYCACHEPREFIX'], exist_ok=True)
+                r = subprocess.run([sys.executable, dispatch], cwd=os.path.dirname(dispatch),
+                                   timeout=1800, capture_output=True, text=True, env=_sub_env)
                 tail = (r.stdout or '').strip().splitlines()
                 logger.info(f'[digest] 分发脚本已执行（exit={r.returncode}）: {tail[-1] if tail else "(无输出)"}')
             except Exception as e:

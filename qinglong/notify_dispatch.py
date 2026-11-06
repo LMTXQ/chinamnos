@@ -43,7 +43,7 @@ payload 行结构（Worker 写入，契约固定）：
     零标题标签零加粗）
 
 环境变量：
-  NOTIFY_DATA_DIR     payload 与状态目录（默认：脚本同目录 data/）
+  NOTIFY_DATA_DIR     payload 与状态目录（默认：脚本同目录 queue/ 子目录；显式配置优先）
   TARIFF_CONFIG       采集端完整配置 JSON（通知分发读取 notification.smtp_accounts 作为 SMTP 发信邮箱池，
                       未配置时回退旧环境变量 SMTP_ACCOUNTS）
   DIGEST_API_BASE     Worker API 基址（如 https://api.example.com，采集播报拉订户名单用；
@@ -58,6 +58,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import hmac
@@ -72,6 +73,9 @@ from email.mime.text import MIMEText
 from email.header import Header
 from email.utils import formataddr
 
+# 脚本模式运行：不写 .pyc（避免 __pycache__ 散落工作目录；被独立 task 触发时无 PYTHONPYCACHEPREFIX 保护）
+sys.dont_write_bytecode = True
+
 try:
     import fcntl
 except ImportError:
@@ -84,9 +88,11 @@ try:
 except ImportError:
     qq_text_render = None
 
-# payload 与状态文件均放在脚本同目录（Worker 经 OpenAPI scripts 接口写入的 batch_*.json
-# 会落在青龙 scripts 目录——即本脚本所在目录，扫本目录即可形成完整闭环）
-DATA_DIR = os.environ.get("NOTIFY_DATA_DIR") or os.path.dirname(os.path.abspath(__file__))
+# payload 与状态文件统一放脚本同目录的 queue/ 子目录（货单/队列/去重/失败/冷却/锁），
+# 工作目录根只留代码与 temp/ 缓存；NOTIFY_DATA_DIR 显式配置时优先生效
+# （Worker 经 OpenAPI scripts 接口写入的 batch_*.json 带 chinamnos/queue/ 前缀落在 queue/，
+#  旧版 Worker 仍写 chinamnos/ 根的残留由 _migrate_legacy_files 每轮搬入 queue/ 后统一扫描）
+DATA_DIR = os.environ.get("NOTIFY_DATA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'queue')
 PROCESSED_FILE = os.path.join(DATA_DIR, "processed_ids.json")
 FAILED_FILE = os.path.join(DATA_DIR, "failed_ids.json")
 LOCK_FILE = os.path.join(DATA_DIR, ".dispatch.lock")
@@ -1235,8 +1241,38 @@ def process_digest_files(processed, failed, workers=8):
     return ok_cnt, skip_cnt, fail_cnt, new_failures
 
 
+def _migrate_legacy_files():
+    """旧布局兼容（双向混跑安全）：把脚本同目录（工作目录根）残留的货单/队列/状态文件
+    一次性搬进 DATA_DIR（queue/ 子目录）。覆盖两类场景——
+    ① 本次升级前散落在根目录的历史文件；② 旧版 Worker 仍把 batch_*.json 写到 chinamnos/ 根
+    （每轮启动都会搬，旧 Worker 未升级期间不漏单）。
+    跨文件系统（NOTIFY_DATA_DIR 指到别的挂载点）时 os.replace 失败回退 shutil.move。"""
+    base = os.path.dirname(os.path.abspath(__file__))
+    if os.path.abspath(base) == os.path.abspath(DATA_DIR):
+        return
+    moved = 0
+    for pat in ("batch_*.json", "coll_digest_*.json", "coll_today.json",
+                "coll_suspect_empty.json", "processed_ids.json", "failed_ids.json",
+                "mailbox_cooldown.json", "mailbox_counts.json", ".qqbot_token.json",
+                ".dispatch.lock"):
+        for src in glob.glob(os.path.join(base, pat)):
+            dst = os.path.join(DATA_DIR, os.path.basename(src))
+            try:
+                os.replace(src, dst)
+                moved += 1
+            except OSError:
+                try:
+                    shutil.move(src, dst)
+                    moved += 1
+                except Exception as e:
+                    print("  ⚠ 旧布局迁移失败 %s: %s" % (os.path.basename(src), str(e)[:80]))
+    if moved:
+        print("  📦 旧布局迁移：%d 个文件已搬入 queue/" % moved)
+
+
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
+    _migrate_legacy_files()
     # flock 非阻塞：拿不到 = 已有实例在跑（防并发重复分发/状态文件竞争）
     if fcntl is not None:
         lock_fp = open(LOCK_FILE, "w")
