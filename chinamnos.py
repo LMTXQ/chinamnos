@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261028a"
+SCRIPT_VERSION = "20261107a"
 
 import os
 import sys
@@ -2446,7 +2446,10 @@ class CuccApi(_BaseCarrierApi):
                         'onlineDay': _s(d.get('startDate')),
                         'offlineDay': _s(d.get('endDate')),
                         'otherDesc': _s(d.get('otherDesc')),
-                        'tariffDesc': _s(d.get('serviceContent') or d.get('tariffDesc') or d.get('feeDesc') or d.get('productDesc')),
+                        # 参考项目字段语义实测：上游 serviceContent 属于「其他服务内容」，
+                        # 原实现塞进「资费说明」导致 其他服务内容 1130+ 条全空。
+                        'otherContent': _s(d.get('serviceContent') or d.get('otherContent')),
+                        'tariffDesc': _s(d.get('feeDesc') or d.get('productDesc') or d.get('tariffDesc')),
                         'status': _s(d.get('state') or d.get('status')),
                     }],
                 }
@@ -3020,7 +3023,11 @@ class CtccApi(_BaseCarrierApi):
                     'dataUnit': ffnr.get('dataUnit', 'MB'),
                     'orientTraffic': ffnr.get('orientTraffic', ''),
                     'orientTrafficUnit': ffnr.get('orientTrafficUnit', 'MB'),
-                    'otherContent': _s(item.get('other_content') or item.get('otherContent')),
+                    # 参考项目字段语义实测：上游 rights 是「服务内容」，otherContent
+                    # 是「其他说明」。原实现只映射 otherContent→其他服务内容，导致
+                    # 说明文本错位、其他说明为空。
+                    'otherContent': _s(item.get('rights')),
+                    'otherDesc': _s(item.get('otherContent') or item.get('other_content')),
                     'lable1Name': _s(item.get('lable1Name')),
                     'lable1Id': _s(item.get('lable1Id')),
                     'jbxx_html': _s(item.get('jbxx')),
@@ -3151,7 +3158,11 @@ class CbnApi(_BaseCarrierApi):
             if not name:
                 continue
             price = item.get('productPrice', 0)
-            price_yuan = str(price / 100) if isinstance(price, (int, float)) and price >= 0 else ''
+            # 上游单位为分；整数元不要输出 "240.0"/"0.0"（原 str(price/100) 缺陷）。
+            price_yuan = ''
+            if isinstance(price, (int, float)) and price >= 0:
+                _yuan = price / 100
+                price_yuan = str(int(_yuan)) if _yuan == int(_yuan) else f'{_yuan:g}'
             raw_type2 = _s(item.get('type2'))
             mapped_type2 = '1'
             for suffix, std in cbn_type2_map.items():
@@ -3195,8 +3206,12 @@ class CbnApi(_BaseCarrierApi):
                     'sms': _s(item.get('sms')),
                     'familyNet': _s(item.get('familyNetwork')),
                     'rights': _s(item.get('rights')),
-                    'otherContent': _s(item.get('otherContent')),
-                    'otherDesc': _s(item.get('otherExplain')),
+                    # 参考项目字段语义实测：上游 rights/operatExplain 是「服务内容」，
+                    # otherContent/otherExplain 才是「其他说明」。原实现把两者装反，
+                    # 导致 其他服务内容 填成说明文本、其他说明 大面积为空。
+                    'otherContent': _s(item.get('rights')) or _s(item.get('operatExplain')),
+                    'otherDesc': ' | '.join(filter(None, [_s(item.get('otherContent')),
+                                                          _s(item.get('otherExplain'))])),
                     'status': _s(item.get('stateFlag')),
                     'updateTime': _s(item.get('updateDate')),
                     'createTime': _s(item.get('createDate')),
@@ -3302,7 +3317,9 @@ def _nm_to_fields(nm, tariff_attr='1', t1='1', t2='1', carrier='cmcc'):
     f['宽带'] = _s(nm.get('brandwidth'))
     f['移动高清'] = _s(nm.get('iptv'))
     _sms_raw = _s(nm.get('sms')) or _s(nm.get('SMS')) or _s(nm.get('shortMessage'))
-    f['短信'] = f'{_strip_trailing(_sms_raw, ["条"])}条' if (_sms_raw and _sms_raw not in ('0', 'null')) else ''
+    # "0" 是有效的短信条数（表示不含短信），保留输出"0条"；仅丢弃 null/空值。
+    # 原实现把 '0' 与 'null' 一起排除，导致大量套餐短信字段为空。
+    f['短信'] = f'{_strip_trailing(_sms_raw, ["条"])}条' if (_sms_raw and _sms_raw.lower() != 'null') else ''
     f['亲情网'] = _s(nm.get('familyNet'))
     f['权益'] = _s(nm.get('rights'))
     f['超出资费说明'] = _s(nm.get('extraFees'))
