@@ -140,7 +140,14 @@ fi
 #  注意：目标任务与同步任务若同时运行，靠 chinamnos.py 自身逻辑兜底（与旧行为一致）。
 # ═══════════════════════════════════════════════════════════════════
 DIR_ABS=$(pwd)
-if [ $# -eq 0 ]; then
+# 内联判定只认 `--` 开头的真实参数（--rebuild-stats 等）；位置参数一律忽略——
+# 改版面板 task 执行器会把脚本路径本身作为 $1 传入（如 chinamnos/chinamnos_updater.sh），
+# 不能用 [ $# -eq 0 ] 判断，否则解耦模式永远被误杀成内联
+_HAS_FLAG=0
+for _a in "$@"; do
+  case "$_a" in --*) _HAS_FLAG=1 ;; esac
+done
+if [ "$_HAS_FLAG" = 0 ]; then
   QL_URL="${QL_URL:-http://localhost:5700}" \
     CHINAMNOS_WORKDIR="$DIR_ABS" \
     CHINAMNOS_PY="$PY" \
