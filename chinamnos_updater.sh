@@ -66,11 +66,22 @@ URL_BASES=(
 NFILES=("notify_dispatch.py" "qq_text_render.py")   # 采集播报分发脚本 + 其同目录排版模块（仓库 qinglong/ 目录）
 
 fetch() { # $1=URL $2=输出文件
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 8 --max-time 60 -o "$2" "$1"
-  else
-    wget -qO "$2" --timeout=60 "$1"
-  fi
+  # </dev/null：子进程不继承任务的 stdin 管道，避免其持有管道写端导致面板判定任务未结束
+  # 重试：共 3 次尝试，失败间隔 2 秒，覆盖 SSL_ERROR_SYSCALL / 瞬时握手抖动
+  local url="$1" out="$2" attempt=0
+  while [ $attempt -lt 3 ]; do
+    attempt=$((attempt + 1))
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL --connect-timeout 8 --max-time 60 -o "$out" "$url" </dev/null && return 0
+    else
+      wget -qO "$out" --timeout=60 "$url" </dev/null && return 0
+    fi
+    if [ $attempt -lt 3 ]; then
+      echo "[更新]   第 ${attempt} 次失败，2s 后重试..."
+      sleep 2
+    fi
+  done
+  return 1
 }
 
 if [ "${SKIP_UPDATE:-0}" != "1" ]; then
@@ -79,8 +90,8 @@ if [ "${SKIP_UPDATE:-0}" != "1" ]; then
     u="$b/$FILE"
     echo "[更新] 尝试下载: $u"
     if fetch "$u" "temp/$FILE.new" \
-       && grep -q "$MARKER" "temp/$FILE.new" \
-       && $PY -m py_compile "temp/$FILE.new" 2>/dev/null; then
+       && grep -q "$MARKER" "temp/$FILE.new" </dev/null \
+       && $PY -m py_compile "temp/$FILE.new" 2>/dev/null </dev/null; then
       ok="$b"
       break
     fi
@@ -106,21 +117,30 @@ if [ "${SKIP_UPDATE:-0}" != "1" ]; then
   # QQTEXT-1 改动说明：单文件同步改为 NFILES 循环，逐个下载/语法校验/备份替换，任一失败只告警
   if [ -n "$ok" ]; then
     for NF in "${NFILES[@]}"; do
-      NURL="$ok/qinglong/$NF"
-      echo "[更新] 尝试下载: $NURL"
-      if fetch "$NURL" "temp/$NF.new" \
-         && $PY -m py_compile "temp/$NF.new" 2>/dev/null; then
+      nf_ok=""
+      for b in "${URL_BASES[@]}"; do
+        NURL="$b/qinglong/$NF"
+        echo "[更新] 尝试下载: $NURL"
+        if fetch "$NURL" "temp/$NF.new" \
+           && $PY -m py_compile "temp/$NF.new" 2>/dev/null </dev/null; then
+          nf_ok="$b"
+          break
+        fi
+        rm -f "temp/$NF.new"
+        echo "[更新] 该源不可用，切换下一个"
+      done
+      if [ -n "$nf_ok" ]; then
         if [ -f "$NF" ] && cmp -s "$NF" "temp/$NF.new"; then
           rm -f "temp/$NF.new"
           echo "[更新] ✓ $NF 已是最新"
         else
           [ -f "$NF" ] && cp -f "$NF" "temp/$NF.bak"   # 保留上一版便于回滚
           mv -f "temp/$NF.new" "$NF"
-          echo "[更新] ✓ 已更新 $NF"
+          echo "[更新] ✓ 已更新 $NF（来源: $nf_ok/qinglong/$NF）"
         fi
       else
         rm -f "temp/$NF.new"
-        echo "[更新] ⚠ $NF 下载/校验失败，沿用现有版本继续"
+        echo "[更新] ⚠ $NF 全部源下载/校验失败，沿用现有版本继续"
       fi
     done
   else
@@ -197,12 +217,19 @@ if not CID or not SECRET:
 def req(method, path, payload=None, token=None, qs=""):
     url = BASE + path + (("?%s" % qs) if qs else "")
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    headers = {"Content-Type": "application/json"}
+    # Connection: close：要求面板响应后立即关闭 socket，避免 keep-alive 连接在 Python 退出清理阶段残留，
+    # 进而导致任务 stdout 管道写端被持有、面板判定任务未结束
+    headers = {"Content-Type": "application/json", "Connection": "close"}
     if token:
         headers["Authorization"] = "Bearer " + token
     r = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(r, timeout=15) as resp:
         d = json.load(resp)
+        # 显式读尽响应体并关闭，避免半关闭 socket 在退出时阻塞
+        try:
+            resp.read()
+        except Exception:
+            pass
     if d.get("code") != 200:
         raise RuntimeError("%s %s -> %s" % (method, path, json.dumps(d, ensure_ascii=False)[:200]))
     return d.get("data")
@@ -257,11 +284,13 @@ try:
 
     req("PUT", "/open/crons/run", [int(tid)], token=token)
     print("[触发] ✓ 已请求面板运行采集任务 #%s，本同步任务结束" % tid)
+    sys.stdout.flush()
 except Exception as e:
     print("[触发] ✗ 失败：%s" % str(e)[:200])
     print("[触发] 提示：先核对 TARIFF_CONFIG.notification.ql_trigger 的 url/client_id/client_secret"
           "（可直接 curl /open/auth/token 验证）；接口路径须为 /open/crons*，"
           "应用需勾选「任务管理」权限。")
+    sys.stdout.flush()
     sys.exit(1)
 PYEOF
   _trig=$?
