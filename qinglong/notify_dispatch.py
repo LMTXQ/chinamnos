@@ -46,7 +46,7 @@ payload 行结构（Worker 写入，契约固定）：
   NOTIFY_DATA_DIR     payload 与状态目录（默认：脚本同目录 data/）
   TARIFF_CONFIG       采集端完整配置 JSON（通知分发读取 notification.smtp_accounts 作为 SMTP 发信邮箱池，
                       未配置时回退旧环境变量 SMTP_ACCOUNTS）
-  DIGEST_API_BASE     Worker API 基址（如 https://api.ftac.dpdns.org，采集播报拉订户名单用；
+  DIGEST_API_BASE     Worker API 基址（如 https://api.example.com，采集播报拉订户名单用；
                       TARIFF_CONFIG.notification.digest_api.api_base 优先，此环境变量兜底）
   DIGEST_PULL_TOKEN   订户名单端点访问密钥（与 Worker secret DIGEST_PULL_TOKEN 同值；
                       TARIFF_CONFIG.notification.digest_api.pull_token 优先，此环境变量兜底；

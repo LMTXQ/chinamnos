@@ -2175,7 +2175,7 @@ Shell.registerPage({
       <h2 class="panel-title"><span class="p-icon api"><i data-icon="link"></i></span>播报订户名单接口 <span class="panel-sub">(青龙 notify_dispatch.py → Worker 内部端点；写入 notification.digest_api)</span></h2>
       <p class="panel-sub" style="margin-bottom:12px">采集播报分发前，notify_dispatch.py 调 Worker 的 /api/internal/digest-subscribers 拉取订阅用户名单（渠道凭证、关注省份、公告开关），按订户偏好组包发送。此处留空 = 回退旧独立环境变量 DIGEST_API_BASE / DIGEST_PULL_TOKEN（兼容既有部署）。注意：Worker 端只认自己的同名 secret DIGEST_PULL_TOKEN 做鉴权，不受本配置影响——此处的 Token 必须与 Worker secret 填同值。</p>
       <div class="f-row">
-        <div class="fg"><label>Worker API 基址 <span class="help" data-tip="Worker API 基址（digest_api.api_base，对应旧环境变量 DIGEST_API_BASE），如 https://api.ftac.dpdns.org。留空 = 回退 DIGEST_API_BASE 环境变量。">?</span><span class="hint">(digest_api.api_base)</span></label><input type="text" id="notifyDigestApiBase" value="" placeholder="https://api.ftac.dpdns.org"></div>
+        <div class="fg"><label>Worker API 基址 <span class="help" data-tip="Worker API 基址（digest_api.api_base，对应旧环境变量 DIGEST_API_BASE），如 https://api.example.com。留空 = 回退 DIGEST_API_BASE 环境变量。">?</span><span class="hint">(digest_api.api_base)</span></label><input type="text" id="notifyDigestApiBase" value="" placeholder="如 https://api.example.com"></div>
         <div class="fg"><label>订户名单访问密钥 <span class="help" data-tip="订户名单端点访问密钥（digest_api.pull_token，对应旧环境变量 DIGEST_PULL_TOKEN），须与 Worker 端 secret DIGEST_PULL_TOKEN 同值（Worker 侧只认自己的 secret，不受此配置影响）。留空 = 回退 DIGEST_PULL_TOKEN 环境变量。">?</span><span class="hint">(digest_api.pull_token)</span></label><input type="password" id="notifyDigestPullToken" value="" autocomplete="new-password" placeholder="与 Worker secret DIGEST_PULL_TOKEN 同值"></div>
       </div>
     </div>
