@@ -1567,6 +1567,26 @@ def parse_and_validate_config():
     _dd = _notif.get('digest_dir', '')
     if not isinstance(_dd, str):
         errors.append('notification.digest_dir 需为字符串（分发脚本所在目录，留空 = 脚本所在目录）')
+    # 解耦触发青龙独立采集任务（chinamnos_updater.sh 读用；留空 = 旧内联模式）
+    _qt = _notif.get('ql_trigger')
+    if _qt is not None:
+        if not isinstance(_qt, dict):
+            errors.append('notification.ql_trigger 需为对象（解耦触发面板独立采集任务）')
+        else:
+            for _k in ('url', 'client_id', 'client_secret', 'task_name', 'task_id'):
+                if _k in _qt and not isinstance(_qt[_k], str):
+                    errors.append(f'notification.ql_trigger.{_k} 需为字符串')
+            if 'autocreate' in _qt and not isinstance(_qt['autocreate'], bool):
+                errors.append('notification.ql_trigger.autocreate 需为布尔值')
+    # 播报订户名单接口联动（notify_dispatch.py 读用；留空 = 回退 DIGEST_* 环境变量）
+    _da = _notif.get('digest_api')
+    if _da is not None:
+        if not isinstance(_da, dict):
+            errors.append('notification.digest_api 需为对象（播报订户名单接口联动）')
+        else:
+            for _k in ('api_base', 'pull_token'):
+                if _k in _da and not isinstance(_da[_k], str):
+                    errors.append(f'notification.digest_api.{_k} 需为字符串')
     _sa = _notif.get('smtp_accounts', [])
     if not isinstance(_sa, list):
         errors.append('notification.smtp_accounts 需为数组')

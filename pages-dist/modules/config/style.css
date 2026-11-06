@@ -194,6 +194,20 @@
   color: var(--sub);
   margin-bottom: 5px;
 }
+/* fg 控制项为开关行（ck-row）时：显式恢复 flex 布局——
+   .fg > label 的 display:block（0,1,1）会压过 .ck-row 的 flex（0,1,0），
+   导致开关与文字按基线排列（文字靠下、无 gap 挨得很紧）；
+   此处 (0,2,0) 稳压回 flex，并与同排输入框等高居中 */
+.fg > .ck-row {
+  display: flex;
+  min-height: 36px;
+  padding: 0;
+  align-items: center;
+  gap: 12px;
+}
+.fg > .ck-row input.switch {
+  margin-top: 0;
+}
 
 .f-row {
   display: grid;

@@ -46,8 +46,11 @@ payload 行结构（Worker 写入，契约固定）：
   NOTIFY_DATA_DIR     payload 与状态目录（默认：脚本同目录 data/）
   TARIFF_CONFIG       采集端完整配置 JSON（通知分发读取 notification.smtp_accounts 作为 SMTP 发信邮箱池，
                       未配置时回退旧环境变量 SMTP_ACCOUNTS）
-  DIGEST_API_BASE     Worker API 基址（如 https://api.ftac.dpdns.org，采集播报拉订户名单用）
-  DIGEST_PULL_TOKEN   订户名单端点访问密钥（与 Worker secret DIGEST_PULL_TOKEN 同值）
+  DIGEST_API_BASE     Worker API 基址（如 https://api.ftac.dpdns.org，采集播报拉订户名单用；
+                      TARIFF_CONFIG.notification.digest_api.api_base 优先，此环境变量兜底）
+  DIGEST_PULL_TOKEN   订户名单端点访问密钥（与 Worker secret DIGEST_PULL_TOKEN 同值；
+                      TARIFF_CONFIG.notification.digest_api.pull_token 优先，此环境变量兜底；
+                      Worker 端只认自己的同名 secret，不受 TARIFF_CONFIG 影响）
 
 仅依赖标准库。
 """
@@ -100,6 +103,22 @@ CARRIER_NAMES = {"cmcc": "中国移动", "cucc": "中国联通", "ctcc": "中国
 
 def _env(k, d=""):
     return os.environ.get(k, d).strip()
+
+
+def _notif_cfg(section, key, env_k):
+    """联动参数取值：TARIFF_CONFIG.notification.<section>.<key> 优先，
+    回退旧独立环境变量 env_k（兼容既有部署）。空值 = 未配置。"""
+    raw = _env("TARIFF_CONFIG")
+    if raw:
+        try:
+            sec = (json.loads(raw).get("notification") or {}).get(section)
+            if isinstance(sec, dict):
+                v = str(sec.get(key) or "").strip()
+                if v:
+                    return v
+        except Exception:
+            pass
+    return _env(env_k)
 
 
 def _post(url, payload, timeout=15):
@@ -787,10 +806,10 @@ def dispatch_rows(rows, processed, workers=8):
 def fetch_digest_subscribers():
     """调 Worker 内部端点现拉订户名单；重试 3 次（面板到 CF 链路间歇抖动），
     返回 (订户列表, 站点链接)；最终失败返回 (None, "")（调用方保留货单下轮补扫）。"""
-    base = _env("DIGEST_API_BASE").rstrip("/")
-    token = _env("DIGEST_PULL_TOKEN")
+    base = _notif_cfg("digest_api", "api_base", "DIGEST_API_BASE").rstrip("/")
+    token = _notif_cfg("digest_api", "pull_token", "DIGEST_PULL_TOKEN")
     if not base or not token:
-        print("  ⚠ DIGEST_API_BASE / DIGEST_PULL_TOKEN 未配置，无法拉取订户名单")
+        print("  ⚠ DIGEST_API_BASE / DIGEST_PULL_TOKEN 未配置（TARIFF_CONFIG.notification.digest_api 或独立环境变量），无法拉取订户名单")
         return None, ""
     url = base + "/api/internal/digest-subscribers"
     last_err = ""
