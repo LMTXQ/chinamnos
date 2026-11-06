@@ -58,7 +58,6 @@ import glob
 import json
 import os
 import re
-import shutil
 import sys
 import time
 import hmac
@@ -90,8 +89,7 @@ except ImportError:
 
 # payload 与状态文件统一放脚本同目录的 queue/ 子目录（货单/队列/去重/失败/冷却/锁），
 # 工作目录根只留代码与 temp/ 缓存；NOTIFY_DATA_DIR 显式配置时优先生效
-# （Worker 经 OpenAPI scripts 接口写入的 batch_*.json 带 chinamnos/queue/ 前缀落在 queue/，
-#  旧版 Worker 仍写 chinamnos/ 根的残留由 _migrate_legacy_files 每轮搬入 queue/ 后统一扫描）
+# （Worker 经 OpenAPI scripts 接口写入的 batch_*.json 带 chinamnos/queue/ 前缀落在 queue/）
 DATA_DIR = os.environ.get("NOTIFY_DATA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'queue')
 PROCESSED_FILE = os.path.join(DATA_DIR, "processed_ids.json")
 FAILED_FILE = os.path.join(DATA_DIR, "failed_ids.json")
@@ -1241,38 +1239,8 @@ def process_digest_files(processed, failed, workers=8):
     return ok_cnt, skip_cnt, fail_cnt, new_failures
 
 
-def _migrate_legacy_files():
-    """旧布局兼容（双向混跑安全）：把脚本同目录（工作目录根）残留的货单/队列/状态文件
-    一次性搬进 DATA_DIR（queue/ 子目录）。覆盖两类场景——
-    ① 本次升级前散落在根目录的历史文件；② 旧版 Worker 仍把 batch_*.json 写到 chinamnos/ 根
-    （每轮启动都会搬，旧 Worker 未升级期间不漏单）。
-    跨文件系统（NOTIFY_DATA_DIR 指到别的挂载点）时 os.replace 失败回退 shutil.move。"""
-    base = os.path.dirname(os.path.abspath(__file__))
-    if os.path.abspath(base) == os.path.abspath(DATA_DIR):
-        return
-    moved = 0
-    for pat in ("batch_*.json", "coll_digest_*.json", "coll_today.json",
-                "coll_suspect_empty.json", "processed_ids.json", "failed_ids.json",
-                "mailbox_cooldown.json", "mailbox_counts.json", ".qqbot_token.json",
-                ".dispatch.lock"):
-        for src in glob.glob(os.path.join(base, pat)):
-            dst = os.path.join(DATA_DIR, os.path.basename(src))
-            try:
-                os.replace(src, dst)
-                moved += 1
-            except OSError:
-                try:
-                    shutil.move(src, dst)
-                    moved += 1
-                except Exception as e:
-                    print("  ⚠ 旧布局迁移失败 %s: %s" % (os.path.basename(src), str(e)[:80]))
-    if moved:
-        print("  📦 旧布局迁移：%d 个文件已搬入 queue/" % moved)
-
-
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
-    _migrate_legacy_files()
     # flock 非阻塞：拿不到 = 已有实例在跑（防并发重复分发/状态文件竞争）
     if fcntl is not None:
         lock_fp = open(LOCK_FILE, "w")

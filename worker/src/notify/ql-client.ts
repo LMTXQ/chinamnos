@@ -10,8 +10,7 @@ import type { Env } from '../common/env';
 
    payload 文件落在青龙 scripts/{QL_PAYLOAD_PREFIX}/ 目录（默认 chinamnos/queue/，即
    notify_dispatch.py 所在 digest_dir 的 queue/ 子目录——货单/队列统一收进 queue/，
-   工作目录根只留代码），文件即队列：notify_dispatch.py 扫描消化后删除，失败遗留自动补扫。
-   旧版 Worker 写 chinamnos/ 根的残留由分发端 _migrate_legacy_files 每轮搬入 queue/，不漏单。 */
+   工作目录根只留代码），文件即队列：notify_dispatch.py 扫描消化后删除，失败遗留自动补扫。 */
 
 export interface PayloadRow {
   nid: string;            // 稳定去重键：`${kind}:${refId}:${channel_type}`
