@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261107a"
+SCRIPT_VERSION = "20261107b"
 
 import os
 import sys
@@ -2415,6 +2415,12 @@ class CuccApi(_BaseCarrierApi):
                 name = _s(d.get('name') or d.get('tariffName'))
                 if not name:
                     continue
+                # 上游偶把同一段权益文案同时写进 equityCoupon 与 serviceContent，
+                # 两字段完全相同则只保留「其他服务内容」，避免前端重复展示。
+                _rights = _s(d.get('equityCoupon') or d.get('rights'))
+                _service_content = _s(d.get('serviceContent') or d.get('otherContent'))
+                if _rights and _rights == _service_content:
+                    _rights = ''
                 bean = {
                     'tariffName': name,
                     'nonModuleList': [{
@@ -2440,7 +2446,7 @@ class CuccApi(_BaseCarrierApi):
                         'brandwidth': _s(d.get('broadBand') or d.get('broadband') or d.get('brandwidth')),
                         'iptv': _s(d.get('iptv')),
                         'sms': _s(d.get('sms') or d.get('smsCount')),
-                        'rights': _s(d.get('equityCoupon') or d.get('rights')),
+                        'rights': _rights,
                         'extraFees': _s(d.get('extraFees')),
                         'otherFee': _s(d.get('otherFees') or d.get('otherFee')),
                         'onlineDay': _s(d.get('startDate')),
@@ -2448,7 +2454,7 @@ class CuccApi(_BaseCarrierApi):
                         'otherDesc': _s(d.get('otherDesc')),
                         # 参考项目字段语义实测：上游 serviceContent 属于「其他服务内容」，
                         # 原实现塞进「资费说明」导致 其他服务内容 1130+ 条全空。
-                        'otherContent': _s(d.get('serviceContent') or d.get('otherContent')),
+                        'otherContent': _service_content,
                         'tariffDesc': _s(d.get('feeDesc') or d.get('productDesc') or d.get('tariffDesc')),
                         'status': _s(d.get('state') or d.get('status')),
                     }],
@@ -3205,7 +3211,8 @@ class CbnApi(_BaseCarrierApi):
                     'iptv': _s(item.get('iptv')),
                     'sms': _s(item.get('sms')),
                     'familyNet': _s(item.get('familyNetwork')),
-                    'rights': _s(item.get('rights')),
+                    # 广电上游 rights 属于「服务内容」（参考项目 serviceContent=rights），
+                    # 不再同时映射到「权益」，否则同一段文本会在两个字段重复展示。
                     # 参考项目字段语义实测：上游 rights/operatExplain 是「服务内容」，
                     # otherContent/otherExplain 才是「其他说明」。原实现把两者装反，
                     # 导致 其他服务内容 填成说明文本、其他说明 大面积为空。
@@ -3335,6 +3342,10 @@ def _nm_to_fields(nm, tariff_attr='1', t1='1', t2='1', carrier='cmcc'):
             f['短信'] = f'{_m.group(1)}条'
     f['办理说明'] = _s(nm.get('handleDesc') or nm.get('transactDesc'))
     f['其他说明'] = _s(nm.get('otherDesc'))
+    # 上游不同键可能重复同一段文本（移动 others 与 otherContent、联通 serviceContent 与
+    # otherDesc 等）。两字段完全相同时只保留「其他服务内容」，避免前端重复展示。
+    if f['其他说明'] and f['其他说明'] == f['其他服务内容']:
+        f['其他说明'] = ''
     f['状态'] = _s(nm.get('status') or nm.get('state'))
     f['更新时间'] = _s(nm.get('updateTime'))
     f['创建时间'] = _s(nm.get('createTime'))
