@@ -271,10 +271,10 @@ async function submitTool() {
       closeSubmitPanel();
       toast("已提交，等待站长审核通过后上架");
     } else {
-      const code = r.error && r.error.code;
+      const code = r.code;
       if (code === 40904) toast("待审核的提交已达上限（5 条），请稍后再来");
-      else if (r.error && r.error.message === "RATE_LIMITED") toast("提交太频繁，请稍后再试");
-      else toast("提交失败：" + (r.error && r.error.message || "未知错误"));
+      else if (r.error === "RATE_LIMITED") toast("提交太频繁，请稍后再试");
+      else toast("提交失败：" + (typeof r.error === "string" ? r.error : (r.error?.message || "未知错误")));
     }
   } catch {
     toast("网络异常，请稍后再试");
