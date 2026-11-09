@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
-#  chinamnos 更新执行器（青龙面板用）
+#  chinamnos 更新执行器（青龙面板用 · Bash 版）
+#
+#  ⚠ 已被 chinamnos_updater.js 取代，建议改用 Node 版：
+#    功能/参数/环境变量完全一致，但整条链路压成单进程（不 fork python3、不 fork curl），
+#    可规避部分青龙部署下「日志已打印、脚本已结束，面板仍显示执行中」的问题。
+#    本文件保留仅为兼容旧任务，不再新增功能。
+#
 #  作用：从 GitHub 拉取最新 chinamnos.py 与 qinglong/ 下的通知分发脚本
 #        （notify_dispatch.py + qq_text_render.py）到统一工作目录，校验通过后执行；
 #        通知分发脚本下载失败仅告警，不阻塞采集
@@ -150,6 +156,7 @@ else
   echo "[更新] SKIP_UPDATE=1，跳过更新"
 fi
 
+
 # ═══════════════════════════════════════════════════════════════════
 #  启动：解耦模式（OpenAPI 触发独立采集任务）或内联模式（本任务内执行）
 #  凭证/参数来源（优先级从高到低）：
@@ -175,11 +182,18 @@ if [ "$_HAS_FLAG" = 0 ]; then
     $PY - <<'PYEOF'
 import json
 import os
+import signal
 import sys
 import urllib.parse
 import urllib.request
 
 WORKDIR = os.environ.get("CHINAMNOS_WORKDIR", ".")
+
+# 单次 OpenAPI 请求总超时（秒）：只管「叫醒别人」这一件事，不需要等很久。
+# 面板偶发只回响应头不结束 body 时，旧代码会无限阻塞 → 任务一直显示「执行中」。
+REQ_TIMEOUT = 12
+# 整个触发流程总超时（秒）：取token + 查任务 + 建任务 + 触发，四步合计上限。
+RUN_TIMEOUT = 40
 
 # 凭证/参数解析：TARIFF_CONFIG.notification.ql_trigger 优先，QL_* 环境变量兜底
 def _ql_cfg():
@@ -215,27 +229,40 @@ if not CID or not SECRET:
 
 
 def req(method, path, payload=None, token=None, qs=""):
+    """单次 OpenAPI 调用。
+
+    urlopen(timeout=) 只管单次 socket 操作，不是总时长；面板偶发只发头部不结束响应体时，
+    json.load 会一直阻塞，脚本就卡在这里不退——面板随即一直显示「执行中」。
+    所以这里 read() 一次性读尽 body 再解析，慢/半死连接交给外层 RUN_TIMEOUT 总兜底。
+    """
     url = BASE + path + (("?%s" % qs) if qs else "")
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    # Connection: close：要求面板响应后立即关闭 socket，避免 keep-alive 连接在 Python 退出清理阶段残留，
-    # 进而导致任务 stdout 管道写端被持有、面板判定任务未结束
     headers = {"Content-Type": "application/json", "Connection": "close"}
     if token:
         headers["Authorization"] = "Bearer " + token
+
+    # 不在 req 内设置 signal.alarm：那会覆盖并清掉外层「总超时」，导致总超时失效。
+    # 单请求靠 urlopen 的 socket 超时兜底（连接/读取各自触发），整体靠外层 RUN_TIMEOUT 兜底。
     r = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(r, timeout=15) as resp:
-        d = json.load(resp)
-        # 显式读尽响应体并关闭，避免半关闭 socket 在退出时阻塞
-        try:
-            resp.read()
-        except Exception:
-            pass
+    with urllib.request.urlopen(r, timeout=REQ_TIMEOUT) as resp:
+        # read() 读尽整个 body（不依赖 json.load 的增量解析），确保连接可正常收尾
+        raw = resp.read()
+    d = json.loads(raw.decode("utf-8", "replace") or "{}")
     if d.get("code") != 200:
         raise RuntimeError("%s %s -> %s" % (method, path, json.dumps(d, ensure_ascii=False)[:200]))
     return d.get("data")
 
 
+def _run_alarm(_sig, _frm):
+    raise TimeoutError("触发流程总超时(%ds)" % RUN_TIMEOUT)
+
+
 try:
+    # 整个触发流程总兜底：即使某个环节卡在非 socket 位置（DNS、连接池、面板慢查询），
+    # 也保证在 RUN_TIMEOUT 内退出，绝不把「执行中」状态一直挂住
+    if hasattr(signal, "SIGALRM"):
+        signal.signal(signal.SIGALRM, _run_alarm)
+        signal.alarm(RUN_TIMEOUT)
     print("[触发] 解耦模式：经面板 OpenAPI 启动独立采集任务（来源: %s）"
           % ("TARIFF_CONFIG.notification.ql_trigger" if _q else "QL_* 环境变量"))
     tok = req("GET", "/open/auth/token",
@@ -285,13 +312,19 @@ try:
     req("PUT", "/open/crons/run", [int(tid)], token=token)
     print("[触发] ✓ 已请求面板运行采集任务 #%s，本同步任务结束" % tid)
     sys.stdout.flush()
+    # 触发完即走：取消总超时，os._exit 不给解释器留任何等待/GC 的机会
+    if hasattr(signal, "SIGALRM"):
+        signal.alarm(0)
+    os._exit(0)
 except Exception as e:
     print("[触发] ✗ 失败：%s" % str(e)[:200])
     print("[触发] 提示：先核对 TARIFF_CONFIG.notification.ql_trigger 的 url/client_id/client_secret"
           "（可直接 curl /open/auth/token 验证）；接口路径须为 /open/crons*，"
           "应用需勾选「任务管理」权限。")
     sys.stdout.flush()
-    sys.exit(1)
+    if hasattr(signal, "SIGALRM"):
+        signal.alarm(0)
+    os._exit(1)
 PYEOF
   _trig=$?
   case $_trig in
@@ -309,4 +342,9 @@ PYEOF
 fi
 
 echo "[执行] $PY $FILE $*"
-exec $PY "$FILE" "$@"
+# 不使用 exec：exec 会把 shell 整体替换为 python，脚本的退出流程随之消失。
+# </dev/null：子进程不继承任务 stdin（同 fetch 的既有做法）
+$PY "$FILE" "$@" </dev/null
+_rc=$?
+echo "[完成] 执行结束（exit=$_rc）"
+exit $_rc

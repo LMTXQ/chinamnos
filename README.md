@@ -84,6 +84,7 @@
 | 组件 | 代码位置 | 职责 |
 |---|---|---|
 | **采集端** | `chinamnos.py` | 单文件 Python 脚本，运行于青龙面板定时任务；负责资费/公告采集、变更对比、多线路存储编排、前端联合部署、采集播报货单落盘 |
+| **更新执行器** | `chinamnos_updater.js` / `.sh` | 青龙侧入口；任务启动时自动拉取最新采集端脚本并校验，再经面板 OpenAPI 触发独立采集任务（Node 版单进程，推荐） |
 | **后端** | `worker/` | Cloudflare Worker（TypeScript）；提供用户/帖子/工单/活动/公告/通知 API，D1 数据库 + R2 附件存储，内置定时清理任务 |
 | **通知分发** | `qinglong/notify_dispatch.py` | 运行于青龙侧的批量分发脚本，消费通知队列与采集播报货单，仅依赖标准库 |
 | **前端** | `pages-dist/` | 原生 JavaScript SPA（零构建），由采集端联合部署或从 GitHub 仓库拉取 |
@@ -99,7 +100,8 @@
 
 ```
 ├── chinamnos.py               # 采集端（单文件，青龙运行）
-├── chinamnos_updater.sh       # 青龙更新执行器：任务启动时自动从 GitHub 拉取最新脚本再执行
+├── chinamnos_updater.js       # 青龙更新执行器（Node，推荐）：拉取最新脚本后经 OpenAPI 触发独立采集任务
+├── chinamnos_updater.sh       # 青龙更新执行器（Bash，旧版）：同上，保留兼容
 ├── qinglong/
 │   ├── notify_dispatch.py     # 通知分发脚本（与 chinamnos.py 同目录部署）
 │   └── payload_sample.json    # 通知 payload 示例
@@ -179,7 +181,11 @@ npx wrangler deploy
 
 ### Step 2 · 配置采集端（青龙面板）
 
-1. 把 `chinamnos_updater.sh` 上传到青龙脚本目录，新建定时任务：`task chinamnos_updater.sh`
+1. 把 `chinamnos_updater.js`（推荐）或 `chinamnos_updater.sh`（旧版）上传到青龙脚本目录，新建定时任务：
+   ```bash
+   task chinamnos_updater.js     # 推荐：Node 版
+   # task chinamnos_updater.sh   # 旧版：Bash 版，行为一致
+   ```
    —— 之后每次任务启动都会自动从 GitHub 拉取最新 `chinamnos.py` 与 `qinglong/notify_dispatch.py`
    （多源加速 + 完整性校验 + 旧版备份，`SKIP_UPDATE=1` 可跳过更新）
 2. 通过青龙环境变量 `TARIFF_CONFIG` 注入完整 JSON 配置。可使用站点内置的[配置生成工具](https://chinamnos.ftac.dpdns.org/#/config)在线填写并导出配置 JSON，再写入青龙环境变量；也可按青龙方式直接写入 `config.json`
@@ -188,16 +194,33 @@ npx wrangler deploy
 常用参数（原样透传给 `chinamnos.py`）：
 
 ```bash
-task chinamnos_updater.sh                     # 完整采集
-task chinamnos_updater.sh --init              # 初始化基线（不通知）
-task chinamnos_updater.sh --announce-only     # 仅公告采集（轻量轮）
-task chinamnos_updater.sh --rebuild-stats     # 从已有快照重建 stats
-task chinamnos_updater.sh --deploy-frontend   # 仅部署前端
+task chinamnos_updater.js                     # 完整采集
+task chinamnos_updater.js --init              # 初始化基线（不通知）
+task chinamnos_updater.js --announce-only     # 仅公告采集（轻量轮）
+task chinamnos_updater.js --rebuild-stats     # 从已有快照重建 stats
+task chinamnos_updater.js --deploy-frontend   # 仅部署前端
 ```
+
+#### 执行器：为什么推荐 Node 版
+
+两个执行器的功能、参数、环境变量完全一致，差别只在进程模型：
+
+| | `chinamnos_updater.js`（Node） | `chinamnos_updater.sh`（Bash） |
+|---|---|---|
+| 运行时 | 青龙自带 `node`，零第三方依赖 | 需 `bash` + `curl` + `python3` |
+| 下载脚本 | 内置 `http/https`，单进程 | 每文件每次尝试 fork 一个 `curl` |
+| 配置解析 | `JSON.parse` 进程内完成 | fork 一个 `python3 -c` |
+| 调用面板 OpenAPI | 进程内发请求 | fork 一个 `python3` heredoc 子进程 |
+| 超时保护 | 单请求 12s / 触发流程 60s，超时必定退出 | 同类保护，但要跨多层进程传递 |
+
+**背景**：部分青龙部署下，Bash 版的 `[完成]` 日志已打印、脚本确实结束，面板却长期显示「执行中」——
+多层子进程（`sh` → `python3` → `curl`）的文件描述符与退出状态传递在面板侧容易判不准。
+Node 版把整条链路压成单进程，从根本上规避这类误判，触发链路实测耗时 < 100ms。
 
 > [!NOTE]
 > Python 依赖：`requests`、`pycryptodomex`（可选：`playwright-chromium`，用于电信公告过盾回退）。
 > 通知分发脚本仅依赖标准库。
+> Node 版仅在「内联执行采集」时才 spawn 一次 `python3`（真实业务需要），其余环节零子进程。
 
 ### Step 3 · 前端
 
