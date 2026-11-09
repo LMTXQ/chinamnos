@@ -228,6 +228,16 @@
   outline: none; border-color: var(--acc);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--acc) 16%, transparent);
 }
+.tl-form select {
+  padding: 9px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--txt); font-size: 13px; font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tl-form select:focus {
+  outline: none; border-color: var(--acc);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--acc) 16%, transparent);
+}
 .tl-form-actions { display: flex; gap: 8px; margin-top: 4px; }
 
 /* ─────────────── 精选跳转确认弹窗 ─────────────── */

@@ -210,7 +210,7 @@ async function loadLinks() {
 }
 
 /* ═══════════════ 提交面板（行内展开，无弹窗依赖） ═══════════════ */
-const GROUP_PRESETS = ["官方渠道", "实用查询", "社区站点", "其他"];
+const GROUP_PRESETS = ["官方渠道", "查询统计", "社区站点", "其他", "实用工具"];
 
 function toggleSubmitPanel() {
   const u = Auth.getUser();
@@ -233,8 +233,11 @@ function toggleSubmitPanel() {
         <label>链接 <span class="req">*</span><input id="navFUrl" maxlength="500" placeholder="https:// 或站内路径 /config"></label>
         <label>图标 URL <span class="opt">选填，留空自动抓取站点图标</span><input id="navFIcon" maxlength="500" placeholder="https://…/icon.png"></label>
         <label>简介 <span class="opt">选填，≤80 字</span><input id="navFDescr" maxlength="80" placeholder="一句话介绍这个站点 / 工具"></label>
-        <label>分组 <span class="opt">选填</span><input id="navFGroup" maxlength="20" list="navGroupList" placeholder="如：官方渠道 / 实用查询">
-          <datalist id="navGroupList">${GROUP_PRESETS.map((g) => `<option>${g}</option>`).join("")}</datalist>
+        <label>分组 <span class="opt">选填，从建议项选择</span>
+          <select id="navFGroup">
+            <option value="">（不选则归为「其他」）</option>
+            ${GROUP_PRESETS.map((g) => `<option value="${g}">${g}</option>`).join("")}
+          </select>
         </label>
         <div class="tl-form-actions">
           <button type="button" class="btn primary" data-act="submitTool"><i data-icon="check"></i>提交</button>
