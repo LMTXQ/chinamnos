@@ -93,9 +93,12 @@ export async function handleNavSubmit(request: Request, env: Env): Promise<Respo
   if (!url || !validNavUrl(url)) return failInvalid('url');
   if (iconUrl && !validNavUrl(iconUrl)) return failInvalid('icon_url');
 
-  // 提交限流 + 待审配额（防滥用刷链接）
-  const rl = await hitLimit(env, `nav:submit:${g.viewer.id}`, SUBMIT_LIMIT, 3600);
-  if (rl.limited) return fail(ERR.RATE_LIMITED, 'RATE_LIMITED', 429);
+  // 提交限流 + 待审配额（防滥用刷链接）；管理员/站长免限流
+  const isStaff = g.viewer.role === 'admin' || g.viewer.role === 'owner';
+  if (!isStaff) {
+    const rl = await hitLimit(env, `nav:submit:${g.viewer.id}`, SUBMIT_LIMIT, 3600);
+    if (rl.limited) return fail(ERR.RATE_LIMITED, 'RATE_LIMITED', 429);
+  }
   const pending = await env.DB.prepare(
     `SELECT COUNT(*) as c FROM nav_links WHERE submitted_by = ?1 AND status = 'pending'`,
   ).bind(g.viewer.id).first<{ c: number }>();
