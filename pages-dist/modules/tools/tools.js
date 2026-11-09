@@ -172,7 +172,19 @@ function regroup() {
     if (!map.has(g)) map.set(g, []);
     map.get(g).push(it);
   }
-  S.groups = Array.from(map, ([name, items]) => ({ name, items }));
+  // 固定展示顺序（三档）：① 核心建议项（GROUP_PRESETS 去除「其他」，按预设顺序）在最前；
+  //   ② 非建议项（历史自由填写的分组）在中间，按数据首次出现顺序；③ 「其他」永远最后
+  const presetFront = GROUP_PRESETS.filter((g) => g !== "其他");
+  const ordered = [];
+  const seen = new Set();
+  for (const g of presetFront) {
+    if (map.has(g)) { ordered.push(g); seen.add(g); }
+  }
+  for (const g of map.keys()) {
+    if (!seen.has(g) && g !== "其他") { ordered.push(g); seen.add(g); }
+  }
+  if (map.has("其他")) ordered.push("其他");
+  S.groups = ordered.map((name) => ({ name, items: map.get(name) }));
 }
 
 function renderAll() {
