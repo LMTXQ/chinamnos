@@ -68,6 +68,7 @@ let state = {
   users: { items: [], total: 0, page: 1, pageSize: 20, status: "", q: "" },
   logs: { items: [], total: 0, page: 1, action: "" },
   promos: { editId: "" },   // 推广管理：条目数据实时解析自 settings 的 promos 键
+  siteUpdates: { editId: "" }, // 站点更新管理：条目数据实时解析自 settings 的 site_updates 键
 };
 
 function fmtTime(ts) {
@@ -565,6 +566,11 @@ function getPromos() {
   const row = (state.settings || []).find((s) => s.key === "promos");
   try { const v = JSON.parse(row ? row.value_json : "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
 }
+/* 站点更新条目（settings 的 site_updates 键整存整取，同 promos 模式） */
+function getSiteUpdates() {
+  const row = (state.settings || []).find((s) => s.key === "site_updates");
+  try { const v = JSON.parse(row ? row.value_json : "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
+}
 /* 占位符行文本（公告页签编辑块）：[{key,value}] → 「键名 | 值」行 */
 function getPlaceholderRows() {
   const row = (state.settings || []).find((s) => s.key === "promo_placeholders");
@@ -646,6 +652,47 @@ function noticeSettingRow(key) {
 function renderPromos() {
   const pr = state.promos;
   const items = getPromos();
+  /* 站点更新条目（date 倒序展示）：编辑器字段 = 日期 + 标题 + MD 正文 + 弹窗提醒勾选（默认不弹） */
+  const su = state.siteUpdates;
+  const updItems = getSiteUpdates().slice().sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const updEditor = (u) => {
+    const isNew = !u;
+    const todayStr = new Date().getFullYear() + "-" + String(new Date().getMonth() + 1).padStart(2, "0") + "-" + String(new Date().getDate()).padStart(2, "0");
+    return `
+    <div class="adm-nav-edit">
+      <div class="adm-nav-edit-grid">
+        <label>更新日期<input class="inp" id="updEDate" value="${esc(u ? u.date : todayStr)}" placeholder="YYYY-MM-DD" maxlength="10"></label>
+        <label>标题<input class="inp" id="updETitle" maxlength="60" value="${esc(u ? u.title : "")}" placeholder="更新标题（60 字内）"></label>
+      </div>
+      <label style="display:block;margin-top:8px">内容（Markdown，8000 字内）${mdMountHTML("__upd__", u ? u.content : "", "支持 Markdown：**加粗**、[链接](https://…)、- 列表、# 标题", 8000)}</label>
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px"><input type="checkbox" id="updEPopup" ${u && u.popup ? "checked" : ""}><span class="adm-meta">弹窗提醒（仅最新一条生效：每版本每设备弹一次；不勾 = 仅页签展示）</span></div>
+      <div class="adm-actions" style="margin-top:8px">
+        <button class="btn primary sm" data-act="updSave" data-id="${isNew ? "new" : esc(u.id)}">保存</button>
+        <button class="btn ghost sm" data-act="updCancelEdit">取消</button>
+      </div>
+      <div class="adm-meta" style="margin-top:6px">生效链路：保存 → 下一轮采集部署到前端（最长一个采集周期 ≈ 8 小时）</div>
+    </div>`;
+  };
+  const updRow = (u) => {
+    const editing = su.editId === u.id;
+    const isLatest = updItems.length && updItems[0].id === u.id;
+    return `
+    <div class="adm-item">
+      <div class="adm-item-head">
+        <span class="adm-title">${esc(u.date)} · ${esc(u.title)}</span>
+        <span class="adm-meta">${u.popup ? (isLatest ? "弹窗提醒（最新一条生效）" : "已勾选弹窗（仅最新一条生效）") : "仅页签展示"}</span>
+      </div>
+      <div class="adm-item-foot">
+        <span class="adm-meta">版本 ${fmtTime(u.version)}</span>
+        <div class="adm-actions">
+          <button class="btn ghost sm" data-act="updEdit" data-id="${esc(u.id)}">编辑</button>
+          <button class="btn ghost sm" data-act="updPopupToggle" data-id="${esc(u.id)}">${u.popup ? "取消弹窗" : "设为弹窗"}</button>
+          <button class="btn ghost sm" data-act="updDelete" data-id="${esc(u.id)}" style="color:var(--red)">删除</button>
+        </div>
+      </div>
+      ${editing ? updEditor(u) : ""}
+    </div>`;
+  };
   /* 切换重弹开关：settings 键 promo_reswitch_enabled（未保存过 = 默认开启） */
   let reswitchOn = true;
   try {
@@ -738,6 +785,15 @@ function renderPromos() {
       ${items.length ? items.map(row).join("") : `<div class="adm-empty">暂无推广，点击「新建推广」创建第一条</div>`}
     </div>
     <div class="adm-set-group">
+      <div class="adm-set-group-title">站点更新</div>
+      <div class="adm-filter" style="justify-content:space-between;align-items:center">
+        <span class="adm-meta">更新日志（累积档案，按日期倒序展示在「公告推广」页签末位）；最新一条勾选弹窗时每版本每设备弹一次提醒。生效链路：保存 → 下一轮采集部署（最长 ≈ 8 小时）</span>
+        <button class="btn primary sm" data-act="updNew"${su.editId ? " disabled" : ""}>新建更新</button>
+      </div>
+      ${su.editId === "new" ? updEditor(null) : ""}
+      ${updItems.length ? updItems.map(updRow).join("") : `<div class="adm-empty">暂无更新，点击「新建更新」创建第一条</div>`}
+    </div>
+    <div class="adm-set-group">
       <div class="adm-set-group-title">占位符取值（{{key}}）</div>
       <div class="adm-filter" style="margin-bottom:8px"><span class="adm-meta">公告/推广正文里写 {{键名}}，展示时替换为对应值（仅公告/推广渲染生效，其他 Markdown 不替换）；值不随部署——保存即生效，前端访客下次进站拉到新值。</span></div>
       <textarea class="inp adm-setting-ta" rows="6" data-act="inputSetting" data-key="promo_placeholders" placeholder="每行一条，格式：键名 | 值&#10;如：quota | 128&#10;如：deadline | 10 月 31 日&#10;键名小写字母/数字/下划线 1~20 位且不可重复，值 ≤200 字">${esc(getPlaceholderRows())}</textarea>
@@ -808,6 +864,51 @@ async function onPromoDelete(id) {
   const r = await api.adminUpdateSetting("promos", items);
   toast(r.ok ? "已删除" : (r.error || "操作失败"));
   if (r.ok) { state.promos.editId = ""; loadTab(); }
+}
+
+/* ── 站点更新 CRUD（settings 的 site_updates 键整存整取，同 promos 模式）── */
+async function onUpdSave(id) {
+  const date = (($("updEDate") || {}).value || "").trim();
+  const title = (($("updETitle") || {}).value || "").trim();
+  const content = settingMdEds && settingMdEds.__upd__ ? settingMdEds.__upd__.getValue() : "";
+  const popup = !!($("updEPopup") || {}).checked;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast("日期格式须为 YYYY-MM-DD"); return; }
+  if (!title) { toast("标题不能为空"); return; }
+  if (!content.trim()) { toast("内容不能为空"); return; }
+  const items = getSiteUpdates();
+  const entry = {
+    id: id === "new" ? "upd_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) : id,
+    date,
+    title,
+    content,
+    version: Date.now(),   // 保存时间 = 版本（最新一条 popup 时，版本变化触发每设备重弹）
+    popup,
+  };
+  const idx = items.findIndex((x) => x.id === entry.id);
+  if (idx >= 0) items[idx] = entry; else items.push(entry);
+  const r = await api.adminUpdateSetting("site_updates", items);
+  toast(r.ok ? "已保存（随下一轮采集部署生效）" : (r.error || "保存失败"));
+  if (r.ok) { state.siteUpdates.editId = ""; loadTab(); }
+}
+
+async function onUpdPopupToggle(id) {
+  const items = getSiteUpdates();
+  const it = items.find((x) => x.id === id);
+  if (!it) return;
+  it.popup = !it.popup;
+  if (it.popup) it.version = Date.now(); // 开启弹窗时刷新版本：让已读设备重新弹一次
+  const r = await api.adminUpdateSetting("site_updates", items);
+  toast(r.ok ? (it.popup ? "已设为弹窗提醒（最新一条生效）" : "已取消弹窗") : (r.error || "操作失败"));
+  if (r.ok) loadTab();
+}
+
+async function onUpdDelete(id) {
+  const ok = await admConfirm({ title: "删除更新", message: "更新日志是累积档案，删除后「公告推广」页签将不再显示该条目（随下一轮采集部署生效）。", okText: "删除", danger: true });
+  if (!ok) return;
+  const items = getSiteUpdates().filter((x) => x.id !== id);
+  const r = await api.adminUpdateSetting("site_updates", items);
+  toast(r.ok ? "已删除" : (r.error || "操作失败"));
+  if (r.ok) { state.siteUpdates.editId = ""; loadTab(); }
 }
 
 /* ── 情报酒馆管理（admin+）：状态筛选 chips（客户端过滤）+ 通过/拒绝/下架/删除 ── */
@@ -1452,7 +1553,7 @@ function mountSettingMdEditors() {
    保留在隐藏名单中兜底（迁移未执行前 DB 中仍有旧行）。
    promos / promo_reswitch_enabled / promo_placeholders 已迁「公告」页签（可视化编辑器），
    site_notice_schedule 编辑入口在「公告」页签「公告弹出日期」块——设置页一律隐藏 */
-const SETTING_HIDDEN_KEYS = new Set(["site_notice_enabled", "site_notice_title", "site_notice_content", "cardhub_warning_enabled", "cardhub_warning_content", "promos", "promo_reswitch_enabled", "site_notice_schedule", "promo_placeholders"]);
+const SETTING_HIDDEN_KEYS = new Set(["site_notice_enabled", "site_notice_title", "site_notice_content", "cardhub_warning_enabled", "cardhub_warning_content", "promos", "promo_reswitch_enabled", "site_notice_schedule", "promo_placeholders", "site_updates"]);
 /* 多行编辑块的 per-key 文案（计数说明 / placeholder / 提示 / 保存按钮文字） */
 const SETTING_BLOCK_META = {
   ticket_apply_guarantor: {
@@ -2167,6 +2268,12 @@ function bindEvents() {
     if (act === "promoSave") { onPromoSave(el.dataset.id); return; }
     if (act === "promoToggle") { onPromoToggle(el.dataset.id); return; }
     if (act === "promoDelete") { onPromoDelete(el.dataset.id); return; }
+    if (act === "updNew") { state.siteUpdates.editId = "new"; render(); return; }
+    if (act === "updEdit") { state.siteUpdates.editId = el.dataset.id; render(); return; }
+    if (act === "updCancelEdit") { state.siteUpdates.editId = ""; render(); return; }
+    if (act === "updSave") { onUpdSave(el.dataset.id); return; }
+    if (act === "updPopupToggle") { onUpdPopupToggle(el.dataset.id); return; }
+    if (act === "updDelete") { onUpdDelete(el.dataset.id); return; }
     if (act === "postsPage") { state.posts.page = Number(el.dataset.page); loadTab(); return; }
     if (act === "tkExpand") { onTkExpand(el.dataset.id); return; }
     if (act === "tkReply") { onTkReply(el.dataset.id); return; }

@@ -29,7 +29,7 @@
 "use strict";
 
 import "./ui.js";
-import { maybeSiteNotice, maybePromos, maybePromosOnModuleEnter } from "./notice.js";
+import { maybeSiteNotice, maybePromos, maybePromosOnModuleEnter, maybeSiteUpdates } from "./notice.js";
 
 /* ─────────────── 共享工具 ─────────────── */
 export const esc = (s) =>
@@ -198,6 +198,9 @@ async function activate(page) {
        全站条目（scope.modules 空）在页面切换时判定；模块条目仅在其目标模块进入时判定 */
     maybePromos();
     maybePromosOnModuleEnter(page.id);
+    /* 站点更新提醒：串行队列中排在公告/推广之后——仅最新一条 popup=true 且
+       设备未记录该版本时弹（每版本每设备一次），关闭即记录 */
+    maybeSiteUpdates();
   };
   const canVT =
     document.startViewTransition &&

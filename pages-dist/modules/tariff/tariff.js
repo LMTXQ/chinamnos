@@ -652,9 +652,13 @@ function renderFavsPartition() {
 
 /* ── 公告推广页签：只读展示当前生效的公告与推广全文（弹窗内容回看） ──
    数据与弹窗同源同缓存（shell/notice.js loadNotices），生命周期内渲染一次；
-   推广区支持筛选 chips（当前范围/全部，样式同情报酒馆 act-filter-chip） */
+   三分区按钮切换（站点公告 | 推广 | 站点更新，组件复用收藏页 fav-part-tab，
+   记忆本机选择）；推广分区支持筛选 chips（当前范围/全部，样式同情报酒馆 act-filter-chip） */
 let _noticesViewRendered = false;
 let _ntcPromoFilter = "scope"; // scope=当前范围（默认） | all=全部
+let _ntcPartition = "notice";  // notice=站点公告（默认） | promo=推广 | update=站点更新
+let _ntcData = null, _ntcPh = null; // 渲染一次后缓存，分区切换零请求
+try { _ntcPartition = localStorage.getItem("chinamnos_ntc_partition") || "notice"; } catch { /* */ }
 
 /* 与弹窗 judgePromos 同源的范围匹配（scopeMatch 单一事实来源；含站点默认回退）：
    moduleId="tariff" → 当前范围 = 全站条目 + tariff 模块条目，且运营商/省份命中；
@@ -681,18 +685,11 @@ function renderPromoList(pBody, list, ph) {
     : `<div class="empty" style="padding:16px;text-align:center">${_ntcPromoFilter === "scope" ? "当前范围内暂无推广（可切到「全部」查看）" : "暂无推广"}</div>`;
 }
 
-async function renderNoticesView() {
-  if (_noticesViewRendered) return;
-  _noticesViewRendered = true;
-  const nBody = $("ntcNoticeBody"), pBody = $("ntcPromosBody");
-  if (!nBody || !pBody) return;
-  const data = await loadNotices();
-  const ph = await loadPlaceholders(); // 占位符取值（不随快照，Worker 实时）
-  const n = data && data.site_notice;
-  nBody.innerHTML = (n && n.enabled && n.content)
-    ? `<h4 style="margin:0 0 8px">${esc(n.title || "站点公告")}</h4><div class="act-md">${mdToSafeHtml(applyPlaceholders(n.content, ph))}</div>`
-    : `<div class="empty" style="padding:16px;text-align:center">当前没有公告</div>`;
-  /* 推广列表：防御性过滤停用条目（与弹窗一致） */
+/* 推广分区渲染：筛选 chips（当前范围/全部）+ 列表（防御性过滤停用条目，与弹窗一致） */
+function renderNtcPromos() {
+  const data = _ntcData, ph = _ntcPh;
+  const pBody = $("ntcPromosBody");
+  if (!pBody) return;
   const list = ((data && Array.isArray(data.promos)) ? data.promos : []).filter((p) => p && p.enabled !== false);
   const chipBar = $("ntcPromoChips");
   if (chipBar) {
@@ -707,6 +704,73 @@ async function renderNoticesView() {
     });
   }
   renderPromoList(pBody, list, ph);
+}
+
+async function renderNoticesView() {
+  if (_noticesViewRendered) return;
+  _noticesViewRendered = true;
+  const host = $("ntcPartHost");
+  if (!host) return;
+  const tabWrap = document.querySelector("#view-notices .fav-part-tabs");
+  /* 三分区按钮：记忆本机选择（notice|promo|update），默认站点公告 */
+  if (tabWrap) tabWrap.querySelectorAll("[data-ntcpart]").forEach((b) => {
+    b.addEventListener("click", () => {
+      _ntcPartition = b.dataset.ntcpart;
+      try { localStorage.setItem("chinamnos_ntc_partition", _ntcPartition); } catch { /* */ }
+      tabWrap.querySelectorAll("[data-ntcpart]").forEach((x) => x.classList.toggle("active", x === b));
+      renderNtcPartition();
+    });
+  });
+  if (!_ntcData) {
+    _ntcData = await loadNotices();
+    _ntcPh = await loadPlaceholders(); // 占位符取值（不随快照，Worker 实时）
+  }
+  renderNtcPartition();
+}
+
+/* 渲染当前分区（数据已缓存，切换零请求）：notice=站点公告 | promo=推广 | update=站点更新 */
+function renderNtcPartition() {
+  const host = $("ntcPartHost");
+  if (!host || !_ntcData) return;
+  const data = _ntcData, ph = _ntcPh;
+  const part = typeof _ntcPartition === "string" && ["notice", "promo", "update"].includes(_ntcPartition) ? _ntcPartition : "notice";
+  if (part === "update") {
+    /* 站点更新日志：date 倒序全量（接口已排序，前端防御性重排），复用公告渲染样式 */
+    const ups = (Array.isArray(data.site_updates) ? data.site_updates : [])
+      .filter((u) => u && u.title && u.content)
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    host.innerHTML = `
+      <div class="panel"><div class="about-text">
+        <h3>${icon("clock", "title-ic")} 站点更新</h3>
+        ${ups.length
+          ? ups.map((u) => `
+        <div style="border:1px solid rgba(128,128,128,.25);border-radius:8px;padding:12px;margin-top:10px">
+          <h4 style="margin:0 0 8px"><span class="ann-date" style="margin-right:8px">${esc(u.date)}</span>${esc(u.title)}</h4>
+          <div class="act-md">${mdToSafeHtml(applyPlaceholders(u.content || "", ph))}</div>
+        </div>`).join("")
+          : `<div class="empty" style="padding:16px;text-align:center">暂无站点更新</div>`}
+      </div></div>`;
+  } else if (part === "promo") {
+    host.innerHTML = `
+      <div class="panel"><div class="about-text">
+        <h3>${icon("info", "title-ic")} 推广</h3>
+        <div id="ntcPromoChips" style="margin:6px 0 4px;display:flex;gap:8px"></div>
+        <div id="ntcPromosBody"></div>
+      </div></div>`;
+    renderNtcPromos();
+  } else {
+    const n = data.site_notice;
+    host.innerHTML = `
+      <div class="panel"><div class="about-text">
+        <h3>${icon("bell", "title-ic")} 站点公告</h3>
+        <div id="ntcNoticeBody"></div>
+      </div></div>`;
+    const nBody = $("ntcNoticeBody");
+    nBody.innerHTML = (n && n.enabled && n.content)
+      ? `<h4 style="margin:0 0 8px">${esc(n.title || "站点公告")}</h4><div class="act-md">${mdToSafeHtml(applyPlaceholders(n.content, ph))}</div>`
+      : `<div class="empty" style="padding:16px;text-align:center">当前没有公告</div>`;
+  }
+  mountIcons(host);
 }
 
 function goProvince(code, targetTab) {
@@ -5658,22 +5722,14 @@ Shell.registerPage({
     </section>
     <section id="view-notices" class="view">
       <h1 class="page-title">公告推广</h1>
-      <p class="page-sub">站点公告 · 活动推广（弹窗内容随时可回看）</p>
+      <p class="page-sub">站点公告 · 活动推广 · 更新日志（弹窗内容随时可回看）</p>
 
-      <div class="panel">
-        <div class="about-text">
-          <h3>${icon("bell", "title-ic")} 站点公告</h3>
-          <div id="ntcNoticeBody"><div class="empty" style="padding:16px;text-align:center">加载中…</div></div>
-        </div>
+      <div class="fav-part-tabs">
+        <button type="button" class="fav-part-tab${_ntcPartition === "notice" ? " active" : ""}" data-ntcpart="notice">站点公告</button>
+        <button type="button" class="fav-part-tab${_ntcPartition === "promo" ? " active" : ""}" data-ntcpart="promo">推广</button>
+        <button type="button" class="fav-part-tab${_ntcPartition === "update" ? " active" : ""}" data-ntcpart="update">站点更新</button>
       </div>
-
-      <div class="panel" style="margin-top:16px">
-        <div class="about-text">
-          <h3>${icon("info", "title-ic")} 推广</h3>
-          <div id="ntcPromoChips" style="margin:6px 0 4px;display:flex;gap:8px"></div>
-          <div id="ntcPromosBody"><div class="empty" style="padding:16px;text-align:center">加载中…</div></div>
-        </div>
-      </div>
+      <div id="ntcPartHost"></div>
     </section>
     <section id="view-about" class="view">
       <h1 class="page-title">关于本站</h1>
@@ -5782,6 +5838,7 @@ Shell.registerPage({
     if (navTabs) { navTabs.destroy(); navTabs = null; }
     root.innerHTML = "";
     _noticesViewRendered = false;   // 公告推广一次性渲染守卫随页面销毁复位：否则跨页面再进（含 notices_ 深链）不渲染
+    _ntcData = null; _ntcPh = null; // 分区数据缓存随页面销毁复位（下次进入重新拉取，见 5 分钟 TTL 上游缓存）
     STATS = null;
     Object.keys(TAB_SHOWN).forEach(function(k) { delete TAB_SHOWN[k]; });
     Object.keys(listState).forEach(function(k) { delete listState[k]; });

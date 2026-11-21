@@ -10,6 +10,8 @@ import { ok } from './envelope';
 //                      scope.modules 非空 = 仅进入对应模块时判定弹出，空 = 全站任意页面。
 //                      跳蚤市集用户警告已并入推广体系：migration 0030 迁为
 //                      mode=must、scope.modules=["cardhub"] 的条目，专用键已删除）
+//     site_updates[]   站点更新日志（累积档案，date 倒序）：最新一条 popup=true 时
+//                      每版本每设备弹一次（closable），全部条目「公告推广」页签回看
 
 interface NoticeSettingRow { key: string; value_json: string; updated_at: number | null }
 
@@ -50,6 +52,40 @@ interface PromoOut {
   schedule?: Schedule;
 }
 
+/** 站点更新条目（更新日志：累积历史档案，仅最新一条可弹窗提醒，其余仅页签回看） */
+interface SiteUpdateOut {
+  id: string;
+  date: string;    // 更新日期 YYYY-MM-DD（列表排序与展示）
+  title: string;
+  content: string;
+  version: number; // 保存时间戳：设备级防重依据（新版本发布后已读设备重新弹一次）
+  popup: boolean;  // 是否触发弹窗提醒（默认 false = 仅页签展示）
+}
+
+/** 规范化站点更新条目（设置端已校验，此处防御性过滤：仅输出内容非空的条目，按 date 倒序） */
+function normalizeSiteUpdates(raw: unknown, fallbackVersion: number): SiteUpdateOut[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SiteUpdateOut[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const title = typeof o.title === 'string' ? o.title : '';
+    const content = typeof o.content === 'string' ? o.content : '';
+    const date = typeof o.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.date) ? o.date : '';
+    if (!title.trim() || !content.trim() || !date) continue;
+    out.push({
+      id: typeof o.id === 'string' && o.id ? o.id : '',
+      date,
+      title,
+      content,
+      version: typeof o.version === 'number' && o.version > 0 ? o.version : fallbackVersion,
+      popup: o.popup === true,
+    });
+  }
+  out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return out;
+}
+
 /** 规范化推广条目（设置端已校验，此处防御性过滤：仅输出 enabled 且内容非空的条目） */
 function normalizePromos(raw: unknown, fallbackVersion: number): PromoOut[] {
   if (!Array.isArray(raw)) return [];
@@ -80,10 +116,10 @@ function normalizePromos(raw: unknown, fallbackVersion: number): PromoOut[] {
 }
 
 export async function handleNotices(env: Env): Promise<Response> {
-  // 一次取全部相关键（7 行），version 取 content 行 updated_at（null = 从未保存过，按 0）
+  // 一次取全部相关键（8 行），version 取 content 行 updated_at（null = 从未保存过，按 0）
   const keys = [
     'site_notice_enabled', 'site_notice_title', 'site_notice_content', 'site_notice_schedule',
-    'promos', 'promo_reswitch_enabled',
+    'promos', 'promo_reswitch_enabled', 'site_updates',
   ];
   const placeholders = keys.map((_, i) => `?${i + 1}`).join(',');
   const rows = await env.DB.prepare(
@@ -106,6 +142,7 @@ export async function handleNotices(env: Env): Promise<Response> {
   const noticeSched = pick('site_notice_schedule');
   const promosRaw = pick('promos');
   const reswitchRaw = pick('promo_reswitch_enabled');
+  const updatesRaw = pick('site_updates');
 
   const noticeEnabled = noticeEn.value === true && typeof noticeCt.value === 'string' && noticeCt.value.trim() !== '';
 
@@ -122,6 +159,8 @@ export async function handleNotices(env: Env): Promise<Response> {
       promos: normalizePromos(promosRaw.value, promosRaw.version),
       // 切换运营商/省份时重新弹推广（未保存过 = 默认开启）
       promo_reswitch: reswitchRaw.value !== false,
+      // 站点更新日志（date 倒序）：popup=true 的最新一条由前端弹窗提醒，全部条目页签回看
+      site_updates: normalizeSiteUpdates(updatesRaw.value, updatesRaw.version),
     },
     { 'Cache-Control': 'public, max-age=60' },
   );

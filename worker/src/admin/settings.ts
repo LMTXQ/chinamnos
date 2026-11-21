@@ -26,6 +26,7 @@ const ALLOWED_KEYS = new Set([
   'promos',
   'promo_reswitch_enabled',
   'promo_placeholders',
+  'site_updates',
   'notification_retention_days',
   'mail_post_review_enabled',
   'mail_conversation_enabled',
@@ -49,6 +50,7 @@ const DEFAULT_VALUES: Record<string, unknown> = {
   promo_placeholders: [], // 公告/推广正文 {{key}} 占位符取值：[{key,value}]（键名唯一小写 a-z0-9_）
   notification_retention_days: 30,
   promos: [], // 推广列表：[{id,enabled,title,content,version,mode,scope{carriers,provinces,modules}}]（空=无推广；modules 命中=仅进入对应模块时弹）
+  site_updates: [], // 站点更新日志：[{id,date,title,content,version,popup}]（空=无更新；最新一条 popup=true 时每版本每设备弹一次）
 };
 
 // GET /api/admin/settings：读取所有设置；DEFAULT_VALUES 中的新键尚无行时补默认值，保证站长可在 UI 首次配置
@@ -79,6 +81,7 @@ const ADMIN_EDITABLE_KEYS = new Set([
   'promos',
   'promo_reswitch_enabled',
   'promo_placeholders',
+  'site_updates',
 ]);
 
 // PUT /api/admin/settings/:key：更新设置
@@ -220,6 +223,34 @@ export async function handleUpdateSetting(request: Request, env: Env, key: strin
             scope: { carriers: normList(scopeRaw.carriers), provinces: normList(scopeRaw.provinces), modules: normList(scopeRaw.modules) },
             // 弹出日期门槛（可缺省 = 不限日期；三类任一命中当天即弹，OR）
             schedule: normalizeSchedule(o.schedule) ?? undefined,
+          };
+        })
+        .filter(Boolean);
+    }
+    // 站点更新日志键：规范化为 [{id,date,title,content,version,popup}]（上限 200 条——累积档案不删，
+    // 防误存超量；id 缺失丢弃；date 必须 YYYY-MM-DD；title/content 裁剪；popup 布尔强校验；
+    // version 保存时间戳缺省 now——弹窗防重依据）
+    else if (key === 'site_updates') {
+      let raw: unknown[] = [];
+      if (Array.isArray(value)) raw = value as unknown[];
+      const now = Date.now();
+      value = raw
+        .slice(0, 200)
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const o = item as Record<string, unknown>;
+          const id = typeof o.id === 'string' && o.id.trim() ? o.id.trim().slice(0, 32) : '';
+          const date = typeof o.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(o.date.trim()) ? o.date.trim() : '';
+          const title = typeof o.title === 'string' ? o.title.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+          const content = typeof o.content === 'string' ? o.content.slice(0, 8000) : '';
+          if (!id || !date || !title || !content) return null;
+          return {
+            id,
+            date,
+            title,
+            content,
+            version: typeof o.version === 'number' && o.version > 0 ? o.version : now,
+            popup: o.popup === true,
           };
         })
         .filter(Boolean);

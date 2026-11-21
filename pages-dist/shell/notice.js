@@ -3,7 +3,8 @@
    ───────────────────────────────────────────────────────────────
    ▸ 数据：GET /api/notices（anon，HTTP 缓存 60s；模块内再缓存 60s）
      { site_notice: {enabled, title, version, content},
-       promos: [{id, version, title, content, mode, scope{carriers,provinces,modules}}] }
+       promos: [{id, version, title, content, mode, scope{carriers,provinces,modules}}],
+       site_updates: [{id, date, title, content, version, popup}] }
      version = content 的保存时间（站长改内容自动变，登录用户据此「内容变更重新同意」）
    ▸ 弹窗模式：
      must     强制同意（无×，ESC/遮罩无效）——跳蚤市集警告/强制型推广
@@ -13,6 +14,7 @@
                      的推广条目 promo_cardhub_warning，migration 0030）：must=访客每日/
                      登录首次+版本变更重弹；closable=「今日不再」skip 记录
      site_notice_skip   公告勾选「今日不再」的日期字符串（不勾直接关=下次还弹）
+     site_update        站点更新提醒：{v: version}——最新更新条目每版本每设备弹一次
    ▸ 模块级弹窗：推广条目 scope.modules 填模块 id（tariff/cardhub/ticket/tools），
      由 shell.js activate → maybePromosOnModuleEnter(页面id) 在进入该模块时判定弹出
    ▸ 新增全站弹窗：后台 settings 加 {ns}_enabled/{ns}_content 键 + notices.ts 暴露 +
@@ -262,6 +264,35 @@ async function maybePromoOne(p) {
     checkboxText: p.mode === "must" ? undefined : "今日不再弹出",
   });
   lsSet(key, JSON.stringify(loggedIn ? { v: p.version } : { d: today(), v: p.version }));
+}
+
+/* ── 实例三：站点更新（更新日志，closable，每版本每设备一次）──
+   仅最新一条 popup=true 时判定（更新日志是累积档案，历史条目只进页签回看不弹）；
+   设备同意记录 chinamnos_ack_site_update：{v: version}——最新条目 version 变化
+   （站长编辑内容/新发布）后所有设备重新弹一次。本次页面生命周期只判一次。 */
+let _siteUpdateHandled = false;
+export function maybeSiteUpdates() {
+  if (_siteUpdateHandled) return _queue;
+  _siteUpdateHandled = true;
+  return enqueue(async () => {
+    const notices = await loadNotices();
+    const list = Array.isArray(notices.site_updates) ? notices.site_updates : [];
+    if (!list.length) return;
+    const latest = list[0];   // 接口已按 date 倒序
+    if (!latest || latest.popup !== true) return;
+    let rec = null;
+    try { rec = JSON.parse(lsGet(LS_PREFIX + "site_update") || "null"); } catch { rec = null; }
+    if (rec && rec.v === latest.version) return;
+    const ph = await loadPlaceholders();
+    await openNoticeModal({
+      ns: "site_update",
+      title: latest.title || "站点更新",
+      bodyHtml: mdToSafeHtml(applyPlaceholders(latest.content || "", ph)),
+      mode: "closable",
+      checkboxText: undefined,   // 更新提醒无需「今日不再」：每版本每设备一次，关闭即记录
+    });
+    lsSet(LS_PREFIX + "site_update", JSON.stringify({ v: latest.version }));
+  });
 }
 
 export function maybePromos() {
