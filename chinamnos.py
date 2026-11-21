@@ -17,7 +17,7 @@ Python v2.1.0
 """
 
 # 采集端发布版本（每次改动 chinamnos.py 后手动 bump；run() 启动时随日志输出，便于排查青龙实际运行的代码版本）
-SCRIPT_VERSION = "20261107e"
+SCRIPT_VERSION = "20261122a"
 
 import os
 import sys
@@ -8220,8 +8220,12 @@ def _ann_ctcc(ann_cfg):
                                % (prov, row["id"], str(e)[:60]))
         elif resp:
             logger.warning("[announce][ctcc] %s 详情 %s: %s" % (prov, row["id"], resp[:40]))
+        # 官网原文链接：SPA 详情页路由 = /web/notice/detail + 详情接口同款查询参数
+        # （offerCode/type/provinceCode 与 getAnnouncementDetail.do 请求体同源，逐条精确还原）
         items.append(_ann_mkitem("ctcc", "prov", row["id"], row["title"], row["date"],
-                                 prov, "provincial", ANN_CTCC_PAGE_URL,
+                                 prov, "provincial",
+                                 "%s/detail?order=1&offerCode=%s&type=%s&provinceCode=%s&cityCode="
+                                 % (ANN_CTCC_PAGE_URL, row["id"], row["_type"], t["prov"]),
                                  content=content, base=ANN_CTCC_SITE))
         if content:
             sources[prov]["fetched"] = sources[prov].get("fetched", 0) + 1
