@@ -5336,7 +5336,10 @@ function annItemHTML(a, open) {
       <span class="ann-badge${nat ? " nat" : ""}">${nat ? "全国" : esc(a.province)}</span>
       <span class="ann-title" title="点击展开/收起正文">${esc(a.title || "（无标题）")}</span>
       ${att ? `<span class="ann-att">附件 ${att}</span>` : ""}
-      <button type="button" class="btn ghost sm" data-ann="annShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本条公告" style="padding:2px 8px">${icon("share")}</button>
+      <span class="ann-actions">
+        ${a.pageUrl ? `<a class="btn ghost sm ann-golink-row" href="${esc(a.pageUrl)}" target="_blank" rel="noopener noreferrer" title="跳转官网原文" style="padding:2px 8px">${icon("external")}</a>` : ""}
+        <button type="button" class="btn ghost sm" data-ann="annShare" data-id="${esc(a.id || "")}" data-title="${esc(a.title || "")}" title="分享本条公告" style="padding:2px 8px">${icon("share")}</button>
+      </span>
       <span class="ann-chev">${icon("chevronDown")}</span>
     </div>
     ${isOpen ? annItemBodyHTML(a.id || "") : ""}
@@ -5536,7 +5539,7 @@ function annOnBodyClick(e) {
     shareLink({ title: shareBtn.dataset.title || "运营公告", text: "运营商官方公告", hash: "ann_" + currentCarrier + "_" + encodeURIComponent(shareBtn.dataset.id || "") });
     return;
   }
-  if (e.target.closest(".ann-att-chip") || e.target.closest(".ann-golink")) return;
+  if (e.target.closest(".ann-att-chip") || e.target.closest(".ann-golink") || e.target.closest(".ann-golink-row")) return;
   const row = e.target.closest(".ann-row");
   if (!row) return;
   const item = row.closest(".ann-item");

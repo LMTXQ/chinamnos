@@ -3143,6 +3143,8 @@
 }
 .ann-item:hover, .ann-item.open { border-color: color-mix(in oklab, var(--acc) 42%, var(--line)); }
 .ann-row { display: flex; align-items: center; gap: 10px; padding: 11px 14px; cursor: pointer; user-select: none; }
+.ann-actions { flex: none; display: inline-flex; align-items: center; gap: 10px; }  /* 桌面端与行内 10px 间距一致，视觉不变 */
+.ann-actions .btn { flex: none; }   /* 接替 .ann-row > .btn 的防挤压职责 */
 .ann-row > .btn { flex: none; }   /* 分享按钮不被长标题挤压成线 */
 /* 深链命中高亮：与 cardhub .deep-hit 同款外描边（不挤占布局） */
 .ann-item.deep-hit { outline: 2px solid var(--acc); outline-offset: 2px; }
@@ -3202,6 +3204,16 @@
 }
 .ann-golink svg { width: 12px; height: 12px; }
 .ann-golink:hover { color: var(--acc); border-color: color-mix(in oklab, var(--acc) 35%, var(--line)); }
+/* 窄屏双行布局：标题恒占第二行（flex-basis 100% 短标题也强制换行，单行省略）；
+   第一行日期/徽章居左，附件数·原文·分享·箭头连成一组居右（无附件则按钮组自身居右）；
+   多个 auto 外边距会平分剩余空间，故有附件时须清零按钮组的 auto，空隙只留在附件前 */
+@media (max-width: 640px) {
+  .ann-row { flex-wrap: wrap; row-gap: 6px; }
+  .ann-title { order: 8; flex: 0 0 100%; }
+  .ann-att { margin-left: auto; }               /* 有附件：空隙全部让给附件前 */
+  .ann-actions { margin-left: auto; }            /* 无附件：按钮组自身居右 */
+  .ann-att + .ann-actions { margin-left: 0; }    /* 有附件时按钮组不吃空隙，避免间隙被对半分 */
+}
 .ann-empty { text-align: center; padding: 56px 16px; color: var(--sub); display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .ann-empty svg.ann-empty-ic { width: 36px; height: 36px; opacity: .35; }
 .ann-retry {
