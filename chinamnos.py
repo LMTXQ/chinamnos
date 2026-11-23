@@ -7376,6 +7376,10 @@ ANN_CTCC_SHOP_ID = "20001"
 ANN_CTCC_BASE_TYPE = "wt_sy_bzzx"   # 详情必须用条目自身 type（部分条目挂集团位 wt_sy_jtgg）
 ANN_CTCC_FCODE = "Y121043001"
 ANN_CTCC_PAGE_URL = "https://www.189.cn/web/notice"
+# 电信详情接口仅放行移动 UA 会话（2026-11-23 实测：桌面 Chrome UA 列表 200 但详情必 412；
+# Android 移动 UA 列表+详情全通）。独立于 _ANN_UA——联通/移动渠道仍沿用桌面 UA
+_ANN_CTCC_UA = ("Mozilla/5.0 (Linux; Android 13; SM-S9110) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36")
 ANN_CTCC_PUBKEY_B64 = (
     "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmUa6oMSBZrhfOjXCaYYIE9Lvj+r8nBIv"
     "CpydQmeG5CbeK5Qlwor+kFCrrPtcoYSowuUCB7YYsLYF6HVvf3Utw9FdLq7T8uNnfz2wxvp3N3Mi"
@@ -8070,7 +8074,7 @@ def _ann_ctcc_post(obj, url=None, timeout=20, retries=2):
     req = urllib.request.Request(
         url or ANN_CTCC_REC_URL, data=json.dumps(payload, separators=(",", ":")).encode(),
         method="POST",
-        headers={"User-Agent": _ANN_UA, "Content-Type": "application/json;charset=UTF-8",
+        headers={"User-Agent": _ANN_CTCC_UA, "Content-Type": "application/json;charset=UTF-8",
                  "Accept": "application/json, text/plain, */*",
                  "Origin": ANN_CTCC_SITE,
                  "Referer": ANN_CTCC_SITE + "/web/notice/index.html",
@@ -8092,7 +8096,99 @@ def _ann_ctcc_post(obj, url=None, timeout=20, retries=2):
 
 
 _ANN_CTCC_DET_URL = ANN_CTCC_SITE + '/wtBusiness/wtservice/nc/announcement/getAnnouncementDetail.do'
-_ANN_CTCC_DIRECT_SLEEP_S = 1.0   # 直连详情限速（参考项目防 WAF 实测 1.3s，按 342 条/轮取 1.0s 折中）
+_ANN_CTCC_DIRECT_SLEEP_S = 1.3   # 直连详情限速（2026-11-23 实测 1.3s 间距稳定通过；参考项目防 WAF 同值）
+_ANN_CTCC_LINK_SLEEP_S = 0.6     # 省级链接正文抓取限速
+_ANN_CTCC_CSR_SHELL_MAX = 300    # 页面可见文本低于此值且带 #app → 判定 CSR 空壳（无正文可取）
+
+
+def _ann_ctcc_http_get(url, referer="", timeout=20):
+    """裸 GET 省级页面/PDF/接口（gzip 解压，返回 bytes）"""
+    import gzip as _gzip
+    import urllib.request as _ur
+    hdr = {"User-Agent": _ANN_CTCC_UA, "Accept": "*/*",
+           "Accept-Language": "zh-CN,zh;q=0.9", "Accept-Encoding": "gzip"}
+    if referer:
+        hdr["Referer"] = referer
+    req = _ur.Request(url, headers=hdr)
+    with _ur.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+        if r.headers.get("Content-Encoding") == "gzip":
+            raw = _gzip.decompress(raw)
+        return raw
+
+
+def _ann_ctcc_zj_content(link):
+    """浙江 svchub H5 页正文：页面本身是 CSR 空壳，正文走
+    GET /svchub/bus/content/queryContentDetailByCode?contentCode=<NR..>&channelCode=WT
+    → data.pcContents / h5Contents（2026-11-23 实测衢州割接公告 1254 字全文）。
+    其余省份若用同款 svchub 路由则自动兼容（接口 host 取自链接自身）。"""
+    m = re.search(r"/svchub/content/([A-Za-z0-9_-]+)", link)
+    if not m:
+        return ""
+    from urllib.parse import urlencode, urlsplit as _us
+    sp = _us(link)
+    api = "%s://%s/svchub/bus/content/queryContentDetailByCode?%s" % (
+        sp.scheme, sp.netloc, urlencode({"contentCode": m.group(1), "channelCode": "WT"}))
+    d = json.loads(_ann_ctcc_http_get(api, referer=link).decode("utf-8", "replace"))
+    node = d.get("data") or {} if isinstance(d, dict) else {}
+    raw = (node.get("pcContents") or node.get("h5Contents") or "").strip()
+    return _ann_clean_html(raw, "%s://%s" % (sp.scheme, sp.netloc)) if raw else ""
+
+
+def _ann_ctcc_html_content(link):
+    """新疆/各省静态公示页正文：裸 GET 直出 HTML，优先抽 qkgs_cont 容器，
+    兜底剥壳取可见文本主体。CSR 空壳页（可见文本过短 + #app 标记）确定性放弃。"""
+    body = _ann_ctcc_http_get(link).decode("utf-8", "replace")
+    m = re.search(r'class="qkgs_cont"[^>]*>(.*?)</div>\s*(?:<div class="(?:qkgs_|footer)|</body)',
+                  body, re.S | re.I)
+    if not m:
+        m = re.search(r'<(?:article|main)[^>]*>(.*?)</(?:article|main)>', body, re.S | re.I)
+    if m:
+        return _ann_clean_html(m.group(1), link)
+    # 兜底：剥 script/style 后若可见文本尚可（非 CSR 壳），整页 body 取出
+    shell = re.sub(r"<script.*?</script>|<style.*?</style>|<!--.*?-->", " ", body,
+                   flags=re.S | re.I)
+    visible = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", shell)).strip()
+    if len(visible) < _ANN_CTCC_CSR_SHELL_MAX and 'id="app"' in body:
+        return ""   # CSR 空壳：正文由 JS 渲染，裸抓必空，确定性放弃
+    mb = re.search(r"<body[^>]*>(.*)</body>", body, re.S | re.I)
+    return _ann_clean_html(mb.group(1) if mb else body, link)
+
+
+def _ann_ctcc_pdf_content(link):
+    """上海等 PDF 公告：pypdf 逐页抽文本（纯文本形态，无法保留版式）。
+    pypdf 未安装/解析失败 → 返回空（不影响主流程）。"""
+    try:
+        import io
+        from pypdf import PdfReader
+    except ImportError:
+        logger.debug("[announce][ctcc] pypdf 未安装，PDF 正文跳过")
+        return ""
+    try:
+        rd = PdfReader(io.BytesIO(_ann_ctcc_http_get(link, timeout=30)))
+        txt = "\n".join((p.extract_text() or "") for p in rd.pages).strip()
+        # pypdf 输出为纯文本 → 按换行拆段包 <p>，走统一清洗与摘要管线
+        paras = [p.strip() for p in re.split(r"\n{1,}", txt) if p.strip()]
+        return _ann_clean_html("".join("<p>%s</p>" % _ann_html_to_text(p) for p in paras), link)
+    except Exception as e:
+        logger.warning("[announce][ctcc] PDF 正文抽取失败 %s: %s" % (link[:80], str(e)[:80]))
+        return ""
+
+
+def _ann_ctcc_link_content(link):
+    """省级托管条目正文分派器（2026-11-23 三类形态实测定型）：
+    .pdf → pypdf 抽文本；/svchub/content/<code> → 内容接口；其余 html → 容器抽取。
+    任一形态失败返回空，调用方走既有继承兜底。"""
+    try:
+        path = link.split("?")[0].lower()
+        if path.endswith(".pdf"):
+            return _ann_ctcc_pdf_content(link)
+        if "/svchub/content/" in link:
+            return _ann_ctcc_zj_content(link)
+        return _ann_ctcc_html_content(link)
+    except Exception as e:
+        logger.warning("[announce][ctcc] 省级正文抓取失败 %s: %s" % (link[:80], str(e)[:80]))
+        return ""
 
 
 def _ann_ctcc_direct_details(prov_tasks):
@@ -8116,6 +8212,7 @@ def _ann_ctcc_direct_details(prov_tasks):
 
 
 def _ann_ctcc(ann_cfg):
+    from urllib.parse import urlsplit
     lim = ann_cfg["limits"]
     sources, items, per_prov = {}, [], {}
     # ── 阶段1：列表（裸 HTTP 信封，稳定可用） ──
@@ -8140,12 +8237,15 @@ def _ann_ctcc(ann_cfg):
             title = (x.get("title") or "").strip()
             if not title:
                 continue
+            # link：省级托管条目的原文 URL（正文在省级平台，中央详情接口对这类条目返回全空）
+            link = str(x.get("link") or "").strip()
             rows.append({
                 "id": str(x.get("externalOfferCode") or x.get("offerCode") or x.get("id") or ""),
                 "title": title,
                 "date": _ann_date(x.get("liveStartTime") or x.get("publishTime")
                                   or x.get("createTime") or ""),
                 "_type": (x.get("type") or ANN_CTCC_BASE_TYPE),
+                "_link": link if link.startswith(("http://", "https://")) else "",
             })
         rows.sort(key=lambda x: (x["date"], x["id"]), reverse=True)
         rows = rows[: _ann_limit(lim, "ctcc")]
@@ -8160,14 +8260,17 @@ def _ann_ctcc(ann_cfg):
         for row in rows:
             tasks.append({"key": "%s|%s" % (prov, row["id"]), "offer": row["id"],
                           "type": row["_type"], "prov": prov_code,
-                          "prov_name": prov, "row": row})
+                          "prov_name": prov, "row": row, "link": row["_link"]})
     # ── 阶段2：详情（借鉴电信资费采集两级模式：先逐省直连，失败省统一 PW 回退） ──
     # 瑞数拦截是会话/IP 级：一旦被拦后续省全挂，连续 3 省整省失败即熔断，
     # 剩余省不再逐个白试，直接进 PW 批（与资费采集 pw_needs_fallback 同思路）
     resp_map, pw_tasks = {}, []
     consec_fail, done_provs, direct_ok_provs = 0, set(), set()
     for prov, (prov_code, rows) in per_prov.items():
-        prov_tasks = [t for t in tasks if t["prov"] == prov_code]
+        # 省级托管条目（带 link）无详情可取，不进直连/PW 批；整省皆 link 时跳过（不计熔断）
+        prov_tasks = [t for t in tasks if t["prov"] == prov_code and not t["link"]]
+        if not prov_tasks:
+            continue
         try:
             sub = _ann_ctcc_direct_details(prov_tasks)
             if not any(v.startswith("{") for v in sub.values()):
@@ -8182,7 +8285,7 @@ def _ann_ctcc(ann_cfg):
             if consec_fail >= 3:
                 for p2, (pc2, _r2) in per_prov.items():
                     if p2 not in done_provs and p2 != prov:
-                        pw_tasks.extend(t for t in tasks if t["prov"] == pc2)
+                        pw_tasks.extend(t for t in tasks if t["prov"] == pc2 and not t["link"])
                 logger.warning("[announce][ctcc] 连续 %d 省直连全败（疑似全局被拦），剩余省全部转入 PW" % consec_fail)
                 break
         done_provs.add(prov)
@@ -8199,7 +8302,11 @@ def _ann_ctcc(ann_cfg):
     for t in tasks:
         key, prov, row = t["key"], t["prov_name"], t["row"]
         content = ""
-        resp = resp_map.get(key) or ""
+        if t["link"]:
+            # 省级托管条目：正文直接从省级链接抓（.pdf/svchub 接口/静态页，见分派器）
+            content = _ann_ctcc_link_content(t["link"])
+            time.sleep(_ANN_CTCC_LINK_SLEEP_S)
+        resp = "" if t["link"] else (resp_map.get(key) or "")
         if resp.startswith("{"):
             try:
                 d = json.loads(resp)
@@ -8220,13 +8327,20 @@ def _ann_ctcc(ann_cfg):
                                % (prov, row["id"], str(e)[:60]))
         elif resp:
             logger.warning("[announce][ctcc] %s 详情 %s: %s" % (prov, row["id"], resp[:40]))
-        # 官网原文链接：SPA 详情页路由 = /web/notice/detail + 详情接口同款查询参数
+        # 原文链接：省级托管条目直接用列表 link（省级 URL，官方行为即跳转不内嵌正文）；
+        # 中央托管条目 → SPA 详情页路由 = /web/notice/detail + 详情接口同款查询参数
         # （offerCode/type/provinceCode 与 getAnnouncementDetail.do 请求体同源，逐条精确还原）
+        page_url = t["link"] or (
+            "%s/detail?order=1&offerCode=%s&type=%s&provinceCode=%s&cityCode="
+            % (ANN_CTCC_PAGE_URL, row["id"], row["_type"], t["prov"]))
+        # base：有省级正文的条目用省级域名补全相对图片/附件路径，其余用中央站
+        item_base = ANN_CTCC_SITE
+        if content and t["link"]:
+            sp = urlsplit(t["link"])
+            item_base = "%s://%s" % (sp.scheme, sp.netloc)
         items.append(_ann_mkitem("ctcc", "prov", row["id"], row["title"], row["date"],
-                                 prov, "provincial",
-                                 "%s/detail?order=1&offerCode=%s&type=%s&provinceCode=%s&cityCode="
-                                 % (ANN_CTCC_PAGE_URL, row["id"], row["_type"], t["prov"]),
-                                 content=content, base=ANN_CTCC_SITE))
+                                 prov, "provincial", page_url,
+                                 content=content, base=item_base))
         if content:
             sources[prov]["fetched"] = sources[prov].get("fetched", 0) + 1
     return items, sources
