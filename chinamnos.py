@@ -8099,12 +8099,21 @@ _ANN_CTCC_DET_URL = ANN_CTCC_SITE + '/wtBusiness/wtservice/nc/announcement/getAn
 _ANN_CTCC_DIRECT_SLEEP_S = 1.3   # 直连详情限速（2026-11-23 实测 1.3s 间距稳定通过；参考项目防 WAF 同值）
 _ANN_CTCC_LINK_SLEEP_S = 0.6     # 省级链接正文抓取限速
 _ANN_CTCC_CSR_SHELL_MAX = 300    # 页面可见文本低于此值且带 #app → 判定 CSR 空壳（无正文可取）
+_ANN_CTCC_REDIRECT_MAX = 800     # 页面字节数低于此值且含 location 跳转 → 判定跳转中转页
 
 
 def _ann_ctcc_http_get(url, referer="", timeout=20):
-    """裸 GET 省级页面/PDF/接口（gzip 解压，返回 bytes）"""
+    """裸 GET 省级页面/PDF/接口（gzip 解压，返回 bytes）。
+    URL 含中文/空格时 percent-encode 路径段（API 返回的 link 常为原始中文，
+    直接请求会 UnicodeEncodeError → 正文误空，2026-11-23 新疆第六批实测）。"""
     import gzip as _gzip
     import urllib.request as _ur
+    from urllib.parse import quote as _q, urlsplit as _us, urlunsplit as _uu
+    sp = _us(url)
+    if not url.isascii():
+        path = _q(sp.path, safe="/~")
+        query = _q(sp.query, safe="=&?/~")
+        url = _uu((sp.scheme, sp.netloc, path, query, sp.fragment))
     hdr = {"User-Agent": _ANN_CTCC_UA, "Accept": "*/*",
            "Accept-Language": "zh-CN,zh;q=0.9", "Accept-Encoding": "gzip"}
     if referer:
@@ -8135,10 +8144,27 @@ def _ann_ctcc_zj_content(link):
     return _ann_clean_html(raw, "%s://%s" % (sp.scheme, sp.netloc)) if raw else ""
 
 
-def _ann_ctcc_html_content(link):
+def _ann_ctcc_html_content(link, _depth=0):
     """新疆/各省静态公示页正文：裸 GET 直出 HTML，优先抽 qkgs_cont 容器，
-    兜底剥壳取可见文本主体。CSR 空壳页（可见文本过短 + #app 标记）确定性放弃。"""
+    兜底剥壳取可见文本主体。CSR 空壳页（可见文本过短 + #app 标记）确定性放弃。
+    跳转中转页（小页面 + location.href/refresh 目标）跟随目标页取正文（1 层）。"""
     body = _ann_ctcc_http_get(link).decode("utf-8", "replace")
+    # 跳转中转页：如 xj.189.cn/dx/*.html（441 字节，仅 window.location.href=目标）
+    # 直接抓只会得到"正在跳转"4 字——识别后跟随目标页取真实正文（2026-11-23 实测 ggym3 直出）
+    if _depth < 1 and len(body) < _ANN_CTCC_REDIRECT_MAX:
+        vis0 = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.sub(
+            r"<script.*?</script>|<style.*?</style>", " ", body, flags=re.S | re.I))).strip()
+        tgt = None
+        m = re.search(r'(?:window\.)?location(?:\.href)?\s*=\s*["\']([^"\']+)["\']', body)
+        if not m:
+            m = re.search(r'url=(?:\d+\s*;\s*)?["\']?([^"\'>\s]+)', body, re.I)  # meta refresh
+        if m:
+            tgt = m.group(1)
+            if tgt and not tgt.startswith(("http://", "https://")):
+                from urllib.parse import urljoin as _uj
+                tgt = _uj(link, tgt)
+        if tgt and len(vis0) < 20:
+            return _ann_ctcc_html_content(tgt, _depth + 1)
     m = re.search(r'class="qkgs_cont"[^>]*>(.*?)</div>\s*(?:<div class="(?:qkgs_|footer)|</body)',
                   body, re.S | re.I)
     if not m:
@@ -8156,20 +8182,105 @@ def _ann_ctcc_html_content(link):
 
 
 def _ann_ctcc_pdf_content(link):
-    """上海等 PDF 公告：pypdf 逐页抽文本（纯文本形态，无法保留版式）。
-    pypdf 未安装/解析失败 → 返回空（不影响主流程）。"""
+    """上海等 PDF 公告：pypdf 坐标抽取 + 同行拼接 + 行距分段。
+    plain extract_text 按内部对象顺序输出硬换行（同一视觉行被切碎成多段），
+    不可靠——改用 visitor_text 回调获取每段文本的精确坐标：
+      - y 相同（±1pt）→ 同一视觉行，按 x 排序拼接；
+      - 相邻行 y 差 ≈ 众数行距 → 同段续行；
+      - y 差 > 1.6×行距（空行/段距/标题区）→ 分段。
+    所有阈值均取自文档自身坐标统计，无字数魔数。
+    pypdf 未安装/解析失败 → 空（不影响主流程）。"""
     try:
         import io
+        from collections import Counter as _Counter
         from pypdf import PdfReader
     except ImportError:
         logger.debug("[announce][ctcc] pypdf 未安装，PDF 正文跳过")
         return ""
     try:
         rd = PdfReader(io.BytesIO(_ann_ctcc_http_get(link, timeout=30)))
-        txt = "\n".join((p.extract_text() or "") for p in rd.pages).strip()
-        # pypdf 输出为纯文本 → 按换行拆段包 <p>，走统一清洗与摘要管线
-        paras = [p.strip() for p in re.split(r"\n{1,}", txt) if p.strip()]
-        return _ann_clean_html("".join("<p>%s</p>" % _ann_html_to_text(p) for p in paras), link)
+        pages, lhs = [], []
+        for p in rd.pages:
+            pieces = []   # (y, x, text)：visitor 回调按渲染顺序给出文本矩阵坐标
+            # pypdf visitor 签名固定 5 参：(text, cm, tm, font_dict, font_size)
+            def _visit(text, cm, tm, font_dict, font_size, _pieces=pieces):
+                t = (text or "").strip()
+                if t:
+                    _pieces.append((round(tm[5], 1), round(tm[4], 1), t))
+            p.extract_text(visitor_text=_visit)
+            if not pieces:
+                continue
+            # ① 同 y（±1pt）合并为视觉行，行内按 x 排序拼接
+            rows = []
+            for y, x, t in pieces:
+                if rows and abs(rows[-1][0] - y) <= 1.0:
+                    rows[-1][1].append((x, t))
+                else:
+                    rows.append((y, [(x, t)]))
+            lines = ["".join(t for _, t in sorted(frags)) for _, frags in rows]
+            ys = [y for y, _ in rows]
+            x0s = [min(x for x, _ in frags) for _, frags in rows]
+            # ② 行距 = 相邻行 y 差的众数（文档自身坐标，非假设值）。
+            # PDF y 轴向上 → ys 单调递减，gap 取绝对值
+            gaps = sorted(abs(ys[i] - ys[i + 1]) for i in range(len(ys) - 1)
+                          if 0 < abs(ys[i] - ys[i + 1]) < 80)
+            lh = gaps[len(gaps) // 2] if gaps else 0.0
+            # ③ 行距突变（>1.6×众数行距）→ 分段边界
+            # margin 取全行 x0 众数（正文左边距），非本段
+            paras, buf = [], []
+            for i, ln in enumerate(lines):
+                buf.append((ln, x0s[i]))
+                if i + 1 < len(ys):
+                    gap = abs(ys[i] - ys[i + 1])
+                    if lh and gap > lh * 1.6:
+                        paras.append(buf)   # 段=行列表，行含 x0
+                        buf = []
+            if buf:
+                paras.append(buf)
+            if not paras and lines:
+                paras = [[(ln, x0) for ln, x0 in zip(lines, x0s)]]
+            pages.append(paras)
+            lhs.append(lh)
+        # ④ 段首缩进还原（纯坐标自标定，零字形/字数假设）：
+        # 字宽 c 由「同段相邻行对」解——行距=众数行距（同段）且右边界一致：
+        #   x0a + na·c = x0b + nb·c → c = (x0a-x0b)/(nb-na)
+        # 解需被 ≥2 个独立行对一致支持（防未满行偶然对齐），否则放弃缩进
+        # 还原（宁可不缩，不错缩）。段缩进 = round((段首行x0-margin)/c)，
+        # 1~4 字渲染为等数全角空格（中文公文首行缩进 2 字惯例）。
+        # 注：_ann_html_to_text 会吞 \u3000，故缩进在 text 化之后补回。
+        html_parts = []
+        for k, paras in enumerate(pages):
+            if not paras:
+                continue
+            x0_all = [x for para in paras for _, x in para]
+            margin = _Counter(round(x) for x in x0_all).most_common(1)[0][0]
+            lh_k = lhs[k] if k < len(lhs) else 0.0
+            c_w = 0.0
+            if lh_k:
+                sols = []
+                for para in paras:
+                    if len(para) < 2:
+                        continue
+                    for i in range(len(para) - 1):
+                        xa, wa = para[i][1], len(para[i][0])
+                        xb, wb = para[i + 1][1], len(para[i + 1][0])
+                        if xa == xb or abs(wa - wb) < 1:
+                            continue
+                        cw = (xa - xb) / (wb - wa)
+                        if 3 < cw < 30 and abs((xa + wa * cw) - (xb + wb * cw)) < 2:
+                            sols.append(round(cw, 1))
+                if sols:
+                    vals = _Counter(sols).most_common()
+                    top, cnt = vals[0]
+                    if cnt >= 2 or (len(vals) == 1):
+                        c_w = top   # 至少 2 个行对一致，或唯一解
+            for para in paras:
+                d = para[0][1] - margin
+                n = int(round(d / c_w)) if c_w and d > 2 else 0
+                ind = "\u3000" * n if 1 <= n <= 4 else ""
+                body = _ann_html_to_text("".join(t for t, _ in para))
+                html_parts.append("<p>%s%s</p>" % (ind, body))
+        return _ann_clean_html("".join(html_parts), link)
     except Exception as e:
         logger.warning("[announce][ctcc] PDF 正文抽取失败 %s: %s" % (link[:80], str(e)[:80]))
         return ""
@@ -8343,6 +8454,31 @@ def _ann_ctcc(ann_cfg):
                                  content=content, base=item_base))
         if content:
             sources[prov]["fetched"] = sources[prov].get("fetched", 0) + 1
+    # ── 阶段4：全国公告合并 ──
+    # 电信中央列表把集团公告在各省位重复投放（同 offerCode，如售卡规范 26 省同 id
+    # 518652200001；携号转网 26 省列表 link 甚至是同一个 chinatelecom.com.cn URL）。
+    # 同 id 出现于 ≥2 省 → 判全国：合并为一条（province 清空=全国，与移动/联通约定
+    # 一致，前端 ann-badge 自动显示"全国"角标）；正文/链接取首个成功解析的条目
+    # （同公告内容一致，2026-11-23 北京/新疆 detail 实测同 id 返回同正文）。
+    from collections import defaultdict as _dd
+    by_id = _dd(list)
+    for it in items:
+        by_id[it["id"]].append(it)
+    merged, national_n = [], 0
+    for it in items:
+        if len(by_id[it["id"]]) < 2:
+            merged.append(it)
+            continue
+        grp = by_id[it["id"]]
+        if grp[0] is not it:
+            continue   # 非首条：被合并
+        first = next((x for x in grp if x["content"]), grp[0])
+        first["province"] = ""
+        national_n += 1
+        merged.append(first)
+    if national_n:
+        logger.info("[announce][ctcc] 全国公告合并: %d 组跨省同 id → 全国" % national_n)
+    items = merged
     return items, sources
 
 
